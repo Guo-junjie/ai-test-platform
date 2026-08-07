@@ -1,0 +1,60 @@
+# ==================== AI 自动化测试平台 - Python 依赖 ====================
+
+# 核心框架
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+pydantic==2.5.3
+python-multipart==0.0.6
+
+# 任务调度
+celery==5.3.6
+kombu==5.3.4
+
+# 数据库
+sqlalchemy==2.0.25
+alembic==1.13.1
+psycopg2-binary==2.9.9
+asyncpg==0.29.0
+redis==5.0.1
+
+# GitHub 集成
+PyGithub==2.1.1
+gitpython==3.1.40
+
+# SVN 集成（通过 svn CLI 命令行工具调用，无需 pysvn Python 包）
+# pysvn 在 PyPI 上不可用，svn_adapter.py 直接调用 svn 命令行
+
+# AI 集成（支持任意 OpenAI 兼容 API）
+openai==1.6.1
+anthropic==0.8.1
+httpx==0.26.0
+
+# 测试引擎
+pytest==7.4.4
+pytest-asyncio==0.23.3
+locust==2.20.0
+jsonschema==4.20.0
+
+# 报告生成
+jinja2==3.1.2
+weasyprint==60.2
+matplotlib==3.8.2
+
+# 容器管理
+docker==7.0.0
+
+# 对象存储
+minio==7.2.3
+
+# 安全
+cryptography==42.0.2
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.0.1
+
+# 工具库
+loguru==0.7.2
+pyyaml==6.0.1
+toml==0.10.2
+python-dotenv==1.0.0
+aiofiles==23.2.1

@@ -1,0 +1,26 @@
+[36mvite v5.4.21 [32mbuilding for production...[36m[39m
+transforming...
+node_modules/@vueuse/core/dist/index.js (3362:0): A comment
+
+"/* #__PURE__ */"
+
+in "node_modules/@vueuse/core/dist/index.js" contains an annotation that Rollup cannot interpret due to the position of the comment. The comment will be removed to avoid issues.
+node_modules/@vueuse/core/dist/index.js (5780:22): A comment
+
+"/* #__PURE__ */"
+
+in "node_modules/@vueuse/core/dist/index.js" contains an annotation that Rollup cannot interpret due to the position of the comment. The comment will be removed to avoid issues.
+[32m✓[39m 2263 modules transformed.
+[31mx[39m Build failed in 13.35s
+[31merror during build:
+[31m[safe-delete] 操作失败: spawnSync D:\Software\WorkBuddy\resources\vendor\genie-trash\win32-x64.exe ETIMEDOUT[31m
+    at trashViaBinary (D:\Software\WorkBuddy\resources\app.asar.unpacked\cli\vendor\shim\genie-safe-delete.cjs:270:15)
+    at trashItem (D:\Software\WorkBuddy\resources\app.asar.unpacked\cli\vendor\shim\genie-safe-delete.cjs:283:9)
+    at tryTrash (D:\Software\WorkBuddy\resources\app.asar.unpacked\cli\vendor\shim\genie-safe-delete.cjs:547:5)
+    at tryRm (D:\Software\WorkBuddy\resources\app.asar.unpacked\cli\vendor\shim\genie-safe-delete.cjs:722:5)
+    at Object.wrappedRmSync [as rmSync] (D:\Software\WorkBuddy\resources\app.asar.unpacked\cli\vendor\shim\genie-safe-delete.cjs:728:15)
+    at emptyDir (file:///D:/code/WorkbuddyProject/ai%E6%B5%8B%E8%AF%95%E8%87%AA%E9%97%AD%E7%8E%AF/ai-test-platform/frontend/node_modules/vite/dist/node/chunks/dep-BK3b2jBa.js:17082:19)
+    at prepareOutDir (file:///D:/code/WorkbuddyProject/ai%E6%B5%8B%E8%AF%95%E8%87%AA%E9%97%AD%E7%8E%AF/ai-test-platform/frontend/node_modules/vite/dist/node/chunks/dep-BK3b2jBa.js:65746:7)
+    at build (file:///D:/code/WorkbuddyProject/ai%E6%B5%8B%E8%AF%95%E8%87%AA%E9%97%AD%E7%8E%AF/ai-test-platform/frontend/node_modules/vite/dist/node/chunks/dep-BK3b2jBa.js:65711:7)
+    at async CAC.<anonymous> (file:///D:/code/WorkbuddyProject/ai%E6%B5%8B%E8%AF%95%E8%87%AA%E9%97%AD%E7%8E%AF/ai-test-platform/frontend/node_modules/vite/dist/node/cli.js:829:5)[39m
+EXIT=1

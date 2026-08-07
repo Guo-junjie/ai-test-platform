@@ -1,0 +1,43 @@
+npm warn ERESOLVE overriding peer dependency
+npm warn While resolving: ai-test-platform-frontend@1.0.0
+npm warn Found: typescript@5.9.3
+npm warn node_modules/typescript
+npm warn   dev typescript@"~5.4.5" from the root project
+npm warn   4 more (@vue/language-core, pinia, vue, vue-tsc)
+npm warn
+npm warn Could not resolve dependency:
+npm warn peerOptional typescript@">=4.4.4" from pinia@2.3.1
+npm warn node_modules/pinia
+npm warn   pinia@"^2.1.7" from the root project
+npm error code EPERM
+npm error syscall open
+npm error path C:\Users\ce418\AppData\Local\npm-cache\_cacache\index-v5\ec\90\2c0d18d84d0f85ffd83db04124b5b33701bbbd10fba4825aeba2854aa2c2
+npm error errno EPERM
+npm error FetchError: Invalid response body while trying to fetch https://registry.npmmirror.com/typescript: EPERM: operation not permitted, open 'C:\Users\ce418\AppData\Local\npm-cache\_cacache\index-v5\ec\90\2c0d18d84d0f85ffd83db04124b5b33701bbbd10fba4825aeba2854aa2c2'
+npm error     at C:\Users\ce418\.workbuddy\binaries\node\versions\22.22.2\node_modules\npm\node_modules\minipass-fetch\lib\body.js:170:15
+npm error     at async Response.json (C:\Users\ce418\.workbuddy\binaries\node\versions\22.22.2\node_modules\npm\node_modules\minipass-fetch\lib\body.js:75:17)
+npm error     at async RegistryFetcher.packument (C:\Users\ce418\.workbuddy\binaries\node\versions\22.22.2\node_modules\npm\node_modules\pacote\lib\registry.js:98:25)
+npm error     at async RegistryFetcher.manifest (C:\Users\ce418\.workbuddy\binaries\node\versions\22.22.2\node_modules\npm\node_modules\pacote\lib\registry.js:128:23)
+npm error     at async #fetchManifest (C:\Users\ce418\.workbuddy\binaries\node\versions\22.22.2\node_modules\npm\node_modules\@npmcli\arborist\lib\arborist\build-ideal-tree.js:1202:20)
+npm error     at async #nodeFromEdge (C:\Users\ce418\.workbuddy\binaries\node\versions\22.22.2\node_modules\npm\node_modules\@npmcli\arborist\lib\arborist\build-ideal-tree.js:1040:19)
+npm error     at async #buildDepStep (C:\Users\ce418\.workbuddy\binaries\node\versions\22.22.2\node_modules\npm\node_modules\@npmcli\arborist\lib\arborist\build-ideal-tree.js:904:11)
+npm error     at async Arborist.buildIdealTree (C:\Users\ce418\.workbuddy\binaries\node\versions\22.22.2\node_modules\npm\node_modules\@npmcli\arborist\lib\arborist\build-ideal-tree.js:181:7)
+npm error     at async Promise.all (index 1)
+npm error     at async Arborist.reify (C:\Users\ce418\.workbuddy\binaries\node\versions\22.22.2\node_modules\npm\node_modules\@npmcli\arborist\lib\arborist\reify.js:133:5) {
+npm error   code: 'EPERM',
+npm error   errno: 'EPERM',
+npm error   syscall: 'open',
+npm error   path: 'C:\\Users\\ce418\\AppData\\Local\\npm-cache\\_cacache\\index-v5\\ec\\90\\2c0d18d84d0f85ffd83db04124b5b33701bbbd10fba4825aeba2854aa2c2',
+npm error   type: 'system',
+npm error   requiredBy: '.'
+npm error }
+npm error
+npm error The operation was rejected by your operating system.
+npm error It's possible that the file was already in use (by a text editor or antivirus),
+npm error or that you lack permissions to access it.
+npm error
+npm error If you believe this might be a permissions issue, please double-check the
+npm error permissions of the file and its containing directories, or try running
+npm error the command again as root/Administrator.
+npm error A complete log of this run can be found in: C:\Users\ce418\AppData\Local\npm-cache\_logs\2026-08-07T06_38_36_173Z-debug-0.log
+EXIT=1

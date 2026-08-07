@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>AI 自动化测试报告 (PDF)</title>
+    <style>
+        /* 内联样式（PDF 不加载外部 CSS） */
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+            color: #303133; line-height: 1.6; font-size: 12px;
+        }
+        @page { size: A4; margin: 2cm; }
+        .page-break { page-break-before: always; }
+
+        .report-header {
+            background: #1a1a2e; color: #fff; padding: 30px 25px;
+            border-radius: 4px; margin-bottom: 20px;
+        }
+        .report-header h1 { font-size: 22px; margin-bottom: 6px; }
+        .report-header .meta { font-size: 11px; color: rgba(255,255,255,0.8); margin-top: 8px; }
+
+        .score-card {
+            display: flex; justify-content: space-between; align-items: center;
+            background: #fff; border: 1px solid #ebeef5; border-radius: 4px;
+            padding: 20px 25px; margin-bottom: 20px;
+        }
+        .score-value { font-size: 36px; font-weight: bold; }
+        .score-label { font-size: 12px; color: #909399; }
+        .pass-badge { padding: 6px 16px; border-radius: 16px; font-size: 14px; font-weight: bold; color: #fff; }
+        .pass-badge.pass { background: #67c23a; }
+        .pass-badge.fail { background: #f56c6c; }
+
+        .section-title {
+            font-size: 15px; font-weight: bold; margin: 20px 0 10px 0;
+            padding-left: 10px; border-left: 3px solid #409eff;
+        }
+
+        .summary-grid {
+            display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 20px;
+        }
+        .summary-card {
+            background: #fff; border: 1px solid #ebeef5; border-radius: 4px; padding: 15px;
+            text-align: center;
+        }
+        .summary-card .num { font-size: 24px; font-weight: bold; }
+        .summary-card .label { font-size: 11px; color: #909399; margin-top: 4px; }
+
+        table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 11px; }
+        th { background: #f8f9fb; padding: 8px 10px; text-align: left; border-bottom: 2px solid #ebeef5; font-weight: 600; }
+        td { padding: 6px 10px; border-bottom: 1px solid #ebeef5; }
+
+        .tag { display: inline-block; padding: 1px 8px; border-radius: 8px; font-size: 10px; }
+        .tag-pass { background: #f0f9eb; color: #67c23a; }
+        .tag-fail { background: #fef0f0; color: #f56c6c; }
+
+        .defect-item {
+            background: #fff; border: 1px solid #ebeef5; border-radius: 4px;
+            padding: 12px 15px; margin-bottom: 10px; border-left: 3px solid #909399;
+        }
+        .defect-item.p0 { border-left-color: #f56c6c; }
+        .defect-item.p1 { border-left-color: #e6a23c; }
+        .defect-item.p2 { border-left-color: #409eff; }
+        .defect-item .d-title { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+        .defect-item .d-detail { font-size: 11px; color: #606266; }
+        .defect-item .d-detail strong { color: #303133; }
+
+        .footer { text-align: center; margin-top: 30px; color: #909399; font-size: 10px; }
+    </style>
+</head>
+<body>
+
+<!-- 报告头部 -->
+<div class="report-header">
+    <h1>AI 自动化测试报告</h1>
+    <div class="meta">
+        生成时间: {{ summary.basic_info.generated_at[:19].replace('T', ' ') }} |
+        平台: {{ summary.basic_info.platform }} v{{ summary.basic_info.version }}
+    </div>
+</div>
+
+<!-- 质量评分 -->
+<div class="score-card">
+    <div>
+        <div class="score-value" style="color: {% if summary.quality_score >= 80 %}#67c23a{% elif summary.quality_score >= 60 %}#e6a23c{% else %}#f56c6c{% endif %};">
+            {{ summary.quality_score }}
+        </div>
+        <div class="score-label">质量评分 (满分100)</div>
+    </div>
+    <div>
+        {% if summary.overall_pass %}
+        <span class="pass-badge pass">质量门禁通过</span>
+        {% else %}
+        <span class="pass-badge fail">质量门禁未通过</span>
+        {% endif %}
+    </div>
+</div>
+
+<!-- 测试摘要 -->
+<div class="section-title">测试摘要</div>
+<div class="summary-grid">
+    <div class="summary-card">
+        <div class="num" style="color: #409eff;">{{ summary.api_summary.total }}</div>
+        <div class="label">接口测试 (通过 {{ summary.api_summary.passed }})</div>
+    </div>
+    <div class="summary-card">
+        <div class="num" style="color: #e6a23c;">{{ summary.performance_summary.total }}</div>
+        <div class="label">性能测试 (通过 {{ summary.performance_summary.passed }})</div>
+    </div>
+    <div class="summary-card">
+        <div class="num" style="color: #67c23a;">{{ summary.integration_summary.total }}</div>
+        <div class="label">集成测试 (通过 {{ summary.integration_summary.passed }})</div>
+    </div>
+</div>
+
+<!-- 缺陷统计 -->
+<div class="section-title">缺陷统计 (共 {{ defects.get('summary', {}).get('total', 0) }} 个)</div>
+<table>
+    <thead>
+        <tr>
+            <th>严重等级</th>
+            <th>数量</th>
+            <th>说明</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% set sev = defects.get('summary', {}).get('by_severity', {}) %}
+        <tr><td>P0 (阻断)</td><td>{{ sev.get('P0', 0) }}</td><td>系统不可用，核心功能完全无法使用</td></tr>
+        <tr><td>P1 (严重)</td><td>{{ sev.get('P1', 0) }}</td><td>核心功能受损但有规避方案</td></tr>
+        <tr><td>P2 (一般)</td><td>{{ sev.get('P2', 0) }}</td><td>非核心功能异常</td></tr>
+        <tr><td>P3 (轻微)</td><td>{{ sev.get('P3', 0) }}</td><td>不影响主流程</td></tr>
+    </tbody>
+</table>
+
+<!-- 页面分隔 -->
+<div class="page-break"></div>
+
+<!-- 接口测试详情 -->
+<div class="section-title">接口测试详情</div>
+<table>
+    <thead>
+        <tr>
+            <th>用例名称</th>
+            <th>类型</th>
+            <th>状态码</th>
+            <th>响应时间</th>
+            <th>结果</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% set api_results = test_results.get('api_tests', {}).get('results', test_results.get('api_results', [])) if test_results.get('api_tests') else test_results.get('api_results', []) %}
+        {% for r in api_results %}
+        <tr>
+            <td>{{ r.get('case_name', 'N/A')[:35] }}</td>
+            <td>{{ r.get('case_type', '-') }}</td>
+            <td>{{ r.get('actual_status_code', '-') }}</td>
+            <td>{{ r.get('response_time_ms', '-') }}ms</td>
+            <td>{% if r.get('passed') %}<span class="tag tag-pass">通过</span>{% else %}<span class="tag tag-fail">失败</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<!-- 性能测试详情 -->
+<div class="section-title">性能测试详情</div>
+<table>
+    <thead>
+        <tr>
+            <th>场景名称</th>
+            <th>总请求</th>
+            <th>错误数</th>
+            <th>平均RT</th>
+            <th>P95</th>
+            <th>TPS</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% set perf_results = test_results.get('performance_tests', {}).get('results', test_results.get('performance_results', [])) if test_results.get('performance_tests') else test_results.get('performance_results', []) %}
+        {% for r in perf_results %}
+        <tr>
+            <td>{{ r.get('case_name', 'N/A')[:25] }}</td>
+            <td>{{ r.get('total_requests', '-') }}</td>
+            <td>{{ r.get('total_errors', '-') }}</td>
+            <td>{{ r.get('avg_response_time', '-') }}ms</td>
+            <td>{{ r.get('p95', '-') }}ms</td>
+            <td>{{ r.get('tps', '-') }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<!-- 页面分隔 -->
+<div class="page-break"></div>
+
+<!-- 缺陷详情 -->
+<div class="section-title">缺陷详情</div>
+{% for d in defects.get('defects', []) | sort(attribute='severity') %}
+<div class="defect-item {{ d.get('severity', 'P3').lower() }}">
+    <div class="d-title">[{{ d.get('severity', 'P3') }}] {{ d.get('title', '未命名缺陷') }}</div>
+    <div class="d-detail">
+        <strong>类别:</strong> {{ d.get('category', '-') }} |
+        <strong>来源:</strong> {{ d.get('test_type', '-') }} |
+        <strong>用例:</strong> {{ d.get('case_name', '-')[:25] }}<br>
+        <strong>根因:</strong> {{ d.get('root_cause', 'N/A') }}<br>
+        <strong>修复建议:</strong> {{ d.get('fix_suggestion', 'N/A') }}<br>
+        {% if d.get('reproduction_steps') %}
+        <strong>复现步骤:</strong>
+        {% for step in d.get('reproduction_steps', []) %}{{ loop.index }}. {{ step }} {% endfor %}
+        {% endif %}
+    </div>
+</div>
+{% endfor %}
+{% if not defects.get('defects') %}
+<div class="defect-item">
+    <div class="d-title" style="text-align: center; color: #67c23a;">未发现缺陷</div>
+</div>
+{% endif %}
+
+<div class="footer">
+    本报告由 AI 自动化测试平台自动生成 | {{ summary.basic_info.generated_at[:19].replace('T', ' ') }}
+</div>
+
+</body>
+</html>

@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 自动化测试报告</title>
+    <style>{% include "styles.css" %}</style>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+</head>
+<body>
+<div class="report-container" style="max-width: 1200px; margin: 0 auto; padding: 20px;">
+
+    <!-- 报告头部 -->
+    <div class="report-header">
+        <h1>AI 自动化测试报告</h1>
+        <div class="meta">
+            <span>📅 {{ summary.basic_info.generated_at[:19].replace('T', ' ') }}</span>
+            <span>🖥️ {{ summary.basic_info.platform }} v{{ summary.basic_info.version }}</span>
+            <span>🆔 {{ summary.basic_info.test_run_id | default('N/A') }}</span>
+        </div>
+    </div>
+
+    <!-- 质量评分卡片 -->
+    <div class="score-card">
+        <div>
+            <div class="score-value" style="color: {% if summary.quality_score >= 80 %}#67c23a{% elif summary.quality_score >= 60 %}#e6a23c{% else %}#f56c6c{% endif %};">
+                {{ summary.quality_score }}
+            </div>
+            <div class="score-label">质量评分 (满分100)</div>
+        </div>
+        <div>
+            {% if summary.overall_pass %}
+            <span class="pass-badge pass">✅ 质量门禁通过</span>
+            {% else %}
+            <span class="pass-badge fail">❌ 质量门禁未通过</span>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- 图表区域 -->
+    <div class="chart-grid">
+        <div class="chart-card">
+            <div id="chart-quality-gauge" class="chart-container"></div>
+        </div>
+        <div class="chart-card">
+            <div id="chart-defect-severity" class="chart-container"></div>
+        </div>
+        <div class="chart-card">
+            <div id="chart-defect-category" class="chart-container"></div>
+        </div>
+        <div class="chart-card">
+            <div id="chart-pass-rate" class="chart-container"></div>
+        </div>
+        <div class="chart-card full-width">
+            <div id="chart-performance" class="chart-container" style="height: 350px;"></div>
+        </div>
+    </div>
+
+    <!-- API 测试详情 -->
+    <div class="section-title">接口测试详情</div>
+    <div class="filter-bar">
+        <button class="filter-btn active" onclick="filterTable('api-table', 'all')">全部</button>
+        <button class="filter-btn" onclick="filterTable('api-table', 'pass')">通过</button>
+        <button class="filter-btn" onclick="filterTable('api-table', 'fail')">失败</button>
+    </div>
+    <table class="data-table" id="api-table">
+        <thead>
+            <tr>
+                <th>用例名称</th>
+                <th>类型</th>
+                <th>状态码</th>
+                <th>响应时间</th>
+                <th>结果</th>
+                <th>详情</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% set api_results = test_results.get('api_tests', {}).get('results', test_results.get('api_results', [])) if test_results.get('api_tests') else test_results.get('api_results', []) %}
+            {% for r in api_results %}
+            <tr class="data-row {{ 'row-pass' if r.get('passed') else 'row-fail' }}" data-status="{{ 'pass' if r.get('passed') else 'fail' }}">
+                <td>{{ r.get('case_name', 'N/A')[:40] }}</td>
+                <td>{{ r.get('case_type', '-') }}</td>
+                <td>{{ r.get('actual_status_code', '-') }}</td>
+                <td>{{ r.get('response_time_ms', '-') }}ms</td>
+                <td>
+                    {% if r.get('passed') %}
+                    <span class="tag tag-pass">通过</span>
+                    {% else %}
+                    <span class="tag tag-fail">失败</span>
+                    {% endif %}
+                </td>
+                <td><button class="filter-btn" onclick="toggleDetail(this)">展开</button></td>
+            </tr>
+            <tr class="detail-row">
+                <td colspan="6">
+                    <div class="detail-content">
+                        <strong>错误信息:</strong> {{ r.get('error_message', '无') }}<br>
+                        <strong>实际响应:</strong>
+                        <pre>{{ r.get('actual_response', 'N/A') | tojson(indent=2) if r.get('actual_response') is mapping else r.get('actual_response', 'N/A') }}</pre>
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <!-- 性能测试详情 -->
+    <div class="section-title">性能测试详情</div>
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>场景名称</th>
+                <th>总请求数</th>
+                <th>错误数</th>
+                <th>平均响应时间</th>
+                <th>P95</th>
+                <th>P99</th>
+                <th>TPS</th>
+                <th>瓶颈</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% set perf_results = test_results.get('performance_tests', {}).get('results', test_results.get('performance_results', [])) if test_results.get('performance_tests') else test_results.get('performance_results', []) %}
+            {% for r in perf_results %}
+            <tr>
+                <td>{{ r.get('case_name', 'N/A')[:30] }}</td>
+                <td>{{ r.get('total_requests', '-') }}</td>
+                <td>{{ r.get('total_errors', '-') }}</td>
+                <td>{{ r.get('avg_response_time', '-') }}ms</td>
+                <td>{{ r.get('p95', '-') }}ms</td>
+                <td>{{ r.get('p99', '-') }}ms</td>
+                <td>{{ r.get('tps', '-') }}</td>
+                <td>
+                    {% if r.get('bottlenecks') %}
+                    <span class="tag tag-fail">{{ r.get('bottlenecks') | length }} 个</span>
+                    {% else %}
+                    <span class="tag tag-pass">无</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <!-- 集成测试详情 -->
+    <div class="section-title">集成测试详情</div>
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>场景名称</th>
+                <th>总步骤</th>
+                <th>已执行</th>
+                <th>失败步骤</th>
+                <th>结果</th>
+                <th>详情</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% set integ_results = test_results.get('integration_tests', {}).get('results', test_results.get('integration_results', [])) if test_results.get('integration_tests') else test_results.get('integration_results', []) %}
+            {% for r in integ_results %}
+            <tr>
+                <td>{{ r.get('case_name', 'N/A')[:30] }}</td>
+                <td>{{ r.get('total_steps', '-') }}</td>
+                <td>{{ r.get('executed_steps', '-') }}</td>
+                <td>{{ r.get('failure_step', '-') }}</td>
+                <td>
+                    {% if r.get('passed') %}
+                    <span class="tag tag-pass">通过</span>
+                    {% else %}
+                    <span class="tag tag-fail">失败</span>
+                    {% endif %}
+                </td>
+                <td><button class="filter-btn" onclick="toggleDetail(this)">展开</button></td>
+            </tr>
+            <tr class="detail-row">
+                <td colspan="6">
+                    <div class="detail-content">
+                        <strong>失败原因:</strong> {{ r.get('failure_reason', '无') }}<br>
+                        <strong>步骤详情:</strong>
+                        <pre>{{ r.get('step_results', []) | tojson(indent=2) }}</pre>
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <!-- 缺陷清单 -->
+    <div class="section-title">缺陷清单 ({{ defects.get('summary', {}).get('total', 0) }} 个)</div>
+    <div class="defect-list">
+        {% for d in defects.get('defects', []) | sort(attribute='severity') %}
+        <div class="defect-item severity-{{ d.get('severity', 'P3') }}">
+            <div class="defect-header">
+                <span class="defect-title">{{ d.get('title', '未命名缺陷') }}</span>
+                <span class="tag severity-{{ d.get('severity', 'P3') }}">{{ d.get('severity', 'P3') }}</span>
+            </div>
+            <div class="defect-detail">
+                <strong>类别:</strong> {{ d.get('category', '-') }} |
+                <strong>来源:</strong> {{ d.get('test_type', '-') }} |
+                <strong>用例:</strong> {{ d.get('case_name', '-')[:30] }}<br>
+                <strong>根因分析:</strong> {{ d.get('root_cause', 'N/A') }}<br>
+                <strong>修复建议:</strong> {{ d.get('fix_suggestion', 'N/A') }}<br>
+                {% if d.get('reproduction_steps') %}
+                <strong>复现步骤:</strong>
+                <ol style="margin-left: 20px; margin-top: 4px;">
+                    {% for step in d.get('reproduction_steps', []) %}
+                    <li>{{ step }}</li>
+                    {% endfor %}
+                </ol>
+                {% endif %}
+                {% if d.get('related_cases') %}
+                <strong>关联用例:</strong> {{ d.get('related_cases') | length }} 个
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+        {% if not defects.get('defects') %}
+        <div class="defect-item severity-P3">
+            <div class="defect-title" style="text-align: center; color: #67c23a;">🎉 未发现缺陷</div>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- 页脚 -->
+    <div style="text-align: center; margin-top: 40px; padding: 20px; color: #909399; font-size: 12px;">
+        本报告由 AI 自动化测试平台自动生成 | {{ summary.basic_info.generated_at[:19].replace('T', ' ') }}
+    </div>
+</div>
+
+<script>
+// 传递数据给 JS
+var reportData = {{ report_data_json | safe }};
+
+// 渲染 ECharts 图表
+document.addEventListener('DOMContentLoaded', function() {
+    var charts = reportData.charts || {};
+
+    // 质量评分仪表盘
+    if (charts.quality_gauge) {
+        echarts.init(document.getElementById('chart-quality-gauge')).setOption(charts.quality_gauge);
+    }
+
+    // 缺陷严重等级饼图
+    if (charts.defect_severity_pie) {
+        echarts.init(document.getElementById('chart-defect-severity')).setOption(charts.defect_severity_pie);
+    }
+
+    // 缺陷类别饼图
+    if (charts.defect_category_pie) {
+        echarts.init(document.getElementById('chart-defect-category')).setOption(charts.defect_category_pie);
+    }
+
+    // 通过率柱状图
+    if (charts.pass_rate_bar) {
+        var passRateChart = echarts.init(document.getElementById('chart-pass-rate'));
+        // 修复 tooltip formatter
+        if (charts.pass_rate_bar.tooltip) {
+            charts.pass_rate_bar.tooltip.formatter = function(params) {
+                var html = params[0].name + '<br/>';
+                params.forEach(function(p) {
+                    html += p.marker + p.seriesName + ': ' + p.value + '<br/>';
+                });
+                return html;
+            };
+        }
+        passRateChart.setOption(charts.pass_rate_bar);
+    }
+
+    // 性能趋势折线图
+    if (charts.performance_line) {
+        echarts.init(document.getElementById('chart-performance')).setOption(charts.performance_line);
+    }
+
+    // 窗口 resize 时重绘图表
+    window.addEventListener('resize', function() {
+        document.querySelectorAll('.chart-container').forEach(function(el) {
+            var instance = echarts.getInstanceByDom(el);
+            if (instance) instance.resize();
+        });
+    });
+});
+
+// 表格行展开/折叠
+function toggleDetail(btn) {
+    var row = btn.closest('tr');
+    var detailRow = row.nextElementSibling;
+    if (detailRow && detailRow.classList.contains('detail-row')) {
+        detailRow.classList.toggle('show');
+        btn.textContent = detailRow.classList.contains('show') ? '收起' : '展开';
+    }
+}
+
+// 表格筛选
+function filterTable(tableId, status) {
+    var table = document.getElementById(tableId);
+    if (!table) return;
+
+    // 更新按钮状态
+    table.closest('.section-title')?.nextElementSibling?.querySelectorAll('.filter-btn')?.forEach(function(btn) {
+        btn.classList.remove('active');
+    });
+    event.target.classList.add('active');
+
+    // 筛选行
+    table.querySelectorAll('.data-row').forEach(function(row) {
+        if (status === 'all' || row.dataset.status === status) {
+            row.style.display = '';
+        } else {
+            row.style.display = 'none';
+        }
+    });
+}
+</script>
+</body>
+</html>
