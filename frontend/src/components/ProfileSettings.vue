@@ -16,7 +16,7 @@
         <el-input v-model="profile.email" placeholder="请输入邮箱" />
       </el-form-item>
       <el-form-item label="当前角色">
-        <el-tag>{{ roleLabels[authStore.role] || authStore.role }}</el-tag>
+        <el-tag :type="roleTagType(authStore.role)">{{ roleLabel(authStore.role) }}</el-tag>
       </el-form-item>
       <el-form-item>
         <el-button type="primary" :loading="savingProfile" @click="saveProfile">
@@ -73,6 +73,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { authApi } from '@/api'
 import { useAuthStore } from '@/stores'
+import { roleLabel, roleTagType } from '@/utils/roles'
 
 const authStore = useAuthStore()
 
@@ -82,14 +83,6 @@ const savingPwd = ref(false)
 
 const profileFormRef = ref<FormInstance>()
 const pwdFormRef = ref<FormInstance>()
-
-/** 角色枚举 -> 中文标签 */
-const roleLabels: Record<string, string> = {
-  admin: '管理员',
-  tester: '测试工程师',
-  developer: '开发者',
-  viewer: '访客',
-}
 
 /** 个人信息表单 */
 const profile = reactive({

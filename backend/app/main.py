@@ -50,7 +50,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="AI 自动化测试平台",
-    description="100% 自闭环、无人工干预的 AI 自动化测试平台",
+    description="企业级 AI 自动化测试与质量保障平台",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -130,3 +130,7 @@ app.include_router(trend_router, prefix="/api/trend", tags=["质量趋势"])
 # 站内通知
 from app.api.notification import router as notification_router
 app.include_router(notification_router, prefix="/api/notifications", tags=["站内通知"])
+
+# 变更审批
+from app.api.change_request import router as change_request_router
+app.include_router(change_request_router, prefix="/api/change-requests")

@@ -89,10 +89,13 @@ export const modelApi = {
 // ============ 认证 ============
 export const authApi = {
   login: (data: { username: string; password: string }) => api.post('/auth/login', data),
-  register: (data: any) => api.post('/auth/register', data),
+  /** 管理员新建用户（可能进入审核流，返回 data.status === 'pending'） */
+  register: (data: any) => api.post('/auth/users', data),
   me: () => api.get('/auth/me'),
   listUsers: (params?: any) => api.get('/auth/users', { params }),
   updateRole: (userId: string, role: string) => api.put(`/auth/users/${userId}/role`, { role }),
+  /** 删除用户（可能进入审核流，返回 data.status === 'pending'） */
+  deleteUser: (userId: string) => api.delete(`/auth/users/${userId}`),
   updateStatus: (userId: string, isActive: boolean) =>
     api.put(`/auth/users/${userId}/status`, { is_active: isActive }),
   /** 更新当前登录用户的个人信息（邮箱 / 用户名） */
@@ -101,6 +104,16 @@ export const authApi = {
   changePassword: (data: { old_password: string; new_password: string }) =>
     api.put('/auth/me/password', data),
   logout: () => api.post('/auth/logout'),
+}
+
+// ============ 变更审核（审核中心） ============
+export const changeRequestApi = {
+  /** 变更申请列表，常用 params: { status: 'pending' } */
+  list: (params?: any) => api.get('/change-requests', { params }),
+  /** 审核通过 */
+  approve: (id: string) => api.post(`/change-requests/${id}/approve`),
+  /** 审核驳回，data: { note: '驳回理由' } */
+  reject: (id: string, data: { note: string }) => api.post(`/change-requests/${id}/reject`, data),
 }
 
 // ============ 项目 ============

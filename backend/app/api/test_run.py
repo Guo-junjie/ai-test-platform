@@ -11,7 +11,6 @@
 
 import uuid
 from datetime import datetime
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -165,16 +164,10 @@ async def create_test_run(
     test_run_id = str(test_run.id)
     logger.info(f"TestRun created: {test_run_id}")
 
-    # 4. 异步执行完整流程（不阻塞 API 响应）
-    import asyncio
+    # 4. 派发到 Celery worker 执行完整流程（API 进程立即返回，不阻塞事件循环）
+    from app.modules.pipeline import run_test_pipeline
 
-    asyncio.create_task(
-        _execute_full_pipeline(
-            test_run_id=test_run_id,
-            req=req,
-            source_type=source_type,
-        )
-    )
+    run_test_pipeline.delay(test_run_id, req.model_dump())
 
     return {
         "code": 0,
@@ -293,136 +286,3 @@ async def cancel_test_run(
         "data": {"test_run_id": test_run_id, "status": "cancelled"},
         "message": "Test run cancelled",
     }
-
-
-# ==================== 内部函数 ====================
-
-
-async def _execute_full_pipeline(
-    test_run_id: str,
-    req: CreateTestRunRequest,
-    source_type: ModelSourceType,
-) -> None:
-    """
-    执行完整测试流水线（异步后台任务）。
-
-    流程：代码拉取 → 代码解析 → 用例生成 → 测试执行
-    """
-    from app.utils.redis_client import set_task_status, set_task_progress
-
-    try:
-        # Step 1: 代码拉取
-        await set_task_status(test_run_id, "pulling", {"step": "fetching_code"})
-        await set_task_progress(test_run_id, 10, "拉取代码")
-
-        from app.modules.source import SourceConfig, SourceAdapterFactory, SourceType
-
-        source_config = SourceConfig(
-            source_type=SourceType(req.source_type),
-            github_token=req.github_token,
-            repo_url=req.repo_url,
-            branch=req.branch,
-            commit_sha=req.commit_sha,
-            svn_url=req.svn_url,
-            svn_username=req.svn_username,
-            svn_password=req.svn_password,
-            upload_file_path=req.upload_file_path,
-        )
-
-        fetch_result = SourceAdapterFactory.fetch_code(source_config)
-        local_path = fetch_result.get("local_path", "")
-        snapshot_id = fetch_result.get("snapshot_id")
-
-        logger.info(f"[{test_run_id}] Code fetched: {local_path}")
-
-        # Step 2: 代码解析
-        await set_task_status(test_run_id, "analyzing", {"step": "code_analysis"})
-        await set_task_progress(test_run_id, 25, "代码解析")
-
-        from app.modules.code_analyzer import AICodeAnalyzer, APIExtractor, StackDetector
-
-        detector = StackDetector()
-        stack_info = detector.detect(local_path)
-
-        extractor = APIExtractor()
-        apis = extractor.extract(local_path, stack_info)
-
-        ai_analyzer = AICodeAnalyzer()
-        try:
-            ai_analysis = await ai_analyzer.analyze_project(local_path, apis, stack_info)
-        except Exception as e:
-            logger.error(f"[{test_run_id}] AI analysis failed: {e}")
-            ai_analysis = {
-                "business_modules": [],
-                "data_flow": {},
-                "risk_areas": [],
-                "api_analyses": [],
-            }
-
-        analysis_result: dict[str, Any] = {
-            "tech_stack": stack_info,
-            "apis": apis,
-            "ai_analysis": ai_analysis,
-            "total_apis": len(apis),
-            "repo_path": local_path,
-            "snapshot_id": snapshot_id,
-        }
-
-        logger.info(
-            f"[{test_run_id}] Analysis completed: stack={stack_info.get('stack')}, "
-            f"apis={len(apis)}"
-        )
-
-        # Step 3: 用例生成
-        await set_task_status(test_run_id, "generating", {"step": "case_generation"})
-        await set_task_progress(test_run_id, 40, "生成测试用例")
-
-        from app.modules.case_generator import TestCaseGenerator
-
-        generator = TestCaseGenerator()
-        test_cases = await generator.generate_all(apis, ai_analysis)
-
-        logger.info(
-            f"[{test_run_id}] Cases generated: "
-            f"api={len(test_cases.get('api', []))}, "
-            f"perf={len(test_cases.get('performance', []))}, "
-            f"integ={len(test_cases.get('integration', []))}"
-        )
-
-        # Step 4: 测试执行
-        await set_task_status(test_run_id, "executing", {"step": "test_execution"})
-        await set_task_progress(test_run_id, 50, "调度测试执行")
-
-        from app.modules.execution.engine import TestExecutionEngine
-
-        engine = TestExecutionEngine()
-        engine.execute_all(test_run_id, analysis_result, test_cases)
-
-        logger.info(f"[{test_run_id}] Pipeline dispatched, waiting for execution...")
-
-    except Exception as e:
-        logger.error(
-            f"[{test_run_id}] Pipeline failed: {e}",
-            exc_info=True,
-        )
-        await set_task_status(
-            test_run_id, "failed", {"error": str(e)}
-        )
-        await set_task_progress(test_run_id, 0, f"失败: {str(e)[:100]}")
-
-        # 更新数据库状态
-        try:
-            from app.utils.database import AsyncSessionLocal
-
-            async with AsyncSessionLocal() as session:
-                result = await session.execute(
-                    select(TestRun).where(TestRun.id == uuid.UUID(test_run_id))
-                )
-                run = result.scalar_one_or_none()
-                if run:
-                    run.status = TestStatus.FAILED
-                    run.error_message = str(e)[:500]
-                    run.completed_at = datetime.utcnow()
-                    await session.commit()
-        except Exception as db_err:
-            logger.error(f"[{test_run_id}] Failed to update DB status: {db_err}")

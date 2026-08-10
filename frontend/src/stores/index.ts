@@ -11,6 +11,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import axios from 'axios'
 import { authApi } from '@/api'
+import { ROLE_LABELS } from '@/utils/roles'
 
 // ==================== 统一响应类型 ====================
 
@@ -29,14 +30,32 @@ export interface PageResult<T = any> {
   pageSize: number
 }
 
+/** 系统角色枚举值（与后端 UserRole 一致，全部小写） */
+export type UserRole =
+  | 'super_admin'
+  | 'admin'
+  | 'test_manager'
+  | 'tester'
+  | 'developer'
+  | 'auditor'
+  | 'viewer'
+
 /** 用户信息 */
 export interface UserInfo {
   id: string
   username: string
   email: string
-  role: 'admin' | 'tester' | 'developer' | 'viewer'
+  role: UserRole
   is_active: boolean
   created_at: string | null
+}
+
+/**
+ * 角色 -> 中文标签（统一取自 @/utils/roles 的 ROLE_LABELS）
+ * @param role 角色枚举值
+ */
+export function roleLabel(role: string): string {
+  return ROLE_LABELS[role] || role || '未知角色'
 }
 
 // ==================== App Store ====================
@@ -118,7 +137,16 @@ export const useAuthStore = defineStore('auth', () => {
   const isAuthenticated = computed<boolean>(() => !!token.value)
   const username = computed<string>(() => user.value?.username || '未登录')
   const role = computed<string>(() => user.value?.role || 'viewer')
-  const isAdmin = computed<boolean>(() => user.value?.role === 'admin')
+  /** 超级管理员 */
+  const isSuperAdmin = computed<boolean>(() => user.value?.role === 'super_admin')
+  /** 管理员（含超级管理员） */
+  const isAdmin = computed<boolean>(
+    () => user.value?.role === 'admin' || user.value?.role === 'super_admin'
+  )
+  /** 审核员 */
+  const isAuditor = computed<boolean>(() => user.value?.role === 'auditor')
+  /** 当前用户角色中文名 */
+  const roleName = computed<string>(() => roleLabel(role.value))
 
   // ==================== Actions ====================
 
@@ -164,7 +192,10 @@ export const useAuthStore = defineStore('auth', () => {
     isAuthenticated,
     username,
     role,
+    roleName,
+    isSuperAdmin,
     isAdmin,
+    isAuditor,
     login,
     logout,
     fetchCurrentUser,

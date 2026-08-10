@@ -113,8 +113,14 @@ def require_role(*allowed_roles: UserRole) -> Callable:
 
 # ==================== 便捷别名 ====================
 
-require_admin = require_role(UserRole.ADMIN)
-require_tester = require_role(UserRole.ADMIN, UserRole.TESTER)
+require_admin = require_role(UserRole.SUPER_ADMIN, UserRole.ADMIN)
+require_tester = require_role(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.TESTER)
 require_developer = require_role(
-    UserRole.ADMIN, UserRole.TESTER, UserRole.DEVELOPER
+    UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.TESTER, UserRole.DEVELOPER
 )
+
+# 管理类操作（用户 CRUD / 角色变更）：super_admin 立即生效，admin 需走审批
+require_manager = require_role(UserRole.SUPER_ADMIN, UserRole.ADMIN)
+
+# 审批类操作（通过 / 驳回变更申请）
+require_reviewer = require_role(UserRole.SUPER_ADMIN, UserRole.AUDITOR)

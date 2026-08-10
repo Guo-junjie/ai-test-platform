@@ -79,6 +79,12 @@ const routes = [
     meta: { title: '用户管理', requireAdmin: true },
   },
   {
+    path: '/approvals',
+    name: 'Approvals',
+    component: () => import('@/views/Approvals.vue'),
+    meta: { title: '审核中心', requireAuditor: true },
+  },
+  {
     path: '/notifications',
     name: 'Notifications',
     component: () => import('@/views/Notifications.vue'),
@@ -121,8 +127,14 @@ router.beforeEach((to, _from, next) => {
     return
   }
 
-  // 需要管理员权限的路由
+  // 需要管理员权限的路由（isAdmin 已包含 super_admin）
   if (to.meta?.requireAdmin && !authStore.isAdmin) {
+    next({ path: '/dashboard' })
+    return
+  }
+
+  // 需要审核权限的路由：审核员或超级管理员可访问
+  if (to.meta?.requireAuditor && !(authStore.isAuditor || authStore.isSuperAdmin)) {
     next({ path: '/dashboard' })
     return
   }

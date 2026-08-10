@@ -11,6 +11,7 @@ celery_app = Celery(
     backend=settings.celery_result_backend,
     include=[
         "app.modules.execution.engine",
+        "app.modules.pipeline",
     ],
 )
 

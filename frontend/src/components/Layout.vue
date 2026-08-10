@@ -46,6 +46,11 @@
           <span>用户管理</span>
         </el-menu-item>
 
+        <el-menu-item v-if="canAudit" index="/approvals">
+          <el-icon><CircleCheck /></el-icon>
+          <span>审核中心</span>
+        </el-menu-item>
+
         <el-sub-menu index="settings">
           <template #title>
             <el-icon><Setting /></el-icon>
@@ -104,6 +109,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import NotificationBell from '@/components/NotificationBell.vue'
 import { useAuthStore } from '@/stores'
+import { roleLabel as toRoleLabel, roleTagType as toRoleTagType } from '@/utils/roles'
 
 const route = useRoute()
 const router = useRouter()
@@ -113,25 +119,14 @@ const authStore = useAuthStore()
 const activeMenu = computed(() => route.path)
 const currentTitle = computed(() => (route.meta?.title as string) || '')
 
-const roleLabel = computed(() => {
-  const map: Record<string, string> = {
-    admin: '管理员',
-    tester: '测试工程师',
-    developer: '开发者',
-    viewer: '访客',
-  }
-  return map[authStore.role] || '访客'
-})
+/** 审核中心可见性：审核员或超级管理员 */
+const canAudit = computed<boolean>(() => authStore.isAuditor || authStore.isSuperAdmin)
 
-const roleTagType = computed<'success' | 'warning' | 'info' | 'primary'>(() => {
-  const map: Record<string, 'success' | 'warning' | 'info' | 'primary'> = {
-    admin: 'danger',
-    tester: 'success',
-    developer: 'primary',
-    viewer: 'info',
-  }
-  return map[authStore.role] || 'info'
-})
+/** 当前用户角色中文名（统一取自角色字典） */
+const roleLabel = computed<string>(() => toRoleLabel(authStore.role))
+
+/** 当前用户角色 tag 颜色（统一取自角色字典） */
+const roleTagType = computed(() => toRoleTagType(authStore.role))
 
 function handleUserCommand(cmd: string) {
   if (cmd === 'logout') {

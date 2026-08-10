@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import Enum as PyEnum
 from sqlalchemy import (
     Column, Integer, String, Text, Boolean, DateTime, JSON, Float,
-    ForeignKey, Enum as SAEnum, Index, UniqueConstraint
+    ForeignKey, Enum as SAEnum, Index, UniqueConstraint, text
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import declarative_base, relationship
@@ -54,9 +54,12 @@ class ModelProvider(PyEnum):
     LOCAL = "local"
 
 class UserRole(PyEnum):
-    ADMIN = "admin"
+    SUPER_ADMIN = "super_admin"   # 超级管理员：所有管理操作立即生效
+    ADMIN = "admin"               # 管理员：管理类操作需审核员审批
+    TEST_MANAGER = "test_manager" # 测试经理
     TESTER = "tester"
     DEVELOPER = "developer"
+    AUDITOR = "auditor"           # 审核员：审批管理类变更申请
     VIEWER = "viewer"
 
 
@@ -367,6 +370,34 @@ class Notification(Base):
     )
 
 
+# ==================== 变更审批 ====================
+
+class ChangeRequest(Base):
+    """
+    变更申请表 — 管理类操作的审批流。
+
+    ADMIN 发起的新建用户 / 删除用户 / 修改角色操作会先落一条 pending 记录，
+    由 AUDITOR 或 SUPER_ADMIN 审批通过后才真正生效。
+    SUPER_ADMIN 发起的操作立即生效，不产生此记录。
+    """
+    __tablename__ = "change_requests"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    type = Column(String(50), nullable=False)          # create_user | delete_user | change_role
+    payload = Column(JSONB, default={})                # create_user: {username,email,hashed_password,role}; change_role: {role}
+    requested_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    target_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    status = Column(String(20), default="pending", nullable=False)  # pending | approved | rejected
+    review_note = Column(Text)
+    reviewed_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    reviewed_at = Column(DateTime)
+
+    __table_args__ = (
+        Index("idx_change_requests_status_created", "status", "created_at"),
+    )
+
+
 # ==================== 数据库初始化 ====================
 
 async def init_db():
@@ -384,3 +415,21 @@ async def init_db():
         await conn.run_sync(Base.metadata.create_all)
 
     logger.info("Database tables created (via Base.metadata.create_all)")
+
+    # 旧库补齐 userrole 枚举新增值（新库由 create_all 一次建全，此处为幂等兜底）。
+    # PostgreSQL 的 ALTER TYPE ... ADD VALUE 必须在事务外执行，故使用 AUTOCOMMIT。
+    new_role_values = ("super_admin", "test_manager", "auditor")
+    async with async_engine.connect() as conn:
+        autocommit_conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
+        for value in new_role_values:
+            try:
+                await autocommit_conn.execute(
+                    text(f"ALTER TYPE userrole ADD VALUE IF NOT EXISTS '{value}'")
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to add enum value '{value}' to userrole: {e}. "
+                    f"若角色相关接口报错，请执行 `docker compose down -v` 重建数据库。"
+                )
+
+    logger.info("UserRole enum values ensured (super_admin / test_manager / auditor)")

@@ -309,7 +309,7 @@ function renderDependencyGraph() {
   let svg = `<svg width="${svgWidth}" height="${svgHeight}" style="width: 100%; height: 500px">`
   
   // Draw edges
-  edges.forEach((edge) => {
+  edges.forEach((edge: any) => {
     const s = nodes[edge.source]
     const t = nodes[edge.target]
     svg += `<line x1="${s.x}" y1="${s.y}" x2="${t.x}" y2="${t.y}" stroke="#a0cfff" stroke-width="2" marker-end="url(#arrow)" />`
@@ -319,7 +319,7 @@ function renderDependencyGraph() {
   svg += `<defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="20" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3 Z" fill="#a0cfff"/></marker></defs>`
 
   // Draw nodes
-  nodes.forEach((node) => {
+  nodes.forEach((node: any) => {
     svg += `<g transform="translate(${node.x}, ${node.y})">`
     svg += `<rect x="-60" y="-20" width="120" height="40" rx="8" fill="#ecf5ff" stroke="#409eff" stroke-width="1.5"/>`
     svg += `<text x="0" y="5" text-anchor="middle" font-size="13" fill="#303133">${node.name}</text>`

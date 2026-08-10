@@ -341,7 +341,7 @@ async function handleCreate() {
   creating.value = true
   try {
     await testRunApi.create({ ...form })
-    ElMessage.success('测试任务已创建')
+    ElMessage.success('测试已在后台启动，可在列表中查看实时进度')
     showCreateDialog.value = false
     // Reset form
     Object.assign(form, {

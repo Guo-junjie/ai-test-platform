@@ -2,7 +2,8 @@
 用户认证服务 — JWT 签发/验证、密码哈希、用户 CRUD
 
 使用 python-jose 签发 JWT，passlib[bcrypt] 哈希密码。
-支持四种角色：admin / tester / developer / viewer。
+支持七种角色：
+super_admin / admin / test_manager / tester / developer / auditor / viewer。
 """
 
 import uuid
@@ -279,31 +280,85 @@ class AuthService:
 
     # ==================== 初始化默认管理员 ====================
 
+    # 默认演示团队种子数据：(username, password, role)
+    DEFAULT_TEAM: list[tuple[str, str, UserRole]] = [
+        ("superadmin", "SuperAdmin123", UserRole.SUPER_ADMIN),
+        ("admin", "Admin123", UserRole.ADMIN),
+        ("tester", "Tester123", UserRole.TESTER),
+        ("developer", "Developer123", UserRole.DEVELOPER),
+        ("auditor", "Auditor123", UserRole.AUDITOR),
+        ("viewer", "Viewer123", UserRole.VIEWER),
+    ]
+
     @staticmethod
     async def init_default_admin() -> None:
         """
-        初始化默认管理员账户。
+        初始化默认账户（幂等）。
 
-        在应用启动时调用，如果 users 表为空则创建默认 admin 账户。
-        默认凭据: admin / admin123
+        1. users 表为空时，种子一整套演示团队账户（7 角色体系中的 6 个常用账户）。
+        2. 每次启动都确保至少存在一个 SUPER_ADMIN，保证旧库也有可用的审核人。
+
+        默认凭据（明文均 < 72 字节，满足 bcrypt 限制）:
+            superadmin / SuperAdmin123  (super_admin)
+            admin      / Admin123       (admin)
+            tester     / Tester123      (tester)
+            developer  / Developer123   (developer)
+            auditor    / Auditor123     (auditor)
+            viewer     / Viewer123      (viewer)
         """
         async with AsyncSessionLocal() as session:
-            # 检查是否已有用户
+            # ---- 1. 空表时种子完整演示团队 ----
             result = await session.execute(select(User).limit(1))
-            if result.scalar_one_or_none() is not None:
+            if result.scalar_one_or_none() is None:
+                for username, password, role in AuthService.DEFAULT_TEAM:
+                    session.add(
+                        User(
+                            id=uuid.uuid4(),
+                            username=username,
+                            email=f"{username}@ai-test-platform.local",
+                            hashed_password=AuthService.hash_password(password),
+                            role=role,
+                            is_active=True,
+                        )
+                    )
+                await session.commit()
+                logger.info(
+                    "Default demo team created: "
+                    + ", ".join(f"{u}({r.value})" for u, _, r in AuthService.DEFAULT_TEAM)
+                )
                 return
 
-            admin = User(
-                id=uuid.uuid4(),
-                username="admin",
-                email="admin@ai-test-platform.local",
-                hashed_password=AuthService.hash_password("admin123"),
-                role=UserRole.ADMIN,
-                is_active=True,
+            # ---- 2. 兜底：确保至少存在一个 super_admin ----
+            existing_super = await session.execute(
+                select(User).where(User.role == UserRole.SUPER_ADMIN).limit(1)
             )
-            session.add(admin)
+            if existing_super.scalar_one_or_none() is not None:
+                return
+
+            # 若 superadmin 用户名已被占用（角色被改），则直接提升该账户
+            occupied = await session.execute(
+                select(User).where(User.username == "superadmin")
+            )
+            existing_user = occupied.scalar_one_or_none()
+            if existing_user is not None:
+                existing_user.role = UserRole.SUPER_ADMIN
+                existing_user.is_active = True
+                await session.commit()
+                logger.info("Existing user 'superadmin' promoted to super_admin")
+                return
+
+            session.add(
+                User(
+                    id=uuid.uuid4(),
+                    username="superadmin",
+                    email="superadmin@ai-test-platform.local",
+                    hashed_password=AuthService.hash_password("SuperAdmin123"),
+                    role=UserRole.SUPER_ADMIN,
+                    is_active=True,
+                )
+            )
             await session.commit()
-            logger.info("Default admin user created (admin / admin123)")
+            logger.info("Super admin user created (superadmin / SuperAdmin123)")
 
     @staticmethod
     def user_to_dict(user: User) -> dict[str, Any]:
