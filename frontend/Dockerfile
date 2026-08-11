@@ -4,6 +4,8 @@ WORKDIR /app
 COPY package.json ./
 # 官方 node 镜像默认 NODE_ENV=production，会导致 npm install 跳过 devDependencies（vue-tsc/vite/typescript 均不安装）。
 # 构建阶段必须显式带上 dev 依赖，否则 npm run build 报 "vue-tsc: not found"。
+RUN npm install --include=dev
+
 COPY . .
 
 # 赋予 node_modules/.bin 目录下所有脚本可执行权限
