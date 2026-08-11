@@ -417,19 +417,35 @@ async def init_db():
     logger.info("Database tables created (via Base.metadata.create_all)")
 
     # 旧库补齐 userrole 枚举新增值（新库由 create_all 一次建全，此处为幂等兜底）。
-    # PostgreSQL 的 ALTER TYPE ... ADD VALUE 必须在事务外执行，故使用 AUTOCOMMIT。
-    new_role_values = ("super_admin", "test_manager", "auditor")
-    async with async_engine.connect() as conn:
-        autocommit_conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
-        for value in new_role_values:
-            try:
-                await autocommit_conn.execute(
-                    text(f"ALTER TYPE userrole ADD VALUE IF NOT EXISTS '{value}'")
-                )
-            except Exception as e:
-                logger.warning(
-                    f"Failed to add enum value '{value}' to userrole: {e}. "
-                    f"若角色相关接口报错，请执行 `docker compose down -v` 重建数据库。"
-                )
-
-    logger.info("UserRole enum values ensured (super_admin / test_manager / auditor)")
+    #
+    # 【必须按枚举成员名补值，不能按值补】
+    # SQLAlchemy 的 SAEnum(UserRole) 默认持久化的是成员名 member.name
+    # （SUPER_ADMIN / TEST_MANAGER / AUDITOR，大写），而不是 member.value
+    # （super_admin / test_manager / auditor，小写）。
+    # 若这里补成小写，旧库的 userrole 仍然只有 ADMIN/TESTER/DEVELOPER/VIEWER 四个标签，
+    # 随后 AuthService.init_default_admin() 执行
+    #     WHERE users.role = 'SUPER_ADMIN'::userrole
+    # 会被 PostgreSQL 拒绝（22P02 invalid input value for enum userrole），
+    # 异常穿透 lifespan → uvicorn 启动失败 → 8000 端口无监听 → nginx 502。
+    #
+    # PostgreSQL 的 ALTER TYPE ... ADD VALUE 建议在事务外执行，故使用 AUTOCOMMIT；
+    # DDL 不支持参数绑定，标签取自代码内枚举定义，为可信字面量，无注入风险。
+    role_labels: tuple[str, ...] = tuple(member.name for member in UserRole)
+    try:
+        async with async_engine.connect() as conn:
+            autocommit_conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
+            for label in role_labels:
+                try:
+                    await autocommit_conn.execute(
+                        text(f"ALTER TYPE userrole ADD VALUE IF NOT EXISTS '{label}'")
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to add enum label '{label}' to userrole: {e}. "
+                        f"若角色相关接口报错，请执行 `docker compose down -v` 重建数据库。"
+                    )
+    except Exception as e:
+        # 整段为幂等兜底，连接层异常也不允许打断应用启动
+        logger.warning(f"Skip userrole enum sync (connection error): {e}")
+    else:
+        logger.info(f"UserRole enum labels ensured: {', '.join(role_labels)}")

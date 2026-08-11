@@ -2,13 +2,55 @@
 AI 自动化测试平台 — FastAPI 应用入口
 """
 
+import inspect
 from contextlib import asynccontextmanager
+from typing import Any, Callable
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
 from app.config import settings
 from app.utils.logger import setup_logger
+
+
+async def _run_lifecycle_step(
+    name: str,
+    func: Callable[[], Any],
+    phase: str = "startup",
+) -> bool:
+    """
+    执行单个生命周期步骤（启动初始化 / 关停清理），失败只记录日志、不中断进程。
+
+    为什么必须隔离异常：
+    容器里 uvicorn 以 `--reload` 运行时，父进程只对 8000 端口做了 bind() 而没有
+    listen()（listen 发生在子进程的 loop.create_server 里）。一旦子进程在 ASGI
+    lifespan startup 阶段抛异常，子进程退出、端口停留在 bound-but-not-listening，
+    内核对新连接直接回 RST —— nginx 侧就是
+    `connect() failed (111: Connection refused)` 并给浏览器返回 502。
+    因此任何一步初始化失败都不允许把整个 HTTP 服务拖死：服务必须活着，
+    让 /api/health 与业务接口把真实错误暴露出来。
+
+    Args:
+        name: 步骤名称，用于日志。
+        func: 无参可调用对象，可为同步函数或协程函数。
+        phase: 阶段标签，startup / shutdown，仅用于日志前缀。
+
+    Returns:
+        True 表示成功，False 表示失败（异常已被吞掉并记录）。
+    """
+    try:
+        result = func()
+        if inspect.isawaitable(result):
+            await result
+        logger.info(f"[{phase}] {name}: OK")
+        return True
+    except Exception as exc:
+        logger.exception(
+            f"[{phase}] {name}: FAILED -> {exc.__class__.__name__}: {exc} "
+            f"(已跳过该步骤，HTTP 服务继续运行)"
+        )
+        return False
 
 
 @asynccontextmanager
@@ -18,33 +60,27 @@ async def lifespan(app: FastAPI):
     setup_logger()
     logger.info(f"Starting AI Test Platform in {settings.APP_ENV} mode...")
 
-    # 初始化数据库连接
     from app.models.database import init_db
-    await init_db()
-    logger.info("Database initialized")
-
-    # 初始化 MinIO
-    from app.utils.storage import init_minio
-    init_minio()
-    logger.info("MinIO storage initialized")
-
-    # 初始化默认 AI 模型配置
     from app.modules.ai.model_router import init_default_models
-    await init_default_models()
-    logger.info("AI model configurations initialized")
-
-    # 初始化默认管理员账户
     from app.modules.auth.auth_service import AuthService
-    await AuthService.init_default_admin()
-    logger.info("Default admin user initialized")
+    from app.utils.storage import init_minio
+
+    # 每步独立容错，任一步失败都不会导致 uvicorn 退出（避免 8000 端口无监听 → 502）
+    await _run_lifecycle_step("Database initialization", init_db)
+    await _run_lifecycle_step("MinIO storage initialization", init_minio)
+    await _run_lifecycle_step("AI model configurations", init_default_models)
+    await _run_lifecycle_step("Default accounts seeding", AuthService.init_default_admin)
+
+    logger.info("AI Test Platform startup finished, serving on :8000")
 
     yield
 
-    # 清理资源
-    from app.utils.redis_client import close_redis
+    # 清理资源（同样不允许因单点异常打断关停流程）
     from app.utils.database import dispose_engine
-    await close_redis()
-    await dispose_engine()
+    from app.utils.redis_client import close_redis
+
+    await _run_lifecycle_step("Redis client close", close_redis, phase="shutdown")
+    await _run_lifecycle_step("Database engine dispose", dispose_engine, phase="shutdown")
     logger.info("Shutting down AI Test Platform...")
 
 
