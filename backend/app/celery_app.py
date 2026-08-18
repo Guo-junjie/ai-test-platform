@@ -12,6 +12,7 @@ celery_app = Celery(
     include=[
         "app.modules.execution.engine",
         "app.modules.pipeline",
+        "app.modules.scheduler.tasks",
     ],
 )
 
@@ -41,6 +42,15 @@ celery_app.conf.update(
     task_soft_time_limit=30 * 60,
     task_time_limit=60 * 60,
 )
+
+# Celery Beat 配置 — 使用 django-celery-beat DatabaseScheduler
+try:
+    celery_app.conf.update(
+        beat_scheduler="django_celery_beat.schedulers:DatabaseScheduler",
+    )
+except ImportError:
+    # django-celery-beat 未安装时的容错
+    pass
 
 
 @celery_app.task(bind=True)

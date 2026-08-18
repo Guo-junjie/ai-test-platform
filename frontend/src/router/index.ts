@@ -120,6 +120,30 @@ const routes = [
     component: () => import('@/views/Profile.vue'),
     meta: { title: '个人设置' },
   },
+  {
+    path: '/scripts',
+    name: 'ScriptPanel',
+    component: () => import('@/views/ScriptPanel.vue'),
+    meta: { title: '脚本生成' },
+  },
+  {
+    path: '/database-manage',
+    name: 'DatabaseManage',
+    component: () => import('@/views/DatabaseManage.vue'),
+    meta: { title: '数据库连接' },
+  },
+  {
+    path: '/scheduled-tasks',
+    name: 'ScheduledTasks',
+    component: () => import('@/views/ScheduledTasks.vue'),
+    meta: { title: '定时任务' },
+  },
+  {
+    path: '/report-analysis',
+    name: 'ReportAnalysis',
+    component: () => import('@/views/ReportAnalysis.vue'),
+    meta: { title: '报告分析' },
+  },
 ]
 
 const router = createRouter({

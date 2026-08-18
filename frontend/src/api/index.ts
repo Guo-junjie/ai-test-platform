@@ -245,4 +245,52 @@ export const scenarioApi = {
     api.post('/scenarios/dry-run', data, { timeout: 300000 }),
 }
 
+// ============ 脚本生成（能力5/6/7：AI 生成前置/后置/SQL 脚本） ============
+export const scriptsApi = {
+  /** 生成脚本：data { project_id, script_type, nl_input, context?, case_id? } */
+  generateScript: (data: any) =>
+    api.post('/scripts/generate', data, { timeout: 300000 }),
+  /** 预览（仅语法校验，不执行）：data { script, script_type } */
+  previewScript: (data: any) => api.post('/scripts/preview', data),
+  /** 绑定脚本到用例：data { pre_script?, post_script?, sql_script? } */
+  bindScriptToCase: (caseId: string, data: any) =>
+    api.put(`/cases/${caseId}/scripts`, data),
+}
+
+// ============ 数据库连接管理（能力7：AI 生成 SQL 脚本的前置） ============
+export const databaseApi = {
+  listDatabases: (projectId?: string) =>
+    api.get('/databases', { params: projectId ? { project_id: projectId } : {} }),
+  createDatabase: (data: any) => api.post('/databases', data),
+  getDatabase: (id: string) => api.get(`/databases/${id}`),
+  updateDatabase: (id: string, data: any) => api.put(`/databases/${id}`, data),
+  deleteDatabase: (id: string) => api.delete(`/databases/${id}`),
+  getSchema: (id: string) => api.get(`/databases/${id}/schema`),
+}
+
+// ============ 定时任务（能力8：AI 生成定时任务） ============
+export const scheduledTaskApi = {
+  listTasks: (projectId?: string) =>
+    api.get('/scheduled-tasks', { params: projectId ? { project_id: projectId } : {} }),
+  createTask: (data: any) => api.post('/scheduled-tasks', data),
+  getTask: (id: string) => api.get(`/scheduled-tasks/${id}`),
+  updateTask: (id: string, data: any) => api.put(`/scheduled-tasks/${id}`, data),
+  deleteTask: (id: string) => api.delete(`/scheduled-tasks/${id}`),
+  toggleTask: (id: string) => api.post(`/scheduled-tasks/${id}/toggle`),
+  getHistory: (id: string, params?: any) =>
+    api.get(`/scheduled-tasks/${id}/history`, { params }),
+  parseCron: (data: { nl_schedule: string }) =>
+    api.post('/scheduled-tasks/parse-cron', data),
+}
+
+// ============ 报告分析（能力9：AI 分析测试报告） ============
+export const reportAnalysisApi = {
+  analyzeReport: (reportId: string, data?: any) =>
+    api.post(`/reports/${reportId}/ai-analysis`, data, { timeout: 300000 }),
+  analyzeResult: (resultId: string, data?: any) =>
+    api.post(`/results/${resultId}/ai-analysis`, data, { timeout: 300000 }),
+  compareResults: (resultId: string, data: any) =>
+    api.post(`/results/${resultId}/compare`, data, { timeout: 300000 }),
+}
+
 export default api

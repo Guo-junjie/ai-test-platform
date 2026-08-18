@@ -110,7 +110,7 @@ app.add_middleware(
 @app.get("/api/health")
 async def health_check():
     try:
-        from app.models.database import AsyncSessionLocal
+        from app.utils.database import AsyncSessionLocal
 
         async with AsyncSessionLocal() as s:
             await s.execute(text("SELECT 1"))
@@ -201,3 +201,19 @@ app.include_router(notification_router, prefix="/api/notifications", tags=["站�
 # 变更审批
 from app.api.change_request import router as change_request_router
 app.include_router(change_request_router, prefix="/api/change-requests")
+
+# 脚本生成（能力5/6/7）
+from app.api.scripts import router as scripts_router
+app.include_router(scripts_router, prefix="/api/scripts", tags=["脚本生成"])
+
+# 数据库连接管理（能力7）
+from app.api.databases import router as databases_router
+app.include_router(databases_router, prefix="/api/databases", tags=["数据库连接"])
+
+# 定时任务（能力8）
+from app.api.scheduled_tasks import router as scheduled_tasks_router
+app.include_router(scheduled_tasks_router, prefix="/api/scheduled-tasks", tags=["定时任务"])
+
+# 报告分析（能力9，复用现有 /api/reports 和 /api/results 前缀）
+from app.api.report_analysis import router as report_analysis_router
+app.include_router(report_analysis_router, prefix="/api", tags=["报告分析"])

@@ -54,6 +54,23 @@
           <span>场景编排</span>
         </el-menu-item>
 
+        <el-menu-item index="/scripts">
+          <el-icon><EditPen /></el-icon>
+          <span>脚本生成</span>
+        </el-menu-item>
+        <el-menu-item index="/database-manage">
+          <el-icon><Coin /></el-icon>
+          <span>数据库连接</span>
+        </el-menu-item>
+        <el-menu-item index="/scheduled-tasks">
+          <el-icon><Clock /></el-icon>
+          <span>定时任务</span>
+        </el-menu-item>
+        <el-menu-item index="/report-analysis">
+          <el-icon><PieChart /></el-icon>
+          <span>报告分析</span>
+        </el-menu-item>
+
         <el-menu-item index="/notifications">
           <el-icon><Bell /></el-icon>
           <span>消息通知</span>

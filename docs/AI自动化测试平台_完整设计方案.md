@@ -4226,6 +4226,91 @@ class DependencyMocker:
 
 ---
 
+## 十、九大 AI 能力实现状态与新增模块（V3）
+
+> 本节为 V3 版本新增，用于汇总平台「九大 AI 能力」的实现状态，并补充能力 5–9（前置/后置脚本生成、SQL 脚本生成、定时任务、报告分析）对应的后端模块、API 与前端页面。能力 1–4 已在第三、九章的主体模块设计中实现，此处一并纳入状态矩阵。
+
+### 10.1 九大 AI 能力实现状态矩阵
+
+| 编号 | 能力 | 后端模块 | 前端页面 | 状态 | 备注 |
+|------|------|----------|----------|------|------|
+| 能力 1 | 文档解析 | `api/doc.py` + `modules/code_analyzer` | — | ✅ 已完成 | 接口文档解析 + 代码语义分析 |
+| 能力 2 | 文档评审 | `api/doc.py`（reviews） | — | ✅ 已完成 | 评审意见生成 |
+| 能力 3 | 用例生成 | `api/case_library.py` + `modules/case_generator` | — | ✅ 已完成 | 用例库资产 + AI 生成/采纳 |
+| 能力 4 | 场景编排 | `api/scenario.py` | — | ✅ 已完成 | 场景编排 + dry-run + 采纳 |
+| 能力 5 | 前置脚本生成 | `api/scripts.py` + `modules/script_gen` | `ScriptPanel.vue` | ✅ 已完成 | 统一入口 `/api/scripts/generate` |
+| 能力 6 | 后置脚本生成 | `api/scripts.py` + `modules/script_gen` | `ScriptPanel.vue` | ✅ 已完成 | 同能力 5，`script_type` 区分 |
+| 能力 7 | SQL 脚本生成 | `modules/sql_gen` + `api/databases.py` | `ScriptPanel.vue` + `DatabaseManage.vue` | ✅ 已完成 | 经 `/api/scripts/generate`（sql_script）暴露；依赖数据库连接管理 |
+| 能力 8 | 定时任务 | `api/scheduled_tasks.py` + `modules/scheduler` | `ScheduledTasks.vue` | ⚠️ 基本完成 | CRUD / 自然语言解析 / Celery 调度就绪；**真实执行链为降级记录（TODO）** |
+| 能力 9 | 报告分析 | `api/report_analysis.py` + `modules/report_analysis` | `ReportAnalysis.vue` | ✅ 已完成 | 失败分析 / 报告摘要 / 对比 三态 |
+
+> 图例：✅ 已完成 = 后端 + 前端 + 契约已对齐，可联调；⚠️ 基本完成 = 主体可用，存在已知降级点（见 10.4 / 10.6）。
+
+### 10.2 能力 5/6：前置 / 后置脚本生成
+
+自然语言描述 → 可执行脚本生成，统一入口支持 `pre_script` / `post_script` / `sql_script` 三种类型。
+
+- **API**：`backend/app/api/scripts.py`
+  - `POST /api/scripts/generate` — 生成脚本（按 `script_type` 路由到 pre/post/sql）
+  - `POST /api/scripts/preview` — 预览生成结果（不落库）
+- **Schema**：`backend/app/schemas/script.py`（`ScriptGenerateRequest`：`script_type`、`nl_input`、`context`、`project_id`；`ScriptPreviewRequest`）
+- **Module**：`backend/app/modules/script_gen/script_generator.py`（`ScriptGenerator.generate` / `preview`，写入 `ScriptGenerationRecord`，可经 `PUT /api/cases/{case_id}/scripts` 绑定到用例的 `pre_script` / `post_script` / `sql_script` 字段）
+- **枚举**：`ScriptType`（`pre_script` / `post_script` / `sql_script`，定义于 `app/models/database.py`）
+
+### 10.3 能力 7：SQL 脚本生成
+
+根据自然语言与数据库表结构生成安全 SQL（含建表/查询/造数等），并配套数据库连接管理。
+
+- **Module**：
+  - `backend/app/modules/sql_gen/sql_generator.py`（`SQLGenerator.generate`）
+  - `backend/app/modules/sql_gen/sql_security.py`（危险语句拦截 / 防注入校验）
+- **暴露方式**：复用 `POST /api/scripts/generate`，请求 `script_type=sql_script`
+- **依赖 — 数据库连接管理**：`backend/app/api/databases.py`
+  - `GET /api/databases/`、`POST /api/databases/`、`GET/PUT/DELETE /api/databases/{conn_id}`
+  - `GET /api/databases/{conn_id}/schema`（在线拉取表结构，供 SQL 生成上下文）
+  - 模型 `DatabaseConnection`（`database` / `password_encrypted` 字段），Schema `app/schemas/database_conn.py`
+- **模型路由**：`model_config` 中 `sql_generation_model_id` 可指定 SQL 生成专用模型
+
+### 10.4 能力 8：定时任务
+
+基于自然语言描述创建定时任务，经 Celery beat 调度触发；支持启停、历史查询。
+
+- **API**：`backend/app/api/scheduled_tasks.py`
+  - `GET /api/scheduled-tasks/`、`POST /api/scheduled-tasks/`
+  - `POST /api/scheduled-tasks/parse-cron` — 自然语言 → cron 表达式
+  - `GET/PUT/DELETE /api/scheduled-tasks/{task_id}`
+  - `POST /api/scheduled-tasks/{task_id}/toggle` — 启停
+  - `GET /api/scheduled-tasks/{task_id}/history` — 执行历史
+- **Schema**：`backend/app/schemas/scheduled_task.py`（`ScheduledTaskCreate` / `ScheduledTaskUpdate` / `ParseCronRequest`；`target_type` 默认 `scenario`，取值 `{scenario, case_collection}`）
+- **Module**：`backend/app/modules/scheduler/`
+  - `cron_parser.py`（`CronParser`：自然语言 → cron，支持「每天/每周/每月 X 号 X 点」等）
+  - `scheduler_service.py`（`SchedulerService`：`list_tasks` / `get_task` / `get_history` / `record_run`，对接 Celery beat）
+  - `tasks.py`（Celery 任务 `run_scheduled_task`：触发执行并记录 `ScheduledTaskRun`）
+- **枚举**：`ScheduledTaskStatus`（`active` / `paused` / `deleted`）、`ScheduledTaskTargetType`（`scenario` / `case_collection`），定义于 `app/models/database.py`
+- **⚠️ 已知降级点**：`tasks.py` 的真实测试执行链（`TestExecutionEngine` / `ScenarioOrchestrator`）需要 `analysis_result` / `test_cases` / `candidate_endpoints` 等完整上下文，而调度上下文仅有 `target_id`，不足以直接拉起一次完整执行。**当前实现为降级记录**：触发时仅写入 `ScheduledTaskRun` 触发记录并标记 `success`，真实执行链待接入（见 10.6）。
+
+### 10.5 能力 9：报告分析
+
+基于测试报告 / 结果进行 AI 分析：失败归因、报告摘要、跨运行对比。
+
+- **API**：`backend/app/api/report_analysis.py`
+  - `POST /api/reports/{report_id}/ai-analysis` — 报告智能摘要
+  - `POST /api/results/{result_id}/ai-analysis` — 单结果失败归因
+  - `POST /api/results/{result_id}/compare` — 与指定运行对比
+- **Schema**：`backend/app/schemas/report_analysis.py`（`AnalyzeReportRequest` / `AnalyzeResultRequest` / `CompareRequest`，含 `project_id` / `result_id` / `compare_run_id`）
+- **Module**：`backend/app/modules/report_analysis/analyzer.py`（`analyze_failure` / `analyze_summary` / `analyze_compare`）
+- **枚举**：`AnalysisType`（`failure` / `report_summary` / `compare`，定义于 `app/models/database.py`）
+
+### 10.6 已知限制与后续 TODO
+
+| 优先级 | 事项 | 说明 |
+|--------|------|------|
+| **P0** | 定时任务真实执行链 | `modules/scheduler/tasks.py` 当前为降级记录，需接入 `TestExecutionEngine` / `ScenarioOrchestrator` 以真正拉起测试（需补充 `analysis_result` / `test_cases` / `candidate_endpoints` 上下文） |
+| P2 | SQL 生成独立 API（可选） | 当前复用 `scripts` 统一入口（`script_type=sql_script`），如需独立鉴权/限流可拆分独立路由 |
+| P3 | 能力 5–9 前端联调验证 | `ScriptPanel` / `ScheduledTasks` / `ReportAnalysis` / `DatabaseManage` 页面已建，需在部署环境完成前后端联调回归 |
+
+---
+
 ## 附录：项目目录结构
 
 ```
@@ -4243,7 +4328,14 @@ ai-test-platform/
 │   │   │   ├── webhook.py           # GitHub/SVN Webhook
 │   │   │   ├── source.py            # 统一数据源接入
 │   │   │   ├── upload.py            # 文件上传
-│   │   │   └── auth.py
+│   │   │   ├── auth.py
+│   │   │   ├── doc.py               # 文档解析/评审（能力1/2）
+│   │   │   ├── case_library.py      # 用例生成/采纳（能力3）
+│   │   │   ├── scenario.py          # 场景编排（能力4）
+│   │   │   ├── scripts.py           # 脚本生成（能力5/6/7 统一入口）
+│   │   │   ├── databases.py         # 数据库连接管理（能力7 依赖）
+│   │   │   ├── scheduled_tasks.py   # 定时任务（能力8）
+│   │   │   └── report_analysis.py   # 报告分析（能力9）
 │   │   ├── modules/                 # 核心模块
 │   │   │   ├── source/              # 多数据源接入
 │   │   │   │   ├── base.py          # 适配器基类+工厂
@@ -4262,6 +4354,17 @@ ai-test-platform/
 │   │   │   ├── case_generator/      # AI 用例生成
 │   │   │   │   ├── case_generator.py
 │   │   │   │   └── coverage_optimizer.py
+│   │   │   ├── script_gen/          # 脚本生成（能力5/6）
+│   │   │   │   └── script_generator.py
+│   │   │   ├── sql_gen/             # SQL 脚本生成（能力7）
+│   │   │   │   ├── sql_generator.py
+│   │   │   │   └── sql_security.py
+│   │   │   ├── scheduler/           # 定时任务（能力8）
+│   │   │   │   ├── tasks.py         # Celery 触发任务
+│   │   │   │   ├── scheduler_service.py
+│   │   │   │   └── cron_parser.py   # 自然语言→cron
+│   │   │   ├── report_analysis/     # 报告分析（能力9）
+│   │   │   │   └── analyzer.py
 │   │   │   ├── execution/           # 测试执行引擎
 │   │   │   │   ├── engine.py
 │   │   │   │   ├── api_tester.py
@@ -4305,6 +4408,10 @@ ai-test-platform/
 │   │   │   ├── ModelConfig.vue      # AI模型配置（企业级）
 │   │   │   ├── SourceManage.vue     # 数据源管理（GitHub/SVN/上传）
 │   │   │   ├── QualityGate.vue      # 质量门禁配置（企业级）
+│   │   │   ├── ScriptPanel.vue        # 脚本/SQL 生成面板（能力5/6/7）
+│   │   │   ├── DatabaseManage.vue     # 数据库连接管理（能力7）
+│   │   │   ├── ScheduledTasks.vue     # 定时任务（能力8）
+│   │   │   ├── ReportAnalysis.vue     # 报告分析（能力9）
 │   │   │   └── AuditLog.vue         # 审计日志（企业级）
 │   │   ├── components/              # 组件
 │   │   ├── api/                     # API 调用
@@ -4325,4 +4432,4 @@ ai-test-platform/
 
 ---
 
-*本方案覆盖从架构设计到落地部署的完整链路，所有模块设计均包含具体实现代码，可直接作为开发蓝图使用。V2 版新增：多数据源接入（GitHub/SVN/上传）、AI 模型可配置管理、报告在线交互+PDF 双模式、8 项企业级增强方案（多租户 RBAC、审计日志、代码脱敏、通知集成、质量门禁、趋势看板、环境管理、API Mock）。*
+*本方案覆盖从架构设计到落地部署的完整链路，所有模块设计均包含具体实现代码，可直接作为开发蓝图使用。V2 版新增：多数据源接入（GitHub/SVN/上传）、AI 模型可配置管理、报告在线交互+PDF 双模式、8 项企业级增强方案（多租户 RBAC、审计日志、代码脱敏、通知集成、质量门禁、趋势看板、环境管理、API Mock）。V3 版新增：九大 AI 能力实现状态矩阵（第十章），以及能力 5–9 对应的脚本/SQL 生成（script_gen / sql_gen）、定时任务（scheduler）、报告分析（report_analysis）模块与对应前端页面；其中定时任务真实执行链为已知降级点（详见 10.4 / 10.6）。*

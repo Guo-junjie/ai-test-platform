@@ -1,104 +1,176 @@
 classDiagram
-    %% ===== 现有核心资产 =====
-    class Project {
-        +UUID id
-        +String name
-        +UUID owner_id
+    %% ============ 枚举 ============
+    class ScriptType {
+        <<enumeration>>
+        PRE_SCRIPT
+        POST_SCRIPT
+        SQL_SCRIPT
     }
-    class User {
-        +UUID id
-        +String username
-        +UserRole role
+    class ScheduledTaskStatus {
+        <<enumeration>>
+        ACTIVE
+        PAUSED
+        DELETED
     }
-    class ApiEndpoint {
-        +UUID id
-        +UUID project_id
-        +UUID doc_id
-        +String method
-        +String path
-        +String summary
-        +JSONB params
-        +JSONB request_body
-        +JSONB responses
-        +Boolean auth_required
+    class ScheduledTaskTargetType {
+        <<enumeration>>
+        SCENARIO
+        CASE_COLLECTION
     }
-    class TestCase {
-        +UUID id
-        +UUID test_run_id
-        +JSONB request_data
-        +JSONB expected_result
-    }
-    class ModelRouting {
-        +int id
-        +String code_analysis_model_id
-        +String case_generation_model_id
-        +String doc_parse_model_id
-        +String doc_review_model_id
-        +String scenario_orchestration_model_id
-        +String fallback_model_id
+    class AnalysisType {
+        <<enumeration>>
+        FAILURE
+        REPORT_SUMMARY
+        COMPARE
     }
 
-    %% ===== 能力3 新增：用例资产 =====
+    %% ============ 现有模型（引用） ============
     class TestCaseAsset {
         +UUID id
         +UUID project_id
-        +UUID endpoint_id
-        +String case_type
-        +String title
-        +Text description
-        +JSONB request_data
-        +JSONB expected_result
-        +String priority
-        +CaseAssetStatus status
-        +CaseSource source
-        +UUID created_by
-        +DateTime created_at
-        +DateTime updated_at
+        +Text pre_script
+        +Text post_script
+        +Text sql_script
+    }
+    class ModelRouting {
+        +String script_generation_model_id
+        +String sql_generation_model_id
+        +String report_analysis_model_id
+    }
+    class TestResult {
+        +UUID id
+        +Boolean is_passed
+        +JSONB response_body
+        +Text error_message
+        +Text error_trace
+    }
+    class TestReport {
+        +JSONB report_data
     }
 
-    %% ===== 能力4 新增：场景 =====
-    class Scenario {
+    %% ============ 新增模型 ============
+    class ScriptGenerationRecord {
+        +UUID id
+        +UUID project_id
+        +UUID user_id
+        +ScriptType script_type
+        +Text nl_input
+        +JSONB context
+        +Text generated_script
+        +String model_used
+        +DateTime created_at
+    }
+    class DatabaseConnection {
         +UUID id
         +UUID project_id
         +String name
-        +Text description
-        +Text nl_input
-        +ScenarioStatus status
-        +JSONB steps
-        +UUID created_by
-        +DateTime created_at
-        +DateTime updated_at
+        +String db_type
+        +String host
+        +Integer port
+        +String database
+        +String username
+        +Text password_encrypted
+        +JSONB extra_config
+    }
+    class ScheduledTask {
+        +UUID id
+        +UUID project_id
+        +String name
+        +Text nl_schedule
+        +String cron_expression
+        +ScheduledTaskTargetType target_type
+        +UUID target_id
+        +JSONB target_config
+        +ScheduledTaskStatus status
+        +DateTime next_run_at
+    }
+    class ScheduledTaskRun {
+        +UUID id
+        +UUID task_id
+        +String status
+        +UUID test_run_id
+        +DateTime started_at
+        +Text error_message
+    }
+    class AIAnalysisResult {
+        +UUID id
+        +UUID project_id
+        +AnalysisType analysis_type
+        +UUID test_run_id
+        +UUID test_result_id
+        +JSONB analysis_json
+        +String model_used
     }
 
-    %% ===== 枚举 =====
-    class CaseAssetStatus {
-        <<enum>>
-        DRAFT
-        ADOPTED
-        DEPRECATED
+    %% ============ 业务模块 ============
+    class ScriptGenerator {
+        +router ModelRouter
+        +generate(script_type, nl_input, context) dict
+        +_build_prompt() str
+        +_parse_script() str
+        +_syntax_check(code) bool
     }
-    class CaseSource {
-        <<enum>>
-        AI_GENERATED
-        MANUAL
+    class SqlGenerator {
+        +router ModelRouter
+        +generate(nl_input, schema_context) dict
+        +_build_prompt() str
     }
-    class ScenarioStatus {
-        <<enum>>
-        DRAFT
-        ORCHESTRATED
-        ADOPTED
+    class SqlSecurity {
+        +check(sql) dict
+        +_extract_statement_types(sql) list
+        +allowed_types list
+    }
+    class CronParser {
+        +parse(nl_input) dict
+        +_rule_parse(nl_input) str
+        +_llm_parse(nl_input) str
+        +next_run(cron) DateTime
+    }
+    class SchedulerService {
+        +create(task) ScheduledTask
+        +toggle(id) None
+        +sync_beat() None
+        +trigger(task) None
+    }
+    class ReportAnalyzer {
+        +router ModelRouter
+        +analyze_failure(result_id) dict
+        +analyze_summary(run_id) dict
+        +compare(run_id_a, run_id_b) dict
+        +_build_prompt() str
     }
 
-    %% ===== 关系 =====
-    Project "1" --> "0..*" ApiEndpoint : 归属
-    Project "1" --> "0..*" TestCaseAsset : 归属
-    Project "1" --> "0..*" Scenario : 归属
-    ApiEndpoint "1" --> "0..*" TestCaseAsset : 来源(endpoint_id 可空)
-    User "1" --> "0..*" TestCaseAsset : created_by 可空
-    User "1" --> "0..*" Scenario : created_by 可空
-    TestCaseAsset ..> TestCase : 执行时实例化(后续能力,本轮不改造)
-    Scenario "1" *-- "0..*" Step : steps JSONB(每步含 endpoint_id/extract/inject)
+    %% ============ Schema ============
+    class GenerateScriptRequest {
+        +str project_id
+        +str script_type
+        +str nl_input
+        +dict context
+    }
+    class ScheduledTaskRequest {
+        +str project_id
+        +str name
+        +str cron_expression
+        +str target_type
+    }
+    class ReportAnalysisRequest {
+        +str project_id
+        +str compare_run_id
+    }
 
-    TestCaseAsset ..> CaseAssetStatus : status
-    TestCaseAsset ..> CaseSource : source
-    Scenario ..> ScenarioStatus : status
+    %% ============ 关系 ============
+    ScriptGenerationRecord --> ScriptType
+    DatabaseConnection --> TestCaseAsset : 无直接关联（独立表）
+    ScheduledTask --> ScheduledTaskStatus
+    ScheduledTask --> ScheduledTaskTargetType
+    ScheduledTaskRun --> ScheduledTask
+    AIAnalysisResult --> AnalysisType
+    AIAnalysisResult --> TestResult
+    AIAnalysisResult --> TestReport
+    ScriptGenerator --> ScriptGenerationRecord : 落库
+    SqlGenerator --> SqlSecurity : 校验
+    SchedulerService --> ScheduledTask : CRUD
+    SchedulerService --> ScheduledTaskRun : 历史
+    ReportAnalyzer --> AIAnalysisResult : 落库
+    ReportAnalyzer --> TestResult : 读取
+    ReportAnalyzer --> TestReport : 读取

@@ -43,6 +43,9 @@ ROUTING_FIELDS: tuple[str, ...] = (
     "doc_parse_model_id",
     "doc_review_model_id",
     "scenario_orchestration_model_id",
+    "script_generation_model_id",
+    "sql_generation_model_id",
+    "report_analysis_model_id",
     "fallback_model_id",
 )
 
@@ -98,6 +101,9 @@ class UpdateRoutingRequest(BaseModel):
     doc_parse_model_id: str | None = None
     doc_review_model_id: str | None = None
     scenario_orchestration_model_id: str | None = None
+    script_generation_model_id: str | None = None
+    sql_generation_model_id: str | None = None
+    report_analysis_model_id: str | None = None
     fallback_model_id: str | None = None
 
 

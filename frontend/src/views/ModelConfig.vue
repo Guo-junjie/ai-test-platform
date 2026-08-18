@@ -177,6 +177,9 @@ const useCaseLabels: Record<string, string> = {
   doc_parse: '文档解析',
   doc_review: '文档评审',
   scenario_orchestration: '场景编排',
+  script_generation: '脚本生成',
+  sql_generation: 'SQL生成',
+  report_analysis: '报告分析',
 }
 
 /** 提供商下拉选项 */
@@ -196,6 +199,9 @@ const routingFields = [
   { key: 'doc_parse_model_id', label: '文档解析模型' },
   { key: 'doc_review_model_id', label: '文档评审模型' },
   { key: 'scenario_orchestration_model_id', label: '场景编排模型' },
+  { key: 'script_generation_model_id', label: '脚本生成模型' },
+  { key: 'sql_generation_model_id', label: 'SQL生成模型' },
+  { key: 'report_analysis_model_id', label: '报告分析模型' },
   { key: 'fallback_model_id', label: '备用模型' },
 ] as const
 
@@ -220,6 +226,9 @@ const routingForm = reactive<Record<string, string>>({
   doc_parse_model_id: '',
   doc_review_model_id: '',
   scenario_orchestration_model_id: '',
+  script_generation_model_id: '',
+  sql_generation_model_id: '',
+  report_analysis_model_id: '',
   fallback_model_id: '',
 })
 

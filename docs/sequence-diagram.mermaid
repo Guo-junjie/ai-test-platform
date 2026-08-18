@@ -1,59 +1,65 @@
-%% ============ 能力3：AI 生成单接口用例 · 接纳闭环 ============
 sequenceDiagram
-    actor U as 用户
-    participant FE as CaseLibrary.vue
-    participant API as case_library API
+    autonumber
+    actor U as 用户/前端
+    participant API as FastAPI 路由层
+    participant SG as ScriptGenerator/SqlGenerator
+    participant MR as ModelRouter
+    participant LLM as UnifiedModelClient
     participant DB as PostgreSQL
-    participant G as TestCaseGenerator
-    participant R as ModelRouter(case_generation)
 
-    U->>FE: 选项目/接口 → 点击「AI 生成」
-    FE->>API: POST /api/cases/generate {project_id, endpoint_ids?}
-    API->>DB: 查询 api_endpoints（project_id / ids）
-    DB-->>API: 接口资产列表
-    loop 每个接口（并发 ≤5, Semaphore）
-        API->>API: 构造 api_info + 轻量 business_analysis
-        API->>G: generate_api_cases(api_info, business_analysis)
-        G->>R: call(use_case="case_generation")
-        R-->>G: cases JSON
-        G-->>API: 标准化 cases（AI 失败走 fallback）
+    %% ============ 能力5/6：脚本生成 ============
+    Note over U,DB: 能力5/6 — AI 生成前置/后置脚本
+    U->>API: POST /api/scripts/generate {type: pre_script, nl_input, context}
+    API->>SG: generate(script_type, nl_input, context)
+    SG->>MR: call(use_case="script_generation", messages)
+    MR->>LLM: chat(messages)
+    LLM-->>MR: 生成代码
+    MR-->>SG: 代码文本
+    SG->>SG: _syntax_check(code) via ast.parse
+    SG-->>API: {script, syntax_valid}
+    API->>DB: INSERT script_generation_records
+    API-->>U: {code:0, data:{script, ...}}
+
+    %% ============ 能力7：SQL 生成 ============
+    Note over U,DB: 能力7 — AI 生成 SQL（表结构感知 + 白名单）
+    U->>API: POST /api/scripts/generate {type: sql_script, context:{schema?}}
+    alt 未携带表结构
+        API->>DB: GET /api/databases/{id}/schema（取表结构）
+        DB-->>API: tables/columns
     end
-    API->>DB: 批量插入 test_case_assets(status=DRAFT, source=AI_GENERATED)
-    DB-->>API: 已落库
-    API-->>FE: {generated, inserted}
-    U->>FE: 预览四类用例 → 逐条「采纳」
-    FE->>API: POST /api/cases/{id}/adopt
-    API->>DB: UPDATE status=ADOPTED
-    API-->>FE: 成功(沉淀为资产)
-
-%% ============ 能力4：AI 编排测试场景 ============
-sequenceDiagram
-    actor U as 用户
-    participant FE as Scenario.vue
-    participant API as scenario API
-    participant RT as EndpointRetriever
-    participant DB as PostgreSQL
-    participant OR as ScenarioOrchestrator
-    participant R as ModelRouter(scenario_orchestration)
-
-    U->>FE: 输入自然语言 + 选项目 → 「AI 编排」
-    FE->>API: POST /api/scenarios {project_id, nl_input, endpoint_ids?}
-    API->>RT: search(project_id, nl_input)
-    RT->>DB: api_endpoints 模糊匹配(method/path/summary)
-    DB-->>RT: 候选接口(带 match_score)
-    RT-->>API: 候选列表
-    API->>OR: orchestrate(nl_input, candidates)
-    OR->>R: call(use_case="scenario_orchestration", response_format_json=True)
-    alt AI 成功
-        R-->>OR: steps JSON（绑定 endpoint_id + extract/inject）
-        OR-->>API: steps, engine=ai
-    else AI 失败 / 无 Key
-        OR-->>API: 规则兜底 steps（按匹配顺序串联）, engine=rule
+    API->>SG: generate(sql_script, nl_input, schema)
+    SG->>MR: call(use_case="sql_generation")
+    MR->>LLM: chat(messages)
+    LLM-->>SG: SQL 语句
+    SG->>SG: SqlSecurity.check(sql) 白名单校验
+    alt 危险语句（DROP/TRUNCATE）
+        SG-->>API: 拦截 + 提示
+        API-->>U: {code:1, message:"危险SQL被拦截"}
+    else 合法（SELECT/INSERT/UPDATE/DELETE）
+        SG-->>API: {sql, safety_check}
+        API->>DB: INSERT script_generation_records
+        API-->>U: {code:0, data:{sql, ...}}
     end
-    API->>DB: 插入 scenarios(status=ORCHESTRATED, steps)
-    DB-->>API: 场景已建
-    API-->>FE: 场景 + 步骤预览
-    U->>FE: 编辑步骤 / 「采纳」
-    FE->>API: PUT /api/scenarios/{id} 或 POST /adopt
-    API->>DB: 更新 steps / status=ADOPTED
-    API-->>FE: 成功
+
+    %% ============ 能力8：定时任务 ============
+    Note over U,DB: 能力8 — AI 生成定时任务
+    U->>API: POST /api/scheduled-tasks {nl_schedule, target_type, target_id}
+    API->>API: CronParser.parse(nl_schedule) 规则 + LLM 辅助
+    API->>DB: INSERT scheduled_tasks
+    API->>API: SchedulerService.sync_beat() 同步到 django-celery-beat
+    API-->>U: {code:0, data:{cron_expression, next_run_at}}
+    Note over DB: Celery Beat 按 Cron 触发
+    DB->>DB: 触发 Celery 任务 → 执行场景/用例
+    DB->>DB: INSERT scheduled_task_runs（历史）
+
+    %% ============ 能力9：报告分析 ============
+    Note over U,DB: 能力9 — AI 分析测试报告
+    U->>API: POST /api/results/{id}/ai-analysis {project_id}
+    API->>DB: SELECT test_results（request/response/logs）
+    DB-->>API: 用例执行数据
+    API->>API: ReportAnalyzer.analyze_failure(result_id)
+    API->>MR: call(use_case="report_analysis", messages)
+    MR->>LLM: chat(messages)
+    LLM-->>API: 根因分析 + 修复建议 + 置信度
+    API->>DB: INSERT ai_analysis_results
+    API-->>U: {code:0, data:{root_cause, suggestion, confidence}}

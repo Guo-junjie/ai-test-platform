@@ -51,4 +51,10 @@ class ModelRoutingConfig(BaseModel):
     doc_review_model_id: str = "default"
     # 能力4：AI 编排测试场景（自然语言 → 结构化多步串联）
     scenario_orchestration_model_id: str = "default"
+    # 能力5/6/7：AI 脚本生成（pre/post/sql）
+    script_generation_model_id: str = "default"
+    # 能力7：AI SQL 生成
+    sql_generation_model_id: str = "default"
+    # 能力9：AI 报告分析（失败分析/摘要/对比）
+    report_analysis_model_id: str = "default"
     fallback_model_id: str = "default"

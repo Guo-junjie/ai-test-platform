@@ -86,6 +86,36 @@ class ScenarioStatus(PyEnum):
     ADOPTED = "adopted"
 
 
+# ==================== 能力5/6/7/8/9 枚举 ====================
+
+
+class ScriptType(PyEnum):
+    """脚本类型 — 统一脚本生成入口的 type 参数（能力5/6/7）"""
+    PRE_SCRIPT = "pre_script"
+    POST_SCRIPT = "post_script"
+    SQL_SCRIPT = "sql_script"
+
+
+class ScheduledTaskStatus(PyEnum):
+    """定时任务状态（能力8）"""
+    ACTIVE = "active"
+    PAUSED = "paused"
+    DELETED = "deleted"
+
+
+class ScheduledTaskTargetType(PyEnum):
+    """定时任务关联对象类型（能力8）"""
+    SCENARIO = "scenario"
+    CASE_COLLECTION = "case_collection"
+
+
+class AnalysisType(PyEnum):
+    """AI 分析类型（能力9）"""
+    FAILURE = "failure"
+    REPORT_SUMMARY = "report_summary"
+    COMPARE = "compare"
+
+
 # ==================== 用户与权限 ====================
 
 class User(Base):
@@ -164,6 +194,10 @@ class ModelRouting(Base):
     doc_review_model_id = Column(String(64), ForeignKey("ai_model_configs.id"), nullable=True)
     # 能力4 新增插槽：场景编排模型，刻意 nullable=True，老库已有行无需补默认值
     scenario_orchestration_model_id = Column(String(64), ForeignKey("ai_model_configs.id"), nullable=True)
+    # 能力5/6/7/9 新增插槽：脚本生成、SQL 生成、报告分析，nullable=True
+    script_generation_model_id = Column(String(64), ForeignKey("ai_model_configs.id"), nullable=True)
+    sql_generation_model_id = Column(String(64), ForeignKey("ai_model_configs.id"), nullable=True)
+    report_analysis_model_id = Column(String(64), ForeignKey("ai_model_configs.id"), nullable=True)
     fallback_model_id = Column(String(64), ForeignKey("ai_model_configs.id"), nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -551,6 +585,10 @@ class TestCaseAsset(Base):
     priority = Column(String(10), default="P2")               # P0-P3
     status = Column(SAEnum(CaseAssetStatus, name="caseassetstatus"), default=CaseAssetStatus.DRAFT, nullable=False)
     source = Column(SAEnum(CaseSource, name="casesource"), default=CaseSource.AI_GENERATED, nullable=False)
+    # 能力5/6/7：脚本字段
+    pre_script = Column(Text, nullable=True)
+    post_script = Column(Text, nullable=True)
+    sql_script = Column(Text, nullable=True)
     created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -584,6 +622,126 @@ class Scenario(Base):
     __table_args__ = (
         Index("idx_scenarios_project", "project_id"),
         Index("idx_scenarios_project_status", "project_id", "status"),
+    )
+
+
+# ==================== 能力5/6/7：脚本生成记录 ====================
+
+
+class ScriptGenerationRecord(Base):
+    """脚本生成记录（审计） — 能力5/6/7"""
+    __tablename__ = "script_generation_records"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    script_type = Column(SAEnum(ScriptType, name="scripttype"), nullable=False)
+    nl_input = Column(Text, nullable=False)
+    context = Column(JSONB, default={})
+    generated_script = Column(Text, nullable=False)
+    model_used = Column(String(64), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_script_gen_records_project_created", "project_id", "created_at"),
+        Index("idx_script_gen_records_type", "script_type"),
+    )
+
+
+# ==================== 能力7：数据库连接配置 ====================
+
+
+class DatabaseConnection(Base):
+    """数据库连接配置 — 能力7（密码加密存储）"""
+    __tablename__ = "database_connections"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    name = Column(String(200), nullable=False)
+    db_type = Column(String(20), default="postgresql")
+    host = Column(String(255), nullable=False)
+    port = Column(Integer, nullable=False)
+    database = Column(String(200), nullable=False)
+    username = Column(String(200), nullable=False)
+    password_encrypted = Column(Text, nullable=False)  # AES-256 加密
+    extra_config = Column(JSONB, default={})
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_database_connections_project", "project_id"),
+    )
+
+
+# ==================== 能力8：定时任务 ====================
+
+
+class ScheduledTask(Base):
+    """定时任务 — 能力8"""
+    __tablename__ = "scheduled_tasks"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    name = Column(String(200), nullable=False)
+    description = Column(Text)
+    nl_schedule = Column(Text)
+    cron_expression = Column(String(100), nullable=False)
+    target_type = Column(SAEnum(ScheduledTaskTargetType, name="scheduledtasktargettype"), nullable=False)
+    target_id = Column(UUID(as_uuid=True), nullable=True)
+    target_config = Column(JSONB, default={})
+    env_config = Column(JSONB, default={})
+    status = Column(SAEnum(ScheduledTaskStatus, name="scheduledtaskstatus"), default=ScheduledTaskStatus.ACTIVE, nullable=False)
+    last_run_at = Column(DateTime)
+    last_run_status = Column(String(20))
+    next_run_at = Column(DateTime)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_scheduled_tasks_project_status", "project_id", "status"),
+    )
+
+
+class ScheduledTaskRun(Base):
+    """定时任务执行历史 — 能力8"""
+    __tablename__ = "scheduled_task_runs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    task_id = Column(UUID(as_uuid=True), ForeignKey("scheduled_tasks.id"), nullable=False)
+    status = Column(String(20), nullable=False)  # running / success / failed
+    test_run_id = Column(UUID(as_uuid=True), ForeignKey("test_runs.id"), nullable=True)
+    started_at = Column(DateTime, default=datetime.utcnow)
+    finished_at = Column(DateTime)
+    error_message = Column(Text)
+
+    __table_args__ = (
+        Index("idx_scheduled_task_runs_task_started", "task_id", "started_at"),
+    )
+
+
+# ==================== 能力9：AI 分析结果 ====================
+
+
+class AIAnalysisResult(Base):
+    """AI 分析结果 — 能力9（失败分析/摘要/对比统一落库）"""
+    __tablename__ = "ai_analysis_results"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    analysis_type = Column(SAEnum(AnalysisType, name="analysistype"), nullable=False)
+    test_run_id = Column(UUID(as_uuid=True), ForeignKey("test_runs.id"), nullable=True)
+    test_result_id = Column(UUID(as_uuid=True), ForeignKey("test_results.id"), nullable=True)
+    input_summary = Column(JSONB, default={})
+    analysis_json = Column(JSONB, default={})
+    model_used = Column(String(64), nullable=True)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_ai_analysis_project_type_created", "project_id", "analysis_type", "created_at"),
+        Index("idx_ai_analysis_test_result", "test_result_id"),
     )
 
 
@@ -706,3 +864,49 @@ async def init_db():
         logger.warning(f"Skip doc_reviews.doc_id DROP NOT NULL (connection error): {e}")
     else:
         logger.info("DocReview doc_id nullable ensured")
+
+    # 旧库补齐 TestCaseAsset 三列（pre_script / post_script / sql_script — 能力5/6/7）。
+    # 这三列使用 nullable=True 以便老库平滑迁移；create_all 不会 ALTER 既有表，
+    # 故此处用幂等 ADD COLUMN IF NOT EXISTS 兜底。
+    try:
+        async with async_engine.connect() as conn:
+            autocommit_conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
+            for col_sql in (
+                "ALTER TABLE test_case_assets ADD COLUMN IF NOT EXISTS pre_script TEXT",
+                "ALTER TABLE test_case_assets ADD COLUMN IF NOT EXISTS post_script TEXT",
+                "ALTER TABLE test_case_assets ADD COLUMN IF NOT EXISTS sql_script TEXT",
+            ):
+                try:
+                    await autocommit_conn.execute(text(col_sql))
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to add column ({col_sql}): {e}. "
+                        f"请执行 `docker compose down -v` 重建数据库或手动 ALTER。"
+                    )
+    except Exception as e:
+        logger.warning(f"Skip test_case_assets script columns sync (connection error): {e}")
+    else:
+        logger.info("TestCaseAsset pre_script/post_script/sql_script columns ensured")
+
+    # 旧库补齐 model_routing 三列（script_generation_model_id / sql_generation_model_id /
+    # report_analysis_model_id — 能力5/6/7/9）。
+    # 这三列使用 nullable=True 以便老库平滑迁移；create_all 不会 ALTER 既有表。
+    try:
+        async with async_engine.connect() as conn:
+            autocommit_conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
+            for col_sql in (
+                "ALTER TABLE model_routing ADD COLUMN IF NOT EXISTS script_generation_model_id VARCHAR(64)",
+                "ALTER TABLE model_routing ADD COLUMN IF NOT EXISTS sql_generation_model_id VARCHAR(64)",
+                "ALTER TABLE model_routing ADD COLUMN IF NOT EXISTS report_analysis_model_id VARCHAR(64)",
+            ):
+                try:
+                    await autocommit_conn.execute(text(col_sql))
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to add column ({col_sql}): {e}. "
+                        f"请执行 `docker compose down -v` 重建数据库或手动 ALTER。"
+                    )
+    except Exception as e:
+        logger.warning(f"Skip model_routing new slot columns sync (connection error): {e}")
+    else:
+        logger.info("ModelRouting script_generation/sql_generation/report_analysis columns ensured")

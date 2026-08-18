@@ -48,6 +48,12 @@ class ModelRouter:
             "doc_review": self.routing.doc_review_model_id or self.routing.fallback_model_id,
             # 能力4：AI 编排测试场景；未单独配置时降级到 code_analysis 插槽，避免 DB 列 NULL 抛 500
             "scenario_orchestration": self.routing.scenario_orchestration_model_id or self.routing.code_analysis_model_id,
+            # 能力5/6/7：脚本生成；未单独配置时降级到 case_generation 插槽
+            "script_generation": self.routing.script_generation_model_id or self.routing.case_generation_model_id,
+            # 能力7：SQL 生成；未单独配置时降级到 case_generation 插槽
+            "sql_generation": self.routing.sql_generation_model_id or self.routing.case_generation_model_id,
+            # 能力9：报告分析；未单独配置时降级到 fallback 插槽
+            "report_analysis": self.routing.report_analysis_model_id or self.routing.fallback_model_id,
         }
 
         config_id = config_id_map.get(use_case)
@@ -116,7 +122,7 @@ async def init_default_models():
             api_key=settings.OPENAI_API_KEY,
             model_name=settings.OPENAI_MODEL_NAME,
             is_default=True,
-            use_cases=["code_analysis", "case_generation", "defect_analysis", "fix_suggestion", "doc_parse", "doc_review", "scenario_orchestration"],
+            use_cases=["code_analysis", "case_generation", "defect_analysis", "fix_suggestion", "doc_parse", "doc_review", "scenario_orchestration", "script_generation", "sql_generation", "report_analysis"],
         )
         router.register_config(default_config)
 
@@ -130,7 +136,7 @@ async def init_default_models():
             api_key=settings.ANTHROPIC_API_KEY,
             model_name=settings.ANTHROPIC_MODEL_NAME,
             is_fallback=True,
-            use_cases=["code_analysis", "case_generation", "defect_analysis", "fix_suggestion", "doc_parse", "doc_review", "scenario_orchestration"],
+            use_cases=["code_analysis", "case_generation", "defect_analysis", "fix_suggestion", "doc_parse", "doc_review", "scenario_orchestration", "script_generation", "sql_generation", "report_analysis"],
         )
         router.register_config(fallback_config)
         router.routing.fallback_model_id = "anthropic_fallback"
@@ -161,6 +167,9 @@ async def init_default_models():
             doc_parse_model_id="default",
             doc_review_model_id="default",
             scenario_orchestration_model_id="default",
+            script_generation_model_id="default",
+            sql_generation_model_id="default",
+            report_analysis_model_id="default",
             fallback_model_id="anthropic_fallback" if settings.ANTHROPIC_API_KEY else "default",
         ))
 
