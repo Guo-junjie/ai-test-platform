@@ -36,6 +36,24 @@
           <span>代码解析</span>
         </el-menu-item>
 
+        <el-menu-item index="/doc-parser">
+          <el-icon><Document /></el-icon>
+          <span>接口文档解析</span>
+        </el-menu-item>
+        <el-menu-item index="/doc-review">
+          <el-icon><DocumentChecked /></el-icon>
+          <span>接口文档评审</span>
+        </el-menu-item>
+
+        <el-menu-item index="/case-library">
+          <el-icon><Files /></el-icon>
+          <span>用例库</span>
+        </el-menu-item>
+        <el-menu-item index="/scenario">
+          <el-icon><Share /></el-icon>
+          <span>场景编排</span>
+        </el-menu-item>
+
         <el-menu-item index="/notifications">
           <el-icon><Bell /></el-icon>
           <span>消息通知</span>

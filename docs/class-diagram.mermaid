@@ -1,0 +1,104 @@
+classDiagram
+    %% ===== 现有核心资产 =====
+    class Project {
+        +UUID id
+        +String name
+        +UUID owner_id
+    }
+    class User {
+        +UUID id
+        +String username
+        +UserRole role
+    }
+    class ApiEndpoint {
+        +UUID id
+        +UUID project_id
+        +UUID doc_id
+        +String method
+        +String path
+        +String summary
+        +JSONB params
+        +JSONB request_body
+        +JSONB responses
+        +Boolean auth_required
+    }
+    class TestCase {
+        +UUID id
+        +UUID test_run_id
+        +JSONB request_data
+        +JSONB expected_result
+    }
+    class ModelRouting {
+        +int id
+        +String code_analysis_model_id
+        +String case_generation_model_id
+        +String doc_parse_model_id
+        +String doc_review_model_id
+        +String scenario_orchestration_model_id
+        +String fallback_model_id
+    }
+
+    %% ===== 能力3 新增：用例资产 =====
+    class TestCaseAsset {
+        +UUID id
+        +UUID project_id
+        +UUID endpoint_id
+        +String case_type
+        +String title
+        +Text description
+        +JSONB request_data
+        +JSONB expected_result
+        +String priority
+        +CaseAssetStatus status
+        +CaseSource source
+        +UUID created_by
+        +DateTime created_at
+        +DateTime updated_at
+    }
+
+    %% ===== 能力4 新增：场景 =====
+    class Scenario {
+        +UUID id
+        +UUID project_id
+        +String name
+        +Text description
+        +Text nl_input
+        +ScenarioStatus status
+        +JSONB steps
+        +UUID created_by
+        +DateTime created_at
+        +DateTime updated_at
+    }
+
+    %% ===== 枚举 =====
+    class CaseAssetStatus {
+        <<enum>>
+        DRAFT
+        ADOPTED
+        DEPRECATED
+    }
+    class CaseSource {
+        <<enum>>
+        AI_GENERATED
+        MANUAL
+    }
+    class ScenarioStatus {
+        <<enum>>
+        DRAFT
+        ORCHESTRATED
+        ADOPTED
+    }
+
+    %% ===== 关系 =====
+    Project "1" --> "0..*" ApiEndpoint : 归属
+    Project "1" --> "0..*" TestCaseAsset : 归属
+    Project "1" --> "0..*" Scenario : 归属
+    ApiEndpoint "1" --> "0..*" TestCaseAsset : 来源(endpoint_id 可空)
+    User "1" --> "0..*" TestCaseAsset : created_by 可空
+    User "1" --> "0..*" Scenario : created_by 可空
+    TestCaseAsset ..> TestCase : 执行时实例化(后续能力,本轮不改造)
+    Scenario "1" *-- "0..*" Step : steps JSONB(每步含 endpoint_id/extract/inject)
+
+    TestCaseAsset ..> CaseAssetStatus : status
+    TestCaseAsset ..> CaseSource : source
+    Scenario ..> ScenarioStatus : status

@@ -45,4 +45,10 @@ class ModelRoutingConfig(BaseModel):
     case_generation_model_id: str = "default"
     defect_analysis_model_id: str = "default"
     fix_suggestion_model_id: str = "default"
+    # 能力1：AI 解析接口文档（文本 → 结构化接口定义）
+    doc_parse_model_id: str = "default"
+    # 能力2：AI 评审接口文档（接口定义 → 多维质检评分）
+    doc_review_model_id: str = "default"
+    # 能力4：AI 编排测试场景（自然语言 → 结构化多步串联）
+    scenario_orchestration_model_id: str = "default"
     fallback_model_id: str = "default"

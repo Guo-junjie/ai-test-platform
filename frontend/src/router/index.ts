@@ -43,6 +43,30 @@ const routes = [
     meta: { title: '代码解析' },
   },
   {
+    path: '/doc-parser',
+    name: 'DocParser',
+    component: () => import('@/views/DocParser.vue'),
+    meta: { title: '接口文档解析' },
+  },
+  {
+    path: '/doc-review',
+    name: 'DocReview',
+    component: () => import('@/views/DocReview.vue'),
+    meta: { title: '接口文档评审' },
+  },
+  {
+    path: '/case-library',
+    name: 'CaseLibrary',
+    component: () => import('@/views/CaseLibrary.vue'),
+    meta: { title: '用例库' },
+  },
+  {
+    path: '/scenario',
+    name: 'Scenario',
+    component: () => import('@/views/Scenario.vue'),
+    meta: { title: '场景编排' },
+  },
+  {
     path: '/settings',
     name: 'Settings',
     component: () => import('@/views/Settings.vue'),

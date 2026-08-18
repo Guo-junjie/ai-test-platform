@@ -164,6 +164,32 @@ export const analysisApi = {
   get: (id: string) => api.get(`/analysis/${id}`),
 }
 
+// ============ 接口文档资产（能力1：解析导入 / 能力2：评审） ============
+export const docApi = {
+  upload: (file: File, projectId: string, docType?: string) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('project_id', projectId)
+    if (docType) fd.append('doc_type', docType)
+    return api.post('/docs/upload', fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 120000,
+    })
+  },
+  parse: (docId: string, data?: any) =>
+    api.post(`/docs/${docId}/parse`, data ?? {}, { timeout: 300000 }),
+  list: (params: any) => api.get('/docs', { params }),
+  get: (docId: string) => api.get(`/docs/${docId}`),
+  remove: (docId: string) => api.delete(`/docs/${docId}`),
+  import: (docId: string, data: any) =>
+    api.post(`/docs/${docId}/import`, data, { timeout: 120000 }),
+  listEndpoints: (params: any) => api.get('/docs/endpoints', { params }),
+  getEndpoint: (id: string) => api.get(`/docs/endpoints/${id}`),
+  review: (data: any) => api.post('/docs/reviews', data, { timeout: 300000 }),
+  listReviews: (params: any) => api.get('/docs/reviews', { params }),
+  getReview: (reviewId: string) => api.get(`/docs/reviews/${reviewId}`),
+}
+
 // ============ 质量门禁 ============
 export const qualityGateApi = {
   getConfig: (projectId: string) => api.get(`/quality-gate/config/${projectId}`),
@@ -178,6 +204,45 @@ export const trendApi = {
   getPassRate: (params?: any) => api.get('/trend/pass-rate', { params }),
   getDefect: (params?: any) => api.get('/trend/defect', { params }),
   getSummary: (params?: any) => api.get('/trend/summary', { params }),
+}
+
+// ============ 用例库（能力3：AI 生成单接口用例·接纳闭环） ============
+export const caseApi = {
+  /** 生成并落库（DRAFT）。data: { project_id, endpoint_ids?, endpoint_id? } */
+  generate: (data: any) =>
+    api.post('/cases/generate', data, { timeout: 300000 }),
+  /** 列表：params { project_id, endpoint_id?, case_type?, status?, keyword?, page, page_size } */
+  list: (params: any) => api.get('/cases', { params }),
+  /** 详情 */
+  get: (id: string) => api.get(`/cases/${id}`),
+  /** 编辑（标题/描述/请求/预期/优先级/类型） */
+  update: (id: string, data: any) => api.put(`/cases/${id}`, data),
+  /** 删除 */
+  remove: (id: string) => api.delete(`/cases/${id}`),
+  /** 单条接纳 */
+  adopt: (id: string) => api.post(`/cases/${id}/adopt`),
+  /** 单条废弃 */
+  deprecate: (id: string) => api.post(`/cases/${id}/deprecate`),
+  /** 批量接纳：data { ids: string[] } */
+  adoptBatch: (ids: string[]) => api.post('/cases/adopt-batch', { ids }),
+}
+
+// ============ 场景编排（能力4：AI 编排测试场景） ============
+export const scenarioApi = {
+  /** 创建并 AI 编排：data { project_id, nl_input, name?, endpoint_ids? } */
+  create: (data: any) =>
+    api.post('/scenarios', data, { timeout: 300000 }),
+  /** 列表：params { project_id, status?, keyword?, page, page_size } */
+  list: (params: any) => api.get('/scenarios', { params }),
+  /** 详情（含 steps） */
+  get: (id: string) => api.get(`/scenarios/${id}`),
+  /** 编辑步骤/名称：data { name?, description?, nl_input?, steps? } */
+  update: (id: string, data: any) => api.put(`/scenarios/${id}`, data),
+  /** 接纳 */
+  adopt: (id: string) => api.post(`/scenarios/${id}/adopt`),
+  /** 预览（不落库、不接真实 HTTP）：data { project_id, nl_input, endpoint_ids? } */
+  dryRun: (data: any) =>
+    api.post('/scenarios/dry-run', data, { timeout: 300000 }),
 }
 
 export default api

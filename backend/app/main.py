@@ -8,7 +8,9 @@ from typing import Any, Callable
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from loguru import logger
+from sqlalchemy import text
 
 from app.config import settings
 from app.utils.logger import setup_logger
@@ -103,9 +105,26 @@ app.add_middleware(
 # ============ 注册路由 ============
 
 # 健康检查
+# 必须真探数据库：main.py 已让启动失败也不拖垮 HTTP 服务，若这里只返回 healthy，
+# 编排系统（compose depends_on / K8s liveness）会误判服务健康，出现"进程在跑但库挂了"的静默故障。
 @app.get("/api/health")
 async def health_check():
-    return {"status": "healthy", "env": settings.APP_ENV}
+    try:
+        from app.models.database import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as s:
+            await s.execute(text("SELECT 1"))
+        return {"status": "healthy", "env": settings.APP_ENV}
+    except Exception as exc:
+        logger.warning(f"health check failed: {exc.__class__.__name__}: {exc}")
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unhealthy",
+                "env": settings.APP_ENV,
+                "detail": "database unreachable",
+            },
+        )
 
 # 数据源接入
 from app.api.source import router as source_router
@@ -150,6 +169,18 @@ app.include_router(audit_router, prefix="/api/audit", tags=["审计日志"])
 # 代码解析
 from app.api.analysis import router as analysis_router
 app.include_router(analysis_router, prefix="/api/analysis", tags=["代码解析"])
+
+# 接口文档资产（能力1：AI 解析接口文档导入 / 能力2：AI 评审接口文档）
+from app.api.doc import router as doc_router
+app.include_router(doc_router, prefix="/api/docs", tags=["接口文档资产"])
+
+# 用例资产（能力3：AI 生成单接口用例·接纳闭环）
+from app.api.case_library import router as case_library_router
+app.include_router(case_library_router, prefix="/api/cases", tags=["用例资产"])
+
+# 测试场景（能力4：AI 编排测试场景）
+from app.api.scenario import router as scenario_router
+app.include_router(scenario_router, prefix="/api/scenarios", tags=["测试场景"])
 
 # 仪表盘与趋势看板
 from app.api.dashboard import router as dashboard_router

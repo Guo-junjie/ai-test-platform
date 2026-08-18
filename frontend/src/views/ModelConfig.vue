@@ -174,6 +174,9 @@ const useCaseLabels: Record<string, string> = {
   case_generation: '用例生成',
   defect_analysis: '缺陷分析',
   fix_suggestion: '修复建议',
+  doc_parse: '文档解析',
+  doc_review: '文档评审',
+  scenario_orchestration: '场景编排',
 }
 
 /** 提供商下拉选项 */
@@ -190,6 +193,9 @@ const routingFields = [
   { key: 'case_generation_model_id', label: '用例生成模型' },
   { key: 'defect_analysis_model_id', label: '缺陷分析模型' },
   { key: 'fix_suggestion_model_id', label: '修复建议模型' },
+  { key: 'doc_parse_model_id', label: '文档解析模型' },
+  { key: 'doc_review_model_id', label: '文档评审模型' },
+  { key: 'scenario_orchestration_model_id', label: '场景编排模型' },
   { key: 'fallback_model_id', label: '备用模型' },
 ] as const
 
@@ -205,12 +211,15 @@ const isEdit = ref(false)
 const currentId = ref<string>('')
 const formRef = ref<FormInstance>()
 
-/** 路由配置表单，key 为 5 个路由字段 */
+/** 路由配置表单，key 为 7 个路由字段 */
 const routingForm = reactive<Record<string, string>>({
   code_analysis_model_id: '',
   case_generation_model_id: '',
   defect_analysis_model_id: '',
   fix_suggestion_model_id: '',
+  doc_parse_model_id: '',
+  doc_review_model_id: '',
+  scenario_orchestration_model_id: '',
   fallback_model_id: '',
 })
 

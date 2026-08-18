@@ -63,6 +63,29 @@ class UserRole(PyEnum):
     VIEWER = "viewer"
 
 
+# ==================== 能力3/4 枚举 ====================
+
+
+class CaseAssetStatus(PyEnum):
+    """用例资产状态 — 草稿 / 已采纳 / 已废弃（接纳闭环）"""
+    DRAFT = "draft"
+    ADOPTED = "adopted"
+    DEPRECATED = "deprecated"
+
+
+class CaseSource(PyEnum):
+    """用例资产来源 — AI 生成 / 人工录入"""
+    AI_GENERATED = "ai_generated"
+    MANUAL = "manual"
+
+
+class ScenarioStatus(PyEnum):
+    """测试场景状态 — 草稿 / 已编排 / 已采纳"""
+    DRAFT = "draft"
+    ORCHESTRATED = "orchestrated"
+    ADOPTED = "adopted"
+
+
 # ==================== 用户与权限 ====================
 
 class User(Base):
@@ -136,6 +159,11 @@ class ModelRouting(Base):
     case_generation_model_id = Column(String(64), ForeignKey("ai_model_configs.id"), nullable=False)
     defect_analysis_model_id = Column(String(64), ForeignKey("ai_model_configs.id"), nullable=False)
     fix_suggestion_model_id = Column(String(64), ForeignKey("ai_model_configs.id"), nullable=False)
+    # 能力1/2 新增插槽：刻意 nullable=True，老库已有行无需补默认值；为 NULL 时运行时降级
+    doc_parse_model_id = Column(String(64), ForeignKey("ai_model_configs.id"), nullable=True)
+    doc_review_model_id = Column(String(64), ForeignKey("ai_model_configs.id"), nullable=True)
+    # 能力4 新增插槽：场景编排模型，刻意 nullable=True，老库已有行无需补默认值
+    scenario_orchestration_model_id = Column(String(64), ForeignKey("ai_model_configs.id"), nullable=True)
     fallback_model_id = Column(String(64), ForeignKey("ai_model_configs.id"), nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -398,6 +426,167 @@ class ChangeRequest(Base):
     )
 
 
+# ==================== 接口文档资产（能力1：AI 解析接口文档导入 / 能力2：AI 评审接口文档） ====================
+
+class DocFormat(PyEnum):
+    """接口文档格式（OPENAPI 含 swagger2 / openapi3；TXT 为纯文本描述）"""
+    OPENAPI = "openapi"
+    HAR = "har"
+    DOCX = "docx"
+    PDF = "pdf"
+    TXT = "txt"
+
+
+class DocStatus(PyEnum):
+    """文档解析状态机：PARSING → PARSED / FAILED"""
+    PARSING = "parsing"
+    PARSED = "parsed"
+    FAILED = "failed"
+
+
+class EndpointSource(PyEnum):
+    """接口资产来源 — 本轮仅 DOC_IMPORT，预留 CODE_ANALYSIS 供用例生成链路消费"""
+    DOC_IMPORT = "doc_import"
+    CODE_ANALYSIS = "code_analysis"
+
+
+class ReviewEngine(PyEnum):
+    """评审引擎：AI 模型评审 / 规则兜底评审"""
+    AI = "ai"
+    RULE = "rule"
+
+
+class InterfaceDoc(Base):
+    """接口文档记录 — 一次上传/解析的文档实体（能力1）"""
+    __tablename__ = "interface_docs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    uploader_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    filename = Column(String(500), nullable=False)
+    format = Column(SAEnum(DocFormat, name="docformat"), nullable=False)
+    storage_key = Column(String(500), nullable=False)  # 本地卷路径 /app/data/uploads/docs/<uuid>.<ext>
+    minio_key = Column(String(500), nullable=True)      # MinIO 镜像对象名，失败为 NULL
+    raw_text = Column(Text, nullable=True)              # docx/pdf 抽取全文，缓存避免重复抽取
+    status = Column(SAEnum(DocStatus, name="docstatus"), default=DocStatus.PARSING, nullable=False)
+    parse_engine = Column(String(20), nullable=True)    # rule / ai / rule_degraded
+    api_spec_json = Column(JSONB, default={})           # 解析结果（文档级 ApiSpec）
+    error = Column(Text, nullable=True)
+    file_size = Column(Integer, default=0)
+    sha256 = Column(String(64), nullable=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_interface_docs_project", "project_id"),
+        Index("idx_interface_docs_status", "status"),
+    )
+
+
+class ApiEndpoint(Base):
+    """接口资产 — 从文档导入的可复用接口（核心资产，能力1落库 / 能力2评审对象）"""
+    __tablename__ = "api_endpoints"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    doc_id = Column(UUID(as_uuid=True), ForeignKey("interface_docs.id"), nullable=True)
+    method = Column(String(10), nullable=False)            # 大写 GET/POST/...
+    path = Column(String(500), nullable=False)             # 归一化路径
+    summary = Column(String(500), nullable=True)
+    description = Column(Text, nullable=True)
+    params = Column(JSONB, default=[])                      # [{name, in, type, required, description, example}]
+    request_body = Column(JSONB, default={})               # {content_type, required, schema, example}
+    responses = Column(JSONB, default=[])                  # [{status_code, description, content_type, schema, example}]
+    auth_required = Column(Boolean, default=False)
+    version = Column(Integer, default=1)                   # 每次 upsert 覆盖 +1
+    is_active = Column(Boolean, default=True)
+    source = Column(SAEnum(EndpointSource, name="endpointsource"), default=EndpointSource.DOC_IMPORT, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("project_id", "method", "path", name="uq_api_endpoints_project_method_path"),
+        Index("idx_api_endpoints_project_method", "project_id", "method"),
+        Index("idx_api_endpoints_doc", "doc_id"),
+    )
+
+
+class DocReview(Base):
+    """接口文档评审结果（能力2）"""
+    __tablename__ = "doc_reviews"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    doc_id = Column(UUID(as_uuid=True), ForeignKey("interface_docs.id"), nullable=True)  # 允许独立接口级评审无来源 doc
+    endpoint_id = Column(UUID(as_uuid=True), ForeignKey("api_endpoints.id"), nullable=True)  # 指定接口评审时填充
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    reviewer_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    score = Column(Integer, nullable=False, default=0)     # 1-5，后端按权重复算
+    scores_json = Column(JSONB, default={})                # 各维度分 {basic_info, request_params, response_definition, security_auth}
+    dimensions = Column(JSONB, default=[])                 # 四维明细 [{dimension, score, comment}]
+    suggestions = Column(JSONB, default=[])               # 问题建议 [{dimension, target, severity, issue, root_cause, suggestion, example}]
+    engine = Column(SAEnum(ReviewEngine, name="reviewengine"), default=ReviewEngine.RULE, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_doc_reviews_doc", "doc_id"),
+        Index("idx_doc_reviews_project", "project_id"),
+    )
+
+
+# ==================== 能力3：用例资产表（接纳闭环） ====================
+
+
+class TestCaseAsset(Base):
+    """用例资产表 — 可被反复采纳/编辑/执行的用例资产（与执行实例 TestCase 解耦）"""
+    __tablename__ = "test_case_assets"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    endpoint_id = Column(UUID(as_uuid=True), ForeignKey("api_endpoints.id"), nullable=True)
+    case_type = Column(String(50), nullable=False)  # positive / negative / boundary / exception
+    title = Column(String(500), nullable=False)
+    description = Column(Text, nullable=True)
+    request_data = Column(JSONB, nullable=False, default={})  # {method, url, headers, body, params}
+    expected_result = Column(JSONB, nullable=True)            # {status_code, assertions:[...]}
+    priority = Column(String(10), default="P2")               # P0-P3
+    status = Column(SAEnum(CaseAssetStatus, name="caseassetstatus"), default=CaseAssetStatus.DRAFT, nullable=False)
+    source = Column(SAEnum(CaseSource, name="casesource"), default=CaseSource.AI_GENERATED, nullable=False)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_test_case_assets_project", "project_id"),
+        Index("idx_test_case_assets_project_status", "project_id", "status"),
+        Index("idx_test_case_assets_endpoint", "endpoint_id"),
+    )
+
+
+# ==================== 能力4：测试场景表（steps JSONB 单表） ====================
+
+
+class Scenario(Base):
+    """测试场景表 — 自然语言编排出的多步串联场景（steps 以 JSONB 存于单表）"""
+    __tablename__ = "scenarios"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    name = Column(String(200), nullable=False)
+    description = Column(Text, nullable=True)
+    nl_input = Column(Text, nullable=False)  # 用户自然语言场景描述（编排输入）
+    status = Column(SAEnum(ScenarioStatus, name="scenariostatus"), default=ScenarioStatus.DRAFT, nullable=False)
+    # 每步结构：{step_order, endpoint_id, action_desc, method, url, extract, inject, depend_on_step, request}
+    steps = Column(JSONB, default=list)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_scenarios_project", "project_id"),
+        Index("idx_scenarios_project_status", "project_id", "status"),
+    )
+
+
 # ==================== 数据库初始化 ====================
 
 async def init_db():
@@ -449,3 +638,71 @@ async def init_db():
         logger.warning(f"Skip userrole enum sync (connection error): {e}")
     else:
         logger.info(f"UserRole enum labels ensured: {', '.join(role_labels)}")
+
+    # 旧库补齐 model_routing 两列（doc_parse_model_id / doc_review_model_id）。
+    # 这两列在新增需求中加到 ModelRouting 表，使用 nullable=True 以便老库平滑迁移；
+    # create_all 只会建新表、不会 ALTER 已有表，故此处用幂等 ADD COLUMN IF NOT EXISTS 兜底。
+    # DDL 不支持参数绑定，列名取自可信字面量，无注入风险。
+    try:
+        async with async_engine.connect() as conn:
+            autocommit_conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
+            for col_sql in (
+                "ALTER TABLE model_routing ADD COLUMN IF NOT EXISTS doc_parse_model_id VARCHAR(64)",
+                "ALTER TABLE model_routing ADD COLUMN IF NOT EXISTS doc_review_model_id VARCHAR(64)",
+            ):
+                try:
+                    await autocommit_conn.execute(text(col_sql))
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to add column ({col_sql}): {e}. "
+                        f"请执行 `docker compose down -v` 重建数据库或手动 ALTER。"
+                    )
+    except Exception as e:
+        logger.warning(f"Skip model_routing column sync (connection error): {e}")
+    else:
+        logger.info("ModelRouting doc_parse/doc_review columns ensured")
+
+    # 旧库补齐 model_routing 的 scenario_orchestration_model_id 列（能力4 新插槽）。
+    # 该列使用 nullable=True 以便老库平滑迁移；create_all 不会 ALTER 既有表，
+    # 故此处用幂等 ADD COLUMN IF NOT EXISTS 兜底。
+    # DDL 不支持参数绑定，列名取自可信字面量，无注入风险。
+    try:
+        async with async_engine.connect() as conn:
+            autocommit_conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
+            for col_sql in (
+                "ALTER TABLE model_routing ADD COLUMN IF NOT EXISTS scenario_orchestration_model_id VARCHAR(64)",
+            ):
+                try:
+                    await autocommit_conn.execute(text(col_sql))
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to add column ({col_sql}): {e}. "
+                        f"请执行 `docker compose down -v` 重建数据库或手动 ALTER。"
+                    )
+    except Exception as e:
+        logger.warning(f"Skip model_routing scenario_orchestration column sync (connection error): {e}")
+    else:
+        logger.info("ModelRouting scenario_orchestration column ensured")
+
+    # 旧库补齐 doc_reviews.doc_id 的可空性（DROP NOT NULL）。
+    # DocReview.doc_id 已改为 nullable=True 以支持独立接口级评审，但 create_all 不会
+    # ALTER 既有表，若目标库里 doc_reviews 是由旧定义（doc_id NOT NULL）建出的，
+    # 仅改模型不会让既有表结构跟着变，故此处用幂等 DROP NOT NULL 兜底。
+    # PostgreSQL 的 ALTER TABLE ... ALTER COLUMN ... DROP NOT NULL 建议在事务外执行，故使用 AUTOCOMMIT；
+    # DDL 不支持参数绑定，表名/列名取自可信字面量，无注入风险。
+    try:
+        async with async_engine.connect() as conn:
+            autocommit_conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
+            try:
+                await autocommit_conn.execute(
+                    text("ALTER TABLE doc_reviews ALTER COLUMN doc_id DROP NOT NULL")
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to drop NOT NULL on doc_reviews.doc_id: {e}. "
+                    f"请执行 `docker compose down -v` 重建数据库或手动 ALTER。"
+                )
+    except Exception as e:
+        logger.warning(f"Skip doc_reviews.doc_id DROP NOT NULL (connection error): {e}")
+    else:
+        logger.info("DocReview doc_id nullable ensured")
