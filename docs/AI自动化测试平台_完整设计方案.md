@@ -505,6 +505,18 @@ async def update_model_routing(routing: ModelRoutingConfig):
     return {"status": "updated"}
 ```
 
+#### 出厂默认与配置入口（重要）
+
+平台**出厂不预置任何 AI 模型**（模型出厂默认配置为空），也不再依据环境变量（如 `OPENAI_API_KEY`）自动播种模型。数据库 `AIModelConfig` / `ModelRouting` 表是模型配置的唯一数据源（Single Source of Truth）。
+
+- **配置入口（页面）**：仅管理员可见。侧边菜单「AI 模型配置」→ 路由 `/settings/models`（`ModelConfig.vue`）。管理员可添加 / 编辑 / 删除 / 启用模型，并测试连通性；支持 OpenAI 兼容、Azure OpenAI、Anthropic、私有 vLLM/Ollama、国产模型等任意厂商。
+- **即时生效**：后端在启动时、以及每次「新增 / 更新 / 删除模型」或「更新路由」后，都会立刻从数据库重新加载到内存 `ModelRouter`，页面配置无需重启即可生效。
+- **未配置模型的提示（关键体验）**：当用户尚未配置（或未启用）任何模型，却使用了任一调用模型的功能（用例生成、场景编排、脚本/SQL 生成、缺陷分析、报告分析、文档解析/评审、定时任务解析等）时，系统**不再静默降级**，而是抛出 `ModelNotConfiguredError`，由全局异常处理器转换为 **HTTP 409**（`code: "MODEL_NOT_CONFIGURED"`）。前端响应拦截器据此弹出引导框：
+  - 管理员：提示「请先在 AI 模型配置页面添加并启用至少一个模型」，点击「去配置模型」跳转 `/settings/models`；
+  - 非管理员：提示「请联系系统管理员配置 AI 模型」。
+
+> 说明：各 AI 模块的 `try/except Exception` 兜底原本会在模型调用失败时返回占位结果（掩盖"未配置"错误），现已在每个 `router.call()` 处显式 `except ModelNotConfiguredError: raise`，确保该错误能一路冒泡到前端提示，而非被沉默吞掉。
+
 #### 常见企业模型配置示例
 
 ```python
@@ -569,9 +581,9 @@ EXAMPLE_CONFIGS = [
 ]
 ```
 
-### 2.5 AI 模型分工（默认配置）
+### 2.5 AI 模型分工（推荐配置）
 
-> 以下为出厂默认配置，企业可在「模型配置」页面修改为任意模型。
+> 平台**出厂不预置任何模型**（模型出厂默认配置为空）。管理员需先在「AI 模型配置」页面（/settings/models）添加并启用至少一个模型，以下 AI 功能方可使用；未配置时调用会被拦截并提示「请先配置模型」。下表为各 AI 环节的**推荐模型分工**，企业可按需在页面中替换为任意自有模型。
 
 | 环节 | 默认模型 | 用途 | 调用方式 |
 |------|------|------|---------|
@@ -3310,7 +3322,7 @@ class IntegrationTestRunner:
   - Git 2.30+
   - SVN 1.14+ (若需支持 SVN 仓库)
 
-AI 模型配置（至少配置一个，支持运行时在平台页面修改）:
+AI 模型配置（**出厂不预置**，需管理员在平台「AI 模型配置」页面 /settings/models 添加并启用至少一个模型；未配置时相关功能会提示先配置模型）:
   - OpenAI API Key (GPT-4o 权限) — 或任意 OpenAI 兼容 API
   - 企业私有模型地址 (vLLM/Ollama 等) — 代码不离开内网
   - Anthropic API Key (Claude 3.5 Sonnet，可选备用)
@@ -3328,8 +3340,8 @@ cp .env.example .env
 
 # 编辑 .env 文件
 cat > .env << 'EOF'
-# === AI API (默认配置，可在平台「模型配置」页面修改) ===
-# 支持任意 OpenAI 兼容 API，以下为默认值
+# === AI API（说明：平台不再读取这些变量自动建模型；请到「AI 模型配置」页面 /settings/models 配置，此处仅作参考）===
+# 支持任意 OpenAI 兼容 API，以下为参考示例（不会被自动写入数据库）
 OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxx
 OPENAI_API_BASE=https://api.openai.com/v1
 OPENAI_MODEL_NAME=gpt-4o

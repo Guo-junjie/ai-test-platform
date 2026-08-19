@@ -12,7 +12,7 @@ import re
 import uuid
 from typing import Any
 
-from app.modules.ai.model_router import ModelRouter, get_model_router
+from app.modules.ai.model_router import ModelNotConfiguredError, ModelRouter, get_model_router
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -217,6 +217,8 @@ class DefectAnalyzer:
             parsed = self._parse_json_response(response)
             if parsed and "category" in parsed:
                 return self._normalize_defect(parsed, result, "api")
+        except ModelNotConfiguredError:
+            raise
         except Exception as e:
             logger.warning(f"AI API failure analysis failed for {case_name}: {e}")
 
@@ -281,6 +283,8 @@ class DefectAnalyzer:
             parsed = self._parse_json_response(response)
             if parsed and "category" in parsed:
                 return self._normalize_defect(parsed, result, "performance")
+        except ModelNotConfiguredError:
+            raise
         except Exception as e:
             logger.warning(f"AI performance analysis failed for {case_name}: {e}")
 
@@ -334,6 +338,8 @@ class DefectAnalyzer:
             parsed = self._parse_json_response(response)
             if parsed and "category" in parsed:
                 return self._normalize_defect(parsed, result, "integration")
+        except ModelNotConfiguredError:
+            raise
         except Exception as e:
             logger.warning(f"AI integration analysis failed for {case_name}: {e}")
 
@@ -428,6 +434,8 @@ class DefectAnalyzer:
             logger.info(f"Deduplicated: {len(defects)} → {len(merged)} defects")
             return merged
 
+        except ModelNotConfiguredError:
+            raise
         except Exception as e:
             logger.warning(f"AI deduplication failed: {e}, keeping original defects")
             return defects

@@ -14,7 +14,7 @@ import uuid
 import logging
 from typing import Any
 
-from app.modules.ai.model_router import get_model_router
+from app.modules.ai.model_router import ModelNotConfiguredError, get_model_router
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +99,8 @@ class ReportAnalyzer:
                 temperature=0.3,
             )
             analysis = self._parse_json_response(model_response)
+        except ModelNotConfiguredError:
+            raise
         except Exception as e:
             logger.warning(f"AI failure analysis failed: {e}, using fallback")
             analysis = self._fallback_failure_analysis(result_info)
@@ -161,6 +163,8 @@ class ReportAnalyzer:
                 temperature=0.3,
             )
             analysis = self._parse_json_response(model_response)
+        except ModelNotConfiguredError:
+            raise
         except Exception as e:
             logger.warning(f"AI summary analysis failed: {e}, using fallback")
             analysis = self._fallback_summary_analysis(report_data)
@@ -251,6 +255,8 @@ class ReportAnalyzer:
                 temperature=0.3,
             )
             analysis = self._parse_json_response(model_response)
+        except ModelNotConfiguredError:
+            raise
         except Exception as e:
             logger.warning(f"AI compare analysis failed: {e}, using fallback")
             analysis = self._fallback_compare_analysis(current_info, compare_info)

@@ -15,7 +15,7 @@ import logging
 import uuid
 from typing import Any, Dict, Optional
 
-from app.modules.ai.model_router import get_model_router
+from app.modules.ai.model_router import ModelNotConfiguredError, get_model_router
 from app.modules.sql_gen.sql_security import SqlSecurity
 
 logger = logging.getLogger(__name__)
@@ -71,6 +71,8 @@ class ScriptGenerator:
                 temperature=0.3,
             )
             code = self._extract_code(response, script_type)
+        except ModelNotConfiguredError:
+            raise
         except Exception as e:
             logger.warning(f"AI script generation failed: {e}, using fallback")
             code = self._fallback_script(script_type, context)

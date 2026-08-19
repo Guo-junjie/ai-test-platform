@@ -10,7 +10,7 @@ import logging
 import re
 from typing import Any, Dict, List
 
-from app.modules.ai.model_router import get_model_router
+from app.modules.ai.model_router import ModelNotConfiguredError, get_model_router
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,8 @@ class SqlGenerator:
                 temperature=0.2,
             )
             result = self._parse_response(response)
+        except ModelNotConfiguredError:
+            raise
         except Exception as e:
             logger.warning(f"AI SQL generation failed: {e}, using fallback")
             result = self._fallback_sql(context, schema_context)

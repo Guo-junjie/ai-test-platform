@@ -10,7 +10,7 @@ import json
 import re
 
 from app.models.database import ApiEndpoint
-from app.modules.ai.model_router import get_model_router
+from app.modules.ai.model_router import ModelNotConfiguredError, get_model_router
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -58,6 +58,8 @@ class ScenarioOrchestrator:
                         f"(project={project_id})"
                     )
                     return {"steps": resolved, "engine": "ai"}
+        except ModelNotConfiguredError:
+            raise
         except Exception as e:  # noqa: BLE001
             logger.warning(
                 f"AI scenario orchestration failed (fallback to rule): {e}"

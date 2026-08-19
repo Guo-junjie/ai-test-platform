@@ -16,7 +16,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from app.modules.ai.model_router import get_model_router
+from app.modules.ai.model_router import ModelNotConfiguredError, get_model_router
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -94,6 +94,8 @@ class AICodeAnalyzer:
             async with semaphore:
                 try:
                     return await self.analyze_api(api, snippet)
+                except ModelNotConfiguredError:
+                    raise
                 except Exception as e:
                     logger.warning(
                         f"AI analysis failed for API {api.get('path', 'unknown')}: {e}"

@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 const api = axios.create({
   baseURL: '/api',
@@ -28,6 +28,45 @@ api.interceptors.response.use(
       if (window.location.pathname !== '/login') {
         window.location.href = '/login'
       }
+    }
+    // 模型未配置：弹出引导，提示用户先去「AI 模型配置」页面添加并启用模型
+    if (
+      error.response?.status === 409 &&
+      error.response?.data?.code === 'MODEL_NOT_CONFIGURED'
+    ) {
+      const detail =
+        error.response?.data?.detail ||
+        '尚未配置 AI 模型，请先在「AI 模型配置」页面添加并启用至少一个模型后再使用此功能。'
+      // 读取当前用户角色，决定是引导去配置还是提示联系管理员
+      let currentRole = ''
+      try {
+        const u = JSON.parse(localStorage.getItem('user') || '{}')
+        currentRole = u.role || ''
+      } catch {
+        currentRole = ''
+      }
+      const canConfigure = currentRole === 'admin' || currentRole === 'super_admin'
+      if (canConfigure) {
+        ElMessageBox.confirm(detail, '需要配置 AI 模型', {
+          confirmButtonText: '去配置模型',
+          cancelButtonText: '暂不',
+          type: 'warning',
+          showClose: false,
+        })
+          .then(() => {
+            window.location.href = '/settings/models'
+          })
+          .catch(() => {
+            /* 用户取消，停留在当前页面 */
+          })
+      } else {
+        ElMessageBox.alert(
+          detail + '（请联系系统管理员配置 AI 模型）',
+          '需要配置 AI 模型',
+          { type: 'warning', showClose: false }
+        )
+      }
+      return Promise.reject(error)
     }
     const message = error.response?.data?.detail || error.message || '请求失败'
     ElMessage.error(message)

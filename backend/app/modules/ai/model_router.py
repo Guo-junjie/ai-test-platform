@@ -7,7 +7,15 @@ from typing import Optional
 
 from app.modules.ai.model_config import ModelConfig, ModelRoutingConfig, ModelProvider
 from app.modules.ai.model_client import UnifiedModelClient
-from app.config import settings
+
+
+class ModelNotConfiguredError(RuntimeError):
+    """模型未配置异常。
+
+    当某个 use_case 没有任何可用（已启用）的模型配置时由 ModelRouter 抛出。
+    全局异常处理器会将其转为 HTTP 409，并携带 ``code=MODEL_NOT_CONFIGURED``，
+    前端据此弹出「去配置模型」引导，而不是返回一个误导性的 fallback 结果。
+    """
 
 
 class ModelRouter:
@@ -65,7 +73,9 @@ class ModelRouter:
             logger.warning(f"Model {config_id} not available, falling back")
             config = self.configs.get(self.routing.fallback_model_id)
             if not config:
-                raise RuntimeError("No available model configuration")
+                raise ModelNotConfiguredError(
+                    "尚未配置 AI 模型，请先在「AI 模型配置」页面添加并启用至少一个模型后再使用此功能。"
+                )
 
         if config_id not in self._clients:
             self._clients[config_id] = UnifiedModelClient(config)
@@ -105,75 +115,86 @@ def get_model_router() -> ModelRouter:
     return _router
 
 
-async def init_default_models():
+async def refresh_model_router_from_db(db) -> None:
     """
-    初始化默认 AI 模型配置
-    从环境变量读取默认配置，注册到路由器
+    从数据库加载模型配置与路由到内存路由器（唯一真相源）。
+
+    - 读取全部 ``AIModelConfig`` → 解密 api_key 后注册为 :class:`ModelConfig`。
+    - 读取唯一一条 ``ModelRouting`` 记录 → 设为路由；若无记录但存在启用模型，
+      则将所有 use_case 路由到第一个启用模型（「配一个即用」）。
+    - 调用时机：应用启动、以及模型配置 / 路由发生增删改之后。
+
+    注意：``app.models.database`` 与 ``app.utils.crypto`` 采用惰性导入，
+    避免与模型定义 / 加解密模块形成导入环。
     """
+    from app.models.database import AIModelConfig, ModelRouting
+    from app.utils.crypto import decrypt
+    from sqlalchemy import select
+
     router = get_model_router()
 
-    # 默认模型（OpenAI 兼容）
-    if settings.OPENAI_API_KEY:
-        default_config = ModelConfig(
-            config_id="default",
-            name=f"默认模型 ({settings.OPENAI_MODEL_NAME})",
-            provider=ModelProvider.OPENAI,
-            api_base_url=settings.OPENAI_API_BASE,
-            api_key=settings.OPENAI_API_KEY,
-            model_name=settings.OPENAI_MODEL_NAME,
-            is_default=True,
-            use_cases=["code_analysis", "case_generation", "defect_analysis", "fix_suggestion", "doc_parse", "doc_review", "scenario_orchestration", "script_generation", "sql_generation", "report_analysis"],
-        )
-        router.register_config(default_config)
+    result = await db.execute(select(AIModelConfig))
+    rows = result.scalars().all()
 
-    # 备用模型（Anthropic）
-    if settings.ANTHROPIC_API_KEY:
-        fallback_config = ModelConfig(
-            config_id="anthropic_fallback",
-            name=f"Claude 备用模型 ({settings.ANTHROPIC_MODEL_NAME})",
-            provider=ModelProvider.ANTHROPIC,
-            api_base_url=settings.ANTHROPIC_API_BASE,
-            api_key=settings.ANTHROPIC_API_KEY,
-            model_name=settings.ANTHROPIC_MODEL_NAME,
-            is_fallback=True,
-            use_cases=["code_analysis", "case_generation", "defect_analysis", "fix_suggestion", "doc_parse", "doc_review", "scenario_orchestration", "script_generation", "sql_generation", "report_analysis"],
+    router.configs.clear()
+    for c in rows:
+        try:
+            api_key = decrypt(c.api_key_encrypted) if c.api_key_encrypted else ""
+        except Exception:
+            api_key = ""
+        cfg = ModelConfig(
+            config_id=c.id,
+            name=c.name,
+            provider=c.provider,
+            api_base_url=c.api_base_url or "",
+            api_key=api_key,
+            model_name=c.model_name or "",
+            api_version=c.api_version,
+            max_tokens=c.max_tokens or 4096,
+            temperature=c.temperature if c.temperature is not None else 0.3,
+            timeout=c.timeout or 120,
+            max_retries=c.max_retries or 3,
+            use_cases=list(c.use_cases or []),
+            is_active=bool(c.is_active),
+            is_default=bool(c.is_default),
+            is_fallback=bool(c.is_fallback),
         )
-        router.register_config(fallback_config)
-        router.routing.fallback_model_id = "anthropic_fallback"
-    elif settings.OPENAI_API_KEY:
-        # 如果没有 Anthropic，使用 OpenAI 作为备用
-        router.routing.fallback_model_id = "default"
+        router.register_config(cfg)
 
-    # 自定义模型
-    if settings.CUSTOM_MODEL_API_BASE and settings.CUSTOM_MODEL_API_KEY:
-        custom_config = ModelConfig(
-            config_id="custom",
-            name=f"自定义模型 ({settings.CUSTOM_MODEL_NAME})",
-            provider=ModelProvider.CUSTOM,
-            api_base_url=settings.CUSTOM_MODEL_API_BASE,
-            api_key=settings.CUSTOM_MODEL_API_KEY,
-            model_name=settings.CUSTOM_MODEL_NAME,
-            use_cases=["code_analysis", "case_generation"],
+    rresult = await db.execute(
+        select(ModelRouting).order_by(ModelRouting.id).limit(1)
+    )
+    routing_row = rresult.scalar_one_or_none()
+    routing_fields = list(ModelRoutingConfig.model_fields.keys())
+    if routing_row is not None:
+        router.set_routing(
+            ModelRoutingConfig(
+                **{f: getattr(routing_row, f) for f in routing_fields}
+            )
         )
-        router.register_config(custom_config)
-
-    # 设置路由
-    if settings.OPENAI_API_KEY:
-        router.set_routing(ModelRoutingConfig(
-            code_analysis_model_id="default",
-            case_generation_model_id="default",
-            defect_analysis_model_id="default",
-            fix_suggestion_model_id="default",
-            doc_parse_model_id="default",
-            doc_review_model_id="default",
-            scenario_orchestration_model_id="default",
-            script_generation_model_id="default",
-            sql_generation_model_id="default",
-            report_analysis_model_id="default",
-            fallback_model_id="anthropic_fallback" if settings.ANTHROPIC_API_KEY else "default",
-        ))
+    else:
+        # 无路由记录：若有启用模型，全部路由到第一个启用模型，保证「配一个即用」
+        first_active = next((c.id for c in rows if c.is_active), None)
+        if first_active:
+            router.set_routing(
+                ModelRoutingConfig(**{f: first_active for f in routing_fields})
+            )
 
     logger.info(
-        f"Model router initialized with {len(router.configs)} config(s): "
-        f"{list(router.configs.keys())}"
+        f"Model router refreshed from DB: {len(router.configs)} config(s), "
+        f"routing={'set' if router.routing else 'empty'}"
     )
+
+
+async def init_default_models() -> None:
+    """
+    初始化模型路由器：从数据库加载已配置的模型。
+
+    **出厂默认即为空** —— 不再从环境变量自动播种模型。
+    未配置模型时调用任何 AI 功能都会抛出 :class:`ModelNotConfiguredError`
+    （HTTP 409），并提示用户先在「AI 模型配置」页面配置模型。
+    """
+    from app.utils.database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as db:
+        await refresh_model_router_from_db(db)

@@ -9,7 +9,7 @@ import json
 import re
 from typing import Any
 
-from app.modules.ai.model_router import get_model_router
+from app.modules.ai.model_router import ModelNotConfiguredError, get_model_router
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -162,6 +162,8 @@ API 路径: {path}
                         "http_method": case_data.get("request", {}).get("method", "GET"),
                     })
                 return result
+            except ModelNotConfiguredError:
+                raise
             except Exception as e:
                 logger.warning(f"AI supplementary case generation failed: {e}")
                 return self._generate_fallback_for_path(path)

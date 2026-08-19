@@ -17,7 +17,7 @@ from typing import Any, Optional
 
 from loguru import logger
 
-from app.modules.ai.model_router import get_model_router
+from app.modules.ai.model_router import ModelNotConfiguredError, get_model_router
 from app.modules.doc_review.rules import DIMENSION_WEIGHTS, rule_review
 
 
@@ -153,6 +153,8 @@ async def review(endpoints: list, use_ai: bool = True) -> dict:
             response_format_json=True,
             temperature=0.3,
         )
+    except ModelNotConfiguredError:
+        raise
     except Exception as e:  # noqa: BLE001
         logger.warning(f"AI doc review failed (fallback to rule): {e}")
         return rule_review(endpoints)

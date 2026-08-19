@@ -13,6 +13,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.modules.ai.model_router import ModelNotConfiguredError
 from app.modules.report_analysis.analyzer import ReportAnalyzer
 from app.schemas.report_analysis import (
     ReportAnalysisRequest,
@@ -59,6 +60,8 @@ async def analyze_report(
             )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except ModelNotConfiguredError:
+        raise
     except Exception as e:
         logger.exception(f"Report analysis failed for {report_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Analysis failed: {e}")
@@ -90,6 +93,8 @@ async def analyze_result(
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except ModelNotConfiguredError:
+        raise
     except Exception as e:
         logger.exception(f"Result analysis failed for {result_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Analysis failed: {e}")
@@ -122,6 +127,8 @@ async def compare_results(
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except ModelNotConfiguredError:
+        raise
     except Exception as e:
         logger.exception(f"Compare analysis failed for {result_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Analysis failed: {e}")

@@ -14,6 +14,7 @@ from sqlalchemy import text
 
 from app.config import settings
 from app.utils.logger import setup_logger
+from app.modules.ai.model_router import ModelNotConfiguredError
 
 
 async def _run_lifecycle_step(
@@ -101,6 +102,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ============ 全局异常处理 ============
+
+
+@app.exception_handler(ModelNotConfiguredError)
+async def _handle_model_not_configured(request, exc: ModelNotConfiguredError):
+    """模型未配置 → 409 + 结构化提示，前端据此引导用户去配置模型。"""
+    return JSONResponse(
+        status_code=409,
+        content={
+            "detail": str(exc),
+            "code": "MODEL_NOT_CONFIGURED",
+            "action": "configure_model",
+        },
+    )
+
 
 # ============ 注册路由 ============
 

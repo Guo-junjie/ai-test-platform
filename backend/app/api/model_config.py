@@ -29,6 +29,7 @@ from app.modules.auth.dependencies import get_current_user, require_admin
 from app.utils.crypto import decrypt, encrypt, mask_api_key
 from app.utils.database import get_db_session
 from app.utils.logger import get_logger
+from app.modules.ai.model_router import refresh_model_router_from_db
 
 logger = get_logger(__name__)
 
@@ -269,6 +270,7 @@ async def create_model_config(
 
     await db.flush()
     await db.refresh(config)
+    await refresh_model_router_from_db(db)
 
     logger.info(f"Model config created: {req.name} ({config_id}) by {current_user.username}")
 
@@ -330,6 +332,7 @@ async def update_model_config(
 
     await db.flush()
     await db.refresh(config)
+    await refresh_model_router_from_db(db)
 
     logger.info(f"Model config updated: {config_id} by {current_user.username}")
 
@@ -363,6 +366,7 @@ async def delete_model_config(
 
     await db.delete(config)
     await db.flush()
+    await refresh_model_router_from_db(db)
 
     logger.info(f"Model config deleted: {config_id} by {current_user.username}")
 
@@ -521,5 +525,6 @@ async def update_model_routing(
 
     await db.flush()
     await db.refresh(routing)
+    await refresh_model_router_from_db(db)
 
     return {"code": 0, "data": _routing_to_dict(routing), "message": "模型路由更新成功"}

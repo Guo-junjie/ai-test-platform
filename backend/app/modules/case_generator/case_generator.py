@@ -16,7 +16,7 @@ import re
 import uuid
 from typing import Any
 
-from app.modules.ai.model_router import get_model_router
+from app.modules.ai.model_router import ModelNotConfiguredError, get_model_router
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -59,6 +59,8 @@ class TestCaseGenerator:
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
             )
+        except ModelNotConfiguredError:
+            raise
         except Exception as e:
             logger.error(
                 f"AI case generation failed for {api_info.get('path', 'unknown')}: {e}"
@@ -122,6 +124,8 @@ class TestCaseGenerator:
                 business_analysis = analysis_map.get(key, {})
                 try:
                     return await self.generate_api_cases(api, business_analysis)
+                except ModelNotConfiguredError:
+                    raise
                 except Exception as e:
                     logger.warning(
                         f"Case generation failed for {key}: {e}, using fallback"

@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import TestRun
+from app.modules.ai.model_router import ModelNotConfiguredError
 from app.modules.code_analyzer import AICodeAnalyzer, APIExtractor, StackDetector
 from app.utils.database import get_db_session
 from app.utils.logger import get_logger
@@ -76,6 +77,8 @@ async def run_analysis(
         ai_analysis = await ai_analyzer.analyze_project(
             req.local_path, apis, stack_info
         )
+    except ModelNotConfiguredError:
+        raise
     except Exception as e:
         logger.error(f"AI analysis failed (non-blocking): {e}", exc_info=True)
         ai_analysis = {

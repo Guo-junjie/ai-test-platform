@@ -13,7 +13,7 @@ from typing import Any, Optional
 
 from loguru import logger
 
-from app.modules.ai.model_router import get_model_router
+from app.modules.ai.model_router import ModelNotConfiguredError, get_model_router
 from app.modules.doc_parser.schemas import ApiEndpointSpec
 
 
@@ -178,6 +178,8 @@ async def enhance_with_ai(
                     response_format_json=True,
                     temperature=0.1,
                 )
+            except ModelNotConfiguredError:
+                raise
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"AI doc parse chunk failed (degrade): {e}")
                 return None

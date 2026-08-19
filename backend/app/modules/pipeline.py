@@ -27,6 +27,7 @@ from app.modules.execution.engine import (
     _set_task_progress_sync,
     _set_task_status_sync,
 )
+from app.modules.ai.model_router import ModelNotConfiguredError
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -123,6 +124,8 @@ def run_test_pipeline(self, test_run_id: str, req_dict: dict[str, Any]) -> dict[
             ai_analysis = asyncio.run(
                 ai_analyzer.analyze_project(local_path, apis, stack_info)
             )
+        except ModelNotConfiguredError:
+            raise
         except Exception as e:
             logger.error(f"[{test_run_id}] AI analysis failed: {e}")
             ai_analysis = {
