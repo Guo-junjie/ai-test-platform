@@ -62,6 +62,12 @@ function normalize(raw: any): Notification {
 
 /** 轮询拉取最新通知（仅展示最近 10 条） */
 async function loadNotifications() {
+  // 未登录（无 token）时不发起请求，避免登录页 / 未认证状态下产生 401 噪音
+  if (!localStorage.getItem('token')) {
+    notifications.value = []
+    unreadCount.value = 0
+    return
+  }
   try {
     const res: any = await notificationApi.list({ page: 1, page_size: 10 })
     const d = res?.data ?? res ?? {}
