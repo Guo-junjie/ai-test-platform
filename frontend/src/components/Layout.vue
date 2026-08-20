@@ -183,10 +183,13 @@ function handleUserCommand(cmd: string) {
   background-color: #001529;
   transition: width 0.3s;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .logo {
   height: 60px;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -247,5 +250,9 @@ function handleUserCommand(cmd: string) {
 
 :deep(.el-menu) {
   border-right: none;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 </style>
