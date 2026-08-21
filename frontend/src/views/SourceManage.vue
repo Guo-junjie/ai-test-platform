@@ -273,9 +273,11 @@ async function handleFetch(row: any) {
   fetchingId.value = row.id
   try {
     const fetchConfig: Record<string, any> = {
+      // 仅传 source_id，由后端从数据库读取已加密配置并解密出真实凭据，
+      // 避免把列表里脱敏后的 token 当作真 token 发回去导致 clone 失败。
+      source_id: row.id,
       source_type: row.source_type,
       incremental: true,
-      ...row.config,
     }
 
     const res: any = await sourceApi.fetch(fetchConfig)

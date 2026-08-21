@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.database import Project, SourceType as ModelSourceType, User
 from app.modules.auth.dependencies import get_current_user
 from app.modules.source import SourceConfig, SourceAdapterFactory, SourceType
-from app.utils.crypto import encrypt_dict, mask_api_key
+from app.utils.crypto import decrypt_dict, encrypt_dict, mask_api_key
 from app.utils.database import get_db_session
 from app.utils.logger import get_logger
 
@@ -36,6 +36,9 @@ class FetchRequest(BaseModel):
     """代码拉取请求"""
 
     source_type: str  # github / svn / upload
+    # 已配置数据源的 ID：提供后优先从数据库读取已加密配置并解密，
+    # 使用真实凭据（如 github_token）拉取，避免前端回传脱敏串导致认证失败。
+    source_id: str | None = None
     # GitHub
     github_token: str | None = None
     repo_url: str | None = None
@@ -65,35 +68,80 @@ class ConnectRequest(BaseModel):
 
 
 @router.post("/fetch")
-async def fetch_code(req: FetchRequest):
+async def fetch_code(
+    req: FetchRequest,
+    db: AsyncSession = Depends(get_db_session),
+):
     """
     拉取代码 — 统一入口。
 
-    根据 source_type 选择适配器，执行代码拉取并创建快照。
+    优先逻辑：
+    - 若传入 source_id，则从数据库读取已加密的数据源配置并解密，使用真实凭据
+      （如 github_token）拉取代码。前端无需、也不应再回传明文/脱敏后的 token，更安全。
+    - 若未传 source_id（兼容旧调用），则沿用请求体中的字段。
+
     返回标准化结果（local_path / version_id / snapshot_id / files_changed / total_files）。
     """
-    try:
-        source_type = SourceType(req.source_type)
-    except ValueError:
-        raise HTTPException(
-            400,
-            f"Invalid source_type: {req.source_type}. "
-            f"Supported: {[t.value for t in SourceType]}",
+    if req.source_id:
+        result = await db.execute(
+            select(Project).where(Project.id == uuid.UUID(req.source_id))
         )
+        project = result.scalar_one_or_none()
+        if project is None:
+            raise HTTPException(404, f"Source config not found: {req.source_id}")
 
-    config = SourceConfig(
-        source_type=source_type,
-        github_token=req.github_token,
-        repo_url=req.repo_url,
-        branch=req.branch,
-        commit_sha=req.commit_sha,
-        svn_url=req.svn_url,
-        svn_username=req.svn_username,
-        svn_password=req.svn_password,
-        svn_revision=req.svn_revision,
-        upload_file_path=req.upload_file_path,
-        incremental=req.incremental,
-    )
+        # 解密数据库中的敏感字段，使用真实凭据
+        decrypted = decrypt_dict(project.source_config or {})
+        db_source_type = (
+            project.source_type.value
+            if hasattr(project.source_type, "value")
+            else str(project.source_type)
+        )
+        try:
+            source_type = SourceType(db_source_type)
+        except ValueError:
+            raise HTTPException(
+                400,
+                f"Invalid source_type in DB: {db_source_type}. "
+                f"Supported: {[t.value for t in SourceType]}",
+            )
+
+        config = SourceConfig(
+            source_type=source_type,
+            github_token=decrypted.get("github_token"),
+            repo_url=decrypted.get("repo_url") or req.repo_url,
+            branch=req.branch or decrypted.get("branch") or "main",
+            commit_sha=req.commit_sha or decrypted.get("commit_sha"),
+            svn_url=decrypted.get("svn_url") or req.svn_url,
+            svn_username=decrypted.get("svn_username") or req.svn_username,
+            svn_password=decrypted.get("svn_password") or req.svn_password,
+            svn_revision=req.svn_revision or decrypted.get("svn_revision"),
+            upload_file_path=decrypted.get("upload_file_path") or req.upload_file_path,
+            incremental=req.incremental,
+        )
+    else:
+        try:
+            source_type = SourceType(req.source_type)
+        except ValueError:
+            raise HTTPException(
+                400,
+                f"Invalid source_type: {req.source_type}. "
+                f"Supported: {[t.value for t in SourceType]}",
+            )
+
+        config = SourceConfig(
+            source_type=source_type,
+            github_token=req.github_token,
+            repo_url=req.repo_url,
+            branch=req.branch,
+            commit_sha=req.commit_sha,
+            svn_url=req.svn_url,
+            svn_username=req.svn_username,
+            svn_password=req.svn_password,
+            svn_revision=req.svn_revision,
+            upload_file_path=req.upload_file_path,
+            incremental=req.incremental,
+        )
 
     try:
         result = SourceAdapterFactory.fetch_code(config)
