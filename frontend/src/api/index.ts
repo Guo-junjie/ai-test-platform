@@ -229,6 +229,47 @@ export const docApi = {
   getReview: (reviewId: string) => api.get(`/docs/reviews/${reviewId}`),
 }
 
+// ============ 需求文档解析（能力10） ============
+export const requirementApi = {
+  // 上传并解析需求文档（docx/pdf/txt）
+  upload: (file: File, projectId: string, useAi: boolean = true) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('project_id', projectId)
+    fd.append('use_ai', String(useAi))
+    return api.post('/requirements', fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 180000,
+    })
+  },
+  list: (params: any) => api.get('/requirements', { params }),
+  get: (docId: string) => api.get(`/requirements/${docId}`),
+  remove: (docId: string) => api.delete(`/requirements/${docId}`),
+  // 基于需求一键生成测试用例
+  generateCases: (docId: string, data: any) =>
+    api.post(`/requirements/${docId}/generate-cases`, data, { timeout: 300000 }),
+}
+
+// ============ 代码覆盖率（能力11） ============
+export const coverageApi = {
+  // 上传覆盖率报告 XML（coverage.py / jacoco / istanbul / cobertura）
+  upload: (file: File, payload: { project_id: string; tool: string; language?: string; test_run_id?: string }) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('project_id', payload.project_id)
+    fd.append('tool', payload.tool)
+    if (payload.language) fd.append('language', payload.language)
+    if (payload.test_run_id) fd.append('test_run_id', payload.test_run_id)
+    return api.post('/coverage', fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 120000,
+    })
+  },
+  list: (params: any) => api.get('/coverage', { params }),
+  get: (reportId: string) => api.get(`/coverage/${reportId}`),
+  remove: (reportId: string) => api.delete(`/coverage/${reportId}`),
+}
+
 // ============ 质量门禁 ============
 export const qualityGateApi = {
   getConfig: (projectId: string) => api.get(`/quality-gate/config/${projectId}`),

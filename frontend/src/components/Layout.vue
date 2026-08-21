@@ -44,6 +44,10 @@
           <el-icon><DocumentChecked /></el-icon>
           <span>接口文档评审</span>
         </el-menu-item>
+        <el-menu-item index="/requirement-parse">
+          <el-icon><Memo /></el-icon>
+          <span>需求文档解析</span>
+        </el-menu-item>
 
         <el-menu-item index="/case-library">
           <el-icon><Files /></el-icon>
@@ -61,6 +65,10 @@
         <el-menu-item index="/database-manage">
           <el-icon><Coin /></el-icon>
           <span>数据库连接</span>
+        </el-menu-item>
+        <el-menu-item index="/coverage">
+          <el-icon><Histogram /></el-icon>
+          <span>代码覆盖率</span>
         </el-menu-item>
         <el-menu-item index="/scheduled-tasks">
           <el-icon><Clock /></el-icon>

@@ -2,15 +2,22 @@
 环境适配器 — 根据技术栈自动启动被测服务
 
 每个适配器使用 Docker 构建镜像并启动容器。
-Docker 不可用时 fallback 到 localhost:8000。
+Docker 不可用时 fallback 到 localhost:PORT。
+
+能力11 集成点：当 coverage=True（由 engine 在 AUTO_COVERAGE=1 时传入）时，
+根据技术栈把覆盖率探针注入启动命令（Java→JaCoCo javaagent；Python→coverage run），
+并挂载 /coverage 卷；容器 id 暂存于 self._coverage_meta，供 pipeline 测试后自动采集。
+任意环节失败都安全降级为"无探针启动"，不影响测试。
 """
 
+import os
 import time
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Optional
 
 import httpx
 
+from app.modules.coverage.collector import override_command_for_coverage
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -19,6 +26,9 @@ logger = get_logger(__name__)
 _DEFAULT_READY_TIMEOUT = 120
 # 轮询间隔（秒）
 _POLL_INTERVAL = 2
+
+# 自动覆盖率总开关（默认关闭；worker 容器需挂载 Docker socket 且 SUT 镜像内置探针才生效）
+AUTO_COVERAGE = os.getenv("AUTO_COVERAGE", "0") == "1"
 
 
 class EnvironmentAdapter(ABC):
@@ -29,37 +39,80 @@ class EnvironmentAdapter(ABC):
     并等待服务就绪后返回服务 URL。
     """
 
+    # 子类填充
+    image_tag: str = "test-generic:latest"
+    port: int = 8000
+    language: str = "unknown"
+    coverage_tool: str = "cobertura"
+
+    # 覆盖率采集暂存（仅 coverage=True 时填充）
+    _container_id: Optional[str] = None
+    _coverage_meta: Optional[dict] = None
+
     @abstractmethod
-    def start_service(self, repo_path: str) -> str:
-        """
-        启动被测服务。
-
-        Args:
-            repo_path: 代码仓库本地路径。
-
-        Returns:
-            服务 URL（如 http://localhost:8080）。
-        """
+    def start_service(self, repo_path: str, coverage: bool = False) -> str:
         ...
+
+    def _build_and_run(
+        self, repo_path: str, image_tag: str, port: int, coverage: bool
+    ) -> str:
+        """构建镜像并启动容器；coverage=True 时注入探针并挂载 /coverage。"""
+        try:
+            import docker
+
+            client = docker.from_env()
+            logger.info(f"Building Docker image for {image_tag}: {repo_path}")
+            client.images.build(path=repo_path, tag=image_tag, rm=True)
+
+            run_kwargs: dict[str, Any] = {
+                "ports": {f"{port}/tcp": port},
+                "detach": True,
+                "auto_remove": True,
+            }
+            command = None
+            if coverage:
+                try:
+                    img = client.images.get(image_tag)
+                    cmd = (img.attrs.get("Config", {}) or {}).get("Cmd") or []
+                    new_cmd = override_command_for_coverage(cmd, self.language, self.coverage_tool)
+                    if new_cmd:
+                        command = ["sh", "-c", "mkdir -p /coverage && " + " ".join(new_cmd)]
+                        run_kwargs["volumes"] = {
+                            f"coverage_data_{image_tag.replace(':', '_')}": {
+                                "bind": "/coverage",
+                                "mode": "rw",
+                            }
+                        }
+                        logger.info(f"[coverage] instrumented launch for {image_tag}: {new_cmd}")
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"[coverage] cmd override failed ({e}); launch without probe")
+
+            if command:
+                run_kwargs["command"] = command
+
+            container = client.containers.run(image_tag, **run_kwargs)
+            if coverage and command:
+                self._container_id = container.id
+                self._coverage_meta = {
+                    "container_id": container.id,
+                    "tool": self.coverage_tool,
+                    "language": self.language,
+                }
+                logger.info(f"[coverage] SUT launched with probe; container={container.id}")
+            return f"http://localhost:{port}"
+        except Exception as e:
+            logger.warning(
+                f"Docker startup failed for {image_tag}: {e}. "
+                f"Falling back to localhost:{port}"
+            )
+        return f"http://localhost:{port}"
 
     def wait_for_ready(
         self, url: str, timeout: int = _DEFAULT_READY_TIMEOUT
     ) -> bool:
-        """
-        轮询等待服务就绪。
-
-        通过访问 /health 端点判断服务是否启动完成。
-
-        Args:
-            url: 服务基础 URL。
-            timeout: 超时时间（秒）。
-
-        Returns:
-            True 表示服务已就绪，False 表示超时。
-        """
+        """轮询等待服务就绪（访问 /health）。"""
         health_url = f"{url.rstrip('/')}/health"
         logger.info(f"Waiting for service ready: {health_url} (timeout={timeout}s)")
-
         start = time.time()
         while time.time() - start < timeout:
             try:
@@ -70,7 +123,6 @@ class EnvironmentAdapter(ABC):
             except Exception:
                 pass
             time.sleep(_POLL_INTERVAL)
-
         logger.warning(f"Service not ready after {timeout}s: {health_url}")
         return False
 
@@ -81,217 +133,97 @@ class EnvironmentAdapter(ABC):
 class JavaSpringAdapter(EnvironmentAdapter):
     """Java Spring Boot 环境适配器。"""
 
-    def start_service(self, repo_path: str) -> str:
-        port = 8080
-        try:
-            import docker
+    image_tag = "test-spring-boot:latest"
+    port = 8080
+    language = "java"
+    coverage_tool = "jacoco"
 
-            client = docker.from_env()
-            image_tag = "test-spring-boot:latest"
-            logger.info(f"Building Docker image for Java Spring Boot: {repo_path}")
-            client.images.build(path=repo_path, tag=image_tag, rm=True)
-            client.containers.run(
-                image_tag,
-                ports={f"{port}/tcp": port},
-                detach=True,
-                auto_remove=True,
-            )
-            logger.info(f"Spring Boot container started on port {port}")
-        except Exception as e:
-            logger.warning(
-                f"Docker startup failed for Spring Boot: {e}. "
-                f"Falling back to localhost:{port}"
-            )
-        return f"http://localhost:{port}"
+    def start_service(self, repo_path: str, coverage: bool = False) -> str:
+        return self._build_and_run(repo_path, self.image_tag, self.port, coverage)
 
 
 class PythonFlaskAdapter(EnvironmentAdapter):
     """Python Flask 环境适配器。"""
 
-    def start_service(self, repo_path: str) -> str:
-        port = 5000
-        try:
-            import docker
+    image_tag = "test-flask:latest"
+    port = 5000
+    language = "python"
+    coverage_tool = "coverage.py"
 
-            client = docker.from_env()
-            image_tag = "test-flask:latest"
-            logger.info(f"Building Docker image for Flask: {repo_path}")
-            client.images.build(path=repo_path, tag=image_tag, rm=True)
-            client.containers.run(
-                image_tag,
-                ports={f"{port}/tcp": port},
-                detach=True,
-                auto_remove=True,
-            )
-            logger.info(f"Flask container started on port {port}")
-        except Exception as e:
-            logger.warning(
-                f"Docker startup failed for Flask: {e}. "
-                f"Falling back to localhost:{port}"
-            )
-        return f"http://localhost:{port}"
+    def start_service(self, repo_path: str, coverage: bool = False) -> str:
+        return self._build_and_run(repo_path, self.image_tag, self.port, coverage)
 
 
 class PythonFastAPIAdapter(EnvironmentAdapter):
     """Python FastAPI 环境适配器。"""
 
-    def start_service(self, repo_path: str) -> str:
-        port = 8000
-        try:
-            import docker
+    image_tag = "test-fastapi:latest"
+    port = 8000
+    language = "python"
+    coverage_tool = "coverage.py"
 
-            client = docker.from_env()
-            image_tag = "test-fastapi:latest"
-            logger.info(f"Building Docker image for FastAPI: {repo_path}")
-            client.images.build(path=repo_path, tag=image_tag, rm=True)
-            client.containers.run(
-                image_tag,
-                ports={f"{port}/tcp": port},
-                detach=True,
-                auto_remove=True,
-            )
-            logger.info(f"FastAPI container started on port {port}")
-        except Exception as e:
-            logger.warning(
-                f"Docker startup failed for FastAPI: {e}. "
-                f"Falling back to localhost:{port}"
-            )
-        return f"http://localhost:{port}"
+    def start_service(self, repo_path: str, coverage: bool = False) -> str:
+        return self._build_and_run(repo_path, self.image_tag, self.port, coverage)
 
 
 class PythonDjangoAdapter(EnvironmentAdapter):
     """Python Django 环境适配器。"""
 
-    def start_service(self, repo_path: str) -> str:
-        port = 8000
-        try:
-            import docker
+    image_tag = "test-django:latest"
+    port = 8000
+    language = "python"
+    coverage_tool = "coverage.py"
 
-            client = docker.from_env()
-            image_tag = "test-django:latest"
-            logger.info(f"Building Docker image for Django: {repo_path}")
-            client.images.build(path=repo_path, tag=image_tag, rm=True)
-            client.containers.run(
-                image_tag,
-                ports={f"{port}/tcp": port},
-                detach=True,
-                auto_remove=True,
-            )
-            logger.info(f"Django container started on port {port}")
-        except Exception as e:
-            logger.warning(
-                f"Docker startup failed for Django: {e}. "
-                f"Falling back to localhost:{port}"
-            )
-        return f"http://localhost:{port}"
+    def start_service(self, repo_path: str, coverage: bool = False) -> str:
+        return self._build_and_run(repo_path, self.image_tag, self.port, coverage)
 
 
 class GoGinAdapter(EnvironmentAdapter):
     """Go Gin 环境适配器。"""
 
-    def start_service(self, repo_path: str) -> str:
-        port = 8080
-        try:
-            import docker
+    image_tag = "test-gin:latest"
+    port = 8080
+    language = "go"
+    coverage_tool = "cobertura"
 
-            client = docker.from_env()
-            image_tag = "test-gin:latest"
-            logger.info(f"Building Docker image for Go Gin: {repo_path}")
-            client.images.build(path=repo_path, tag=image_tag, rm=True)
-            client.containers.run(
-                image_tag,
-                ports={f"{port}/tcp": port},
-                detach=True,
-                auto_remove=True,
-            )
-            logger.info(f"Gin container started on port {port}")
-        except Exception as e:
-            logger.warning(
-                f"Docker startup failed for Gin: {e}. "
-                f"Falling back to localhost:{port}"
-            )
-        return f"http://localhost:{port}"
+    def start_service(self, repo_path: str, coverage: bool = False) -> str:
+        return self._build_and_run(repo_path, self.image_tag, self.port, coverage)
 
 
 class NodeExpressAdapter(EnvironmentAdapter):
     """Node.js Express 环境适配器。"""
 
-    def start_service(self, repo_path: str) -> str:
-        port = 3000
-        try:
-            import docker
+    image_tag = "test-express:latest"
+    port = 3000
+    language = "javascript"
+    coverage_tool = "istanbul"
 
-            client = docker.from_env()
-            image_tag = "test-express:latest"
-            logger.info(f"Building Docker image for Express: {repo_path}")
-            client.images.build(path=repo_path, tag=image_tag, rm=True)
-            client.containers.run(
-                image_tag,
-                ports={f"{port}/tcp": port},
-                detach=True,
-                auto_remove=True,
-            )
-            logger.info(f"Express container started on port {port}")
-        except Exception as e:
-            logger.warning(
-                f"Docker startup failed for Express: {e}. "
-                f"Falling back to localhost:{port}"
-            )
-        return f"http://localhost:{port}"
+    def start_service(self, repo_path: str, coverage: bool = False) -> str:
+        return self._build_and_run(repo_path, self.image_tag, self.port, coverage)
 
 
 class NodeNestJSAdapter(EnvironmentAdapter):
     """Node.js NestJS 环境适配器。"""
 
-    def start_service(self, repo_path: str) -> str:
-        port = 3000
-        try:
-            import docker
+    image_tag = "test-nestjs:latest"
+    port = 3000
+    language = "javascript"
+    coverage_tool = "istanbul"
 
-            client = docker.from_env()
-            image_tag = "test-nestjs:latest"
-            logger.info(f"Building Docker image for NestJS: {repo_path}")
-            client.images.build(path=repo_path, tag=image_tag, rm=True)
-            client.containers.run(
-                image_tag,
-                ports={f"{port}/tcp": port},
-                detach=True,
-                auto_remove=True,
-            )
-            logger.info(f"NestJS container started on port {port}")
-        except Exception as e:
-            logger.warning(
-                f"Docker startup failed for NestJS: {e}. "
-                f"Falling back to localhost:{port}"
-            )
-        return f"http://localhost:{port}"
+    def start_service(self, repo_path: str, coverage: bool = False) -> str:
+        return self._build_and_run(repo_path, self.image_tag, self.port, coverage)
 
 
 class PhpLaravelAdapter(EnvironmentAdapter):
     """PHP Laravel 环境适配器。"""
 
-    def start_service(self, repo_path: str) -> str:
-        port = 8000
-        try:
-            import docker
+    image_tag = "test-laravel:latest"
+    port = 8000
+    language = "php"
+    coverage_tool = "cobertura"
 
-            client = docker.from_env()
-            image_tag = "test-laravel:latest"
-            logger.info(f"Building Docker image for Laravel: {repo_path}")
-            client.images.build(path=repo_path, tag=image_tag, rm=True)
-            client.containers.run(
-                image_tag,
-                ports={f"{port}/tcp": port},
-                detach=True,
-                auto_remove=True,
-            )
-            logger.info(f"Laravel container started on port {port}")
-        except Exception as e:
-            logger.warning(
-                f"Docker startup failed for Laravel: {e}. "
-                f"Falling back to localhost:{port}"
-            )
-        return f"http://localhost:{port}"
+    def start_service(self, repo_path: str, coverage: bool = False) -> str:
+        return self._build_and_run(repo_path, self.image_tag, self.port, coverage)
 
 
 # ==================== 工厂 ====================
@@ -313,15 +245,6 @@ class EnvironmentAdapterFactory:
 
     @classmethod
     def get_adapter(cls, stack: str) -> EnvironmentAdapter:
-        """
-        获取指定技术栈的环境适配器。
-
-        Args:
-            stack: 技术栈名称。
-
-        Returns:
-            环境适配器实例。未知技术栈返回 FastAPI 适配器作为默认。
-        """
         adapter_class = cls.ADAPTERS.get(stack)
         if adapter_class is None:
             logger.warning(

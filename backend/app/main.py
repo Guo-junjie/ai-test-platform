@@ -191,6 +191,14 @@ app.include_router(analysis_router, prefix="/api/analysis", tags=["代码解析"
 from app.api.doc import router as doc_router
 app.include_router(doc_router, prefix="/api/docs", tags=["接口文档资产"])
 
+# 需求文档解析（能力10：AI 解析需求文档，与接口文档并列）
+from app.api.requirement_doc import router as requirement_doc_router
+app.include_router(requirement_doc_router, prefix="/api/requirements", tags=["需求文档解析"])
+
+# 代码覆盖率（能力11：行/分支覆盖率采集与展示）
+from app.api.coverage import router as coverage_router
+app.include_router(coverage_router, prefix="/api/coverage", tags=["代码覆盖率"])
+
 # 用例资产（能力3：AI 生成单接口用例·接纳闭环）
 from app.api.case_library import router as case_library_router
 app.include_router(case_library_router, prefix="/api/cases", tags=["用例资产"])

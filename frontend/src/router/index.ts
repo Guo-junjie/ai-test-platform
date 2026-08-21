@@ -49,6 +49,12 @@ const routes = [
     meta: { title: '接口文档解析' },
   },
   {
+    path: '/requirement-parse',
+    name: 'RequirementParse',
+    component: () => import('@/views/RequirementParse.vue'),
+    meta: { title: '需求文档解析' },
+  },
+  {
     path: '/doc-review',
     name: 'DocReview',
     component: () => import('@/views/DocReview.vue'),

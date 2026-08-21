@@ -140,13 +140,49 @@ def prepare_environment(
     stack_name = tech_stack.get("stack", "unknown")
     repo_path = analysis_result.get("repo_path", "/app/data/repos")
 
-    from app.modules.execution.env_adapters import EnvironmentAdapterFactory
+    from app.modules.execution.env_adapters import (
+        AUTO_COVERAGE,
+        EnvironmentAdapterFactory,
+    )
 
     adapter = EnvironmentAdapterFactory.get_adapter(stack_name)
-    service_url = adapter.start_service(repo_path)
+    # 能力11：AUTO_COVERAGE=1 时启动带覆盖率探针的 SUT；否则普通启动
+    service_url = adapter.start_service(repo_path, coverage=AUTO_COVERAGE)
 
     # 等待服务就绪
     ready = adapter.wait_for_ready(service_url, timeout=120)
+
+    # 暂存覆盖率采集元数据（供 aggregate 阶段自动采集；未启用则无副作用）
+    if AUTO_COVERAGE and getattr(adapter, "_coverage_meta", None):
+        meta = dict(adapter._coverage_meta)
+        meta["test_run_id"] = test_run_id
+        # 解析 project_id 一并暂存
+        try:
+            from app.utils.database import AsyncSessionLocal
+            from sqlalchemy import select
+
+            from app.models.database import TestRun
+
+            async def _pid():
+                async with AsyncSessionLocal() as s:
+                    r = (
+                        await s.execute(select(TestRun.project_id).where(TestRun.id == test_run_id))
+                    ).scalar_one_or_none()
+                    return str(r) if r else None
+
+            import asyncio
+
+            pid = asyncio.run(_pid())
+            if pid:
+                meta["project_id"] = pid
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[coverage] resolve project_id failed: {e}")
+        _get_sync_redis().set(
+            f"coverage:meta:{test_run_id}",
+            json.dumps(meta, ensure_ascii=False),
+            ex=7 * 24 * 3600,
+        )
+        logger.info(f"[{test_run_id}] coverage auto-collect armed")
     if not ready:
         logger.warning(
             f"[{test_run_id}] Service not ready, proceeding anyway with {service_url}"
@@ -391,5 +427,28 @@ def aggregate_results(
         f"passed={summary['total_passed']}, "
         f"failed={summary['total_failed']}"
     )
+
+    # 能力11：若启用自动覆盖率，测试完成后采集并入库
+    try:
+        import asyncio
+        import json as _json
+
+        cov_meta_raw = _get_sync_redis().get(f"coverage:meta:{test_run_id}")
+        if cov_meta_raw:
+            meta = _json.loads(cov_meta_raw)
+            _get_sync_redis().delete(f"coverage:meta:{test_run_id}")
+            pid = meta.get("project_id")
+            if pid:
+                from app.modules.coverage.collector import collect_and_store
+
+                rid = asyncio.run(collect_and_store(test_run_id, meta, pid))
+                if rid:
+                    logger.info(f"[{test_run_id}] auto coverage report {rid} stored")
+                else:
+                    logger.warning(
+                        f"[{test_run_id}] auto coverage collect failed; 请改用手动上传报告"
+                    )
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[coverage] aggregate auto-collect error: {e}")
 
     return summary

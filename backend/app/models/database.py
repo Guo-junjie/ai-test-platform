@@ -567,6 +567,85 @@ class DocReview(Base):
     )
 
 
+# ==================== 需求文档资产（能力10：需求文档解析） ====================
+
+
+class RequirementDoc(Base):
+    """需求文档记录 — 一次上传/解析的需求文档实体"""
+
+    __tablename__ = "requirement_docs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    uploader_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    filename = Column(String(500), nullable=False)
+    format = Column(SAEnum(DocFormat, name="docformat"), nullable=False)
+    storage_key = Column(String(500), nullable=False)  # 本地卷路径 /app/data/uploads/requirements/<uuid>.<ext>
+    raw_text = Column(Text, nullable=True)             # docx/pdf 抽取全文缓存
+    status = Column(SAEnum(DocStatus, name="docstatus"), default=DocStatus.PARSING, nullable=False)
+    parse_engine = Column(String(20), nullable=True)    # ai / rule_degraded
+    requirements_json = Column(JSONB, default={})      # 解析结果（RequirementSpec 序列化）
+    error = Column(Text, nullable=True)
+    file_size = Column(Integer, default=0)
+    sha256 = Column(String(64), nullable=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_requirement_docs_project", "project_id"),
+        Index("idx_requirement_docs_status", "status"),
+    )
+
+
+# ==================== 代码覆盖率报告（能力11：行/分支覆盖率采集） ====================
+
+
+class CoverageTool(PyEnum):
+    """覆盖率工具"""
+    COVERAGE_PY = "coverage.py"   # Python, 输出 Cobertura XML
+    JACOCO = "jacoco"             # Java, 输出 JaCoCo XML
+    ISTANBUL = "istanbul"         # Node, 输出 lcov / cobertura
+    COBERTURA = "cobertura"       # 通用 Cobertura XML
+
+
+class CoverageSource(PyEnum):
+    """覆盖率来源"""
+    AUTO = "auto"     # 平台启动 SUT 时自动挂载探针采集
+    UPLOAD = "upload" # 用户手动上传报告
+
+
+class CoverageReport(Base):
+    """覆盖率报告 — 一次测试运行 / 一次上传的覆盖率快照"""
+
+    __tablename__ = "coverage_reports"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    test_run_id = Column(UUID(as_uuid=True), ForeignKey("test_runs.id"), nullable=True)
+    uploader_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    tool = Column(SAEnum(CoverageTool, name="coveragetool"), nullable=False)
+    language = Column(String(50), nullable=True)  # python / java / javascript ...
+    source = Column(SAEnum(CoverageSource, name="coveragesource"), default=CoverageSource.UPLOAD, nullable=False)
+
+    # 汇总指标（百分比，0-100，保留 2 位）
+    line_rate = Column(Float, default=0.0)       # 行覆盖率 %
+    branch_rate = Column(Float, default=0.0)     # 分支覆盖率 %
+    total_lines = Column(Integer, default=0)
+    covered_lines = Column(Integer, default=0)
+    total_branches = Column(Integer, default=0)
+    covered_branches = Column(Integer, default=0)
+
+    files_json = Column(JSONB, default=[])       # 文件级明细 [{path, line_rate, branch_rate, total_lines, covered_lines}]
+    storage_key = Column(String(500), nullable=True)  # 原始报告文件路径（上传时）
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_coverage_reports_project", "project_id"),
+        Index("idx_coverage_reports_test_run", "test_run_id"),
+    )
+
+
+
 # ==================== 能力3：用例资产表（接纳闭环） ====================
 
 

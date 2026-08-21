@@ -82,3 +82,32 @@ class ApiSpec(BaseModel):
     def endpoint_keys(self) -> list[str]:
         """返回 [METHOD PATH, ...] 用于预览/勾选/导入去重。"""
         return [f"{e.method} {e.path}" for e in self.endpoints]
+
+
+# ==================== 需求文档中间表示（能力10：需求文档解析） ====================
+
+
+class RequirementItem(BaseModel):
+    """单条需求（功能点 / 验收标准）"""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    rid: str = ""  # 需求编号，如 REQ-001 / FR-2.1；AI 未给则运行时补全
+    title: str = ""  # 需求标题
+    description: str = ""  # 需求描述 / 详细说明
+    category: str = "functional"  # functional(功能) / non_functional(非功能) / interface(接口) / security(安全)
+    priority: str = "P2"  # P0/P1/P2/P3
+    source_section: str = ""  # 出处章节，便于人工复核
+    acceptance_criteria: list[str] = Field(default_factory=list)  # 验收标准
+    related_modules: list[str] = Field(default_factory=list)  # 关联模块 / 子系统
+    test_points: list[str] = Field(default_factory=list)  # 建议测试点（AI 提示，供生成用例参考）
+    confidence: float = 0.8  # AI 自评置信度；规则兜底 0.3
+    evidence: str = ""  # AI 标注的原文出处
+
+
+class RequirementSpec(BaseModel):
+    """需求文档级统一中间表示"""
+
+    title: str = ""
+    total: int = 0
+    items: list[RequirementItem] = Field(default_factory=list)
