@@ -389,8 +389,10 @@ async def test_model_connection(
     """
     测试模型连通性 — 对 api_base_url 发起轻量探活请求。
 
-    OpenAI 兼容接口探测 ``GET {base}/models``；其它 provider 直接 GET base_url。
-    只要拿到 HTTP 响应且状态码非 401/403 即视为可达。
+    OpenAI 兼容接口探测 ``GET {base}/v1/models``；Anthropic 探测 ``GET {base}/v1/models``；
+    其它 provider（custom）直接 GET base_url。
+    仅 2xx/3xx 视为「连接成功」；401/403 视为可达但鉴权失败；4xx（如 404）视为
+    路径/配置有误并给出提示，不再误报为成功。
     """
     config = await _get_config_or_404(config_id, db)
 
@@ -411,7 +413,7 @@ async def test_model_connection(
             "anthropic-version": config.api_version or "2023-06-01",
         }
     elif provider in ("openai", "local"):
-        probe_url = f"{base_url}/models"
+        probe_url = f"{base_url}/v1/models" if not base_url.endswith("/v1") else f"{base_url}/models"
         headers = {"Authorization": f"Bearer {api_key}"}
     else:
         probe_url = base_url
@@ -446,7 +448,11 @@ async def test_model_connection(
             "message": "服务可达，但 API Key 鉴权失败，请检查密钥",
         }
 
-    ok = response.status_code < 500
+    # 仅 2xx/3xx 视为连接成功；4xx（如 404）说明路径/配置有误，必须明确提示，不能再报“成功”
+    ok = response.status_code < 400
+    hint = ""
+    if response.status_code == 404:
+        hint = "（探测路径返回 404：常见原因是 api_base_url 含多余路径，如 /v1、/anthropic、/openai 等，应只填到域名或网关根地址）"
 
     logger.info(
         f"Model connection test: {config_id} -> {probe_url} "
@@ -461,7 +467,7 @@ async def test_model_connection(
             "probe_url": probe_url,
             "model_name": config.model_name,
         },
-        "message": "连接成功" if ok else f"服务返回异常状态码: {response.status_code}",
+        "message": "连接成功" if ok else f"服务返回异常状态码: {response.status_code}{hint}",
     }
 
 
