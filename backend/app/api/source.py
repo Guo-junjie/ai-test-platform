@@ -17,7 +17,8 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.database import Project, SourceType as ModelSourceType
+from app.models.database import Project, SourceType as ModelSourceType, User
+from app.modules.auth.dependencies import get_current_user
 from app.modules.source import SourceConfig, SourceAdapterFactory, SourceType
 from app.utils.crypto import encrypt_dict, mask_api_key
 from app.utils.database import get_db_session
@@ -145,6 +146,7 @@ async def list_source_configs(
 @router.post("/connect")
 async def connect_source(
     req: ConnectRequest,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ):
     """
@@ -169,7 +171,7 @@ async def connect_source(
         id=uuid.uuid4(),
         name=req.name,
         description=f"Data source: {req.source_type}",
-        owner_id=uuid.UUID(req.owner_id) if req.owner_id else uuid.uuid4(),
+        owner_id=current_user.id,
         source_type=source_type,
         source_config=encrypted_config,
         quality_gate_config={},
