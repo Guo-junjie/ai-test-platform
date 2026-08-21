@@ -120,7 +120,7 @@ async def generate_cases(
     }
 
 
-@router.get("/")
+@router.get("")
 async def list_cases(
     project_id: str | None = None,
     endpoint_id: str | None = None,

@@ -29,7 +29,7 @@ from app.utils.database import get_db_session
 router = APIRouter()
 
 
-@router.get("/")
+@router.get("")
 async def list_tasks(
     project_id: str | None = None,
     status: str | None = None,
@@ -48,7 +48,7 @@ async def list_tasks(
     return {"code": 0, "data": result, "message": "ok"}
 
 
-@router.post("/")
+@router.post("")
 async def create_task(
     req: ScheduledTaskRequest,
     db: AsyncSession = Depends(get_db_session),

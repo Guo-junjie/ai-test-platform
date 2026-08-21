@@ -116,7 +116,6 @@ async def _load_cr(db: AsyncSession, cr_id: str) -> ChangeRequest:
 
 
 @router.get("")
-@router.get("/")
 async def list_change_requests(
     status: str | None = None,
     current_user: User = Depends(require_reviewer),

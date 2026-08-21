@@ -52,7 +52,7 @@ class CreateTestRunRequest(BaseModel):
 # ==================== API 路由 ====================
 
 
-@router.get("/")
+@router.get("")
 async def list_test_runs(
     db: AsyncSession = Depends(get_db_session),
 ):
@@ -88,7 +88,7 @@ async def list_test_runs(
     }
 
 
-@router.post("/")
+@router.post("")
 async def create_test_run(
     req: CreateTestRunRequest,
     current_user: User = Depends(get_current_user),

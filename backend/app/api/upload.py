@@ -32,7 +32,7 @@ SUPPORTED_EXTENSIONS = (".zip", ".tar.gz", ".tgz", ".tar")
 CHUNK_SIZE = 1024 * 1024
 
 
-@router.post("/")
+@router.post("")
 async def upload_code(file: UploadFile = File(...)):
     """
     上传代码压缩包。

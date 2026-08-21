@@ -125,7 +125,7 @@ def _build_preview(steps: list[dict]) -> list[dict]:
 # ==================== 端点（注意声明顺序） ====================
 
 
-@router.post("/")
+@router.post("")
 async def create_scenario(
     req: CreateScenarioRequest,
     current_user: User = Depends(get_current_user),
@@ -176,7 +176,7 @@ async def create_scenario(
     }
 
 
-@router.get("/")
+@router.get("")
 async def list_scenarios(
     project_id: str,
     status: str | None = None,

@@ -699,7 +699,7 @@ async def parse_doc(
     }
 
 
-@router.get("/")
+@router.get("")
 async def list_docs(
     project_id: str,
     status: str | None = None,

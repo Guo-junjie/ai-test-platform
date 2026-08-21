@@ -129,7 +129,6 @@ async def create_notification(
 
 
 @router.get("")
-@router.get("/")
 async def list_notifications(
     unread_only: bool = Query(False, description="仅返回未读通知"),
     limit: int = Query(100, ge=1, le=500),

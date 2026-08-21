@@ -46,7 +46,6 @@ def _project_to_dict(project: Project) -> dict:
 
 
 @router.get("")
-@router.get("/")
 async def list_projects(
     include_inactive: bool = Query(
         False, description="是否包含已停用项目，默认只返回 is_active=True 的项目"

@@ -29,7 +29,7 @@ from app.utils.database import get_db_session
 router = APIRouter()
 
 
-@router.get("/")
+@router.get("")
 async def list_databases(
     project_id: str | None = None,
     db: AsyncSession = Depends(get_db_session),
@@ -69,7 +69,7 @@ async def list_databases(
     }
 
 
-@router.post("/")
+@router.post("")
 async def create_database(
     req: DatabaseConnectionRequest,
     db: AsyncSession = Depends(get_db_session),

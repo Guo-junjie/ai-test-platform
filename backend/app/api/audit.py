@@ -20,7 +20,7 @@ from app.utils.database import get_db_session
 router = APIRouter()
 
 
-@router.get("/")
+@router.get("")
 async def list_audit_logs(
     user_id: str | None = Query(None, description="按用户ID过滤"),
     action: str | None = Query(None, description="按操作类型过滤"),

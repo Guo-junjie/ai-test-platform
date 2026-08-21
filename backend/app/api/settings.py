@@ -74,7 +74,7 @@ class TestGateRequest(BaseModel):
 # ==================== 系统配置 ====================
 
 
-@router.get("/")
+@router.get("")
 async def get_system_settings(
     current_user: User = Depends(require_admin),
 ):
@@ -101,7 +101,7 @@ async def get_system_settings(
     }
 
 
-@router.put("/")
+@router.put("")
 async def update_system_settings(
     data: dict[str, Any],
     request: Request,
