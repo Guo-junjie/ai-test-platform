@@ -14,6 +14,7 @@
         text-color="#ffffffa6"
         active-text-color="#ffffff"
       >
+        <!-- 工作台 -->
         <el-menu-item index="/dashboard">
           <el-icon><DataLine /></el-icon>
           <span>仪表盘</span>
@@ -22,83 +23,45 @@
           <el-icon><VideoPlay /></el-icon>
           <span>测试运行</span>
         </el-menu-item>
-        <el-menu-item index="/quality-trend">
-          <el-icon><TrendCharts /></el-icon>
-          <span>质量趋势</span>
-        </el-menu-item>
-        <el-menu-item index="/sources">
-          <el-icon><Connection /></el-icon>
-          <span>数据源管理</span>
-        </el-menu-item>
 
-        <el-menu-item index="/analysis">
-          <el-icon><Search /></el-icon>
-          <span>代码解析</span>
-        </el-menu-item>
+        <!-- 测试资产 -->
+        <el-sub-menu index="g-assets">
+          <template #title>
+            <el-icon><Files /></el-icon>
+            <span>测试资产</span>
+          </template>
+          <el-menu-item index="/case-library">用例库</el-menu-item>
+          <el-menu-item index="/scenario">场景编排</el-menu-item>
+          <el-menu-item index="/doc-parser">接口文档解析</el-menu-item>
+          <el-menu-item index="/doc-review">接口文档评审</el-menu-item>
+          <el-menu-item index="/requirement-parse">需求文档解析</el-menu-item>
+          <el-menu-item index="/coverage">代码覆盖率</el-menu-item>
+          <el-menu-item index="/report-analysis">报告分析</el-menu-item>
+        </el-sub-menu>
 
-        <el-menu-item index="/doc-parser">
-          <el-icon><Document /></el-icon>
-          <span>接口文档解析</span>
-        </el-menu-item>
-        <el-menu-item index="/doc-review">
-          <el-icon><DocumentChecked /></el-icon>
-          <span>接口文档评审</span>
-        </el-menu-item>
-        <el-menu-item index="/requirement-parse">
-          <el-icon><Memo /></el-icon>
-          <span>需求文档解析</span>
-        </el-menu-item>
+        <!-- 数据智能 -->
+        <el-sub-menu index="g-data">
+          <template #title>
+            <el-icon><Cpu /></el-icon>
+            <span>数据智能</span>
+          </template>
+          <el-menu-item index="/analysis">代码解析</el-menu-item>
+          <el-menu-item index="/scripts">脚本生成</el-menu-item>
+          <el-menu-item index="/database-manage">数据库连接</el-menu-item>
+          <el-menu-item index="/scheduled-tasks">定时任务</el-menu-item>
+          <el-menu-item index="/quality-trend">质量趋势</el-menu-item>
+          <el-menu-item index="/sources">数据源管理</el-menu-item>
+        </el-sub-menu>
 
-        <el-menu-item index="/case-library">
-          <el-icon><Files /></el-icon>
-          <span>用例库</span>
-        </el-menu-item>
-        <el-menu-item index="/scenario">
-          <el-icon><Share /></el-icon>
-          <span>场景编排</span>
-        </el-menu-item>
-
-        <el-menu-item index="/scripts">
-          <el-icon><EditPen /></el-icon>
-          <span>脚本生成</span>
-        </el-menu-item>
-        <el-menu-item index="/database-manage">
-          <el-icon><Coin /></el-icon>
-          <span>数据库连接</span>
-        </el-menu-item>
-        <el-menu-item index="/coverage">
-          <el-icon><Histogram /></el-icon>
-          <span>代码覆盖率</span>
-        </el-menu-item>
-        <el-menu-item index="/scheduled-tasks">
-          <el-icon><Clock /></el-icon>
-          <span>定时任务</span>
-        </el-menu-item>
-        <el-menu-item index="/report-analysis">
-          <el-icon><PieChart /></el-icon>
-          <span>报告分析</span>
-        </el-menu-item>
-
-        <el-menu-item index="/notifications">
-          <el-icon><Bell /></el-icon>
-          <span>消息通知</span>
-        </el-menu-item>
-
-        <el-menu-item v-if="authStore.isAdmin" index="/user-management">
-          <el-icon><UserFilled /></el-icon>
-          <span>用户管理</span>
-        </el-menu-item>
-
-        <el-menu-item v-if="canAudit" index="/approvals">
-          <el-icon><CircleCheck /></el-icon>
-          <span>审核中心</span>
-        </el-menu-item>
-
-        <el-sub-menu index="settings">
+        <!-- 系统 -->
+        <el-sub-menu index="g-system">
           <template #title>
             <el-icon><Setting /></el-icon>
-            <span>系统配置</span>
+            <span>系统</span>
           </template>
+          <el-menu-item v-if="authStore.isAdmin" index="/user-management">用户管理</el-menu-item>
+          <el-menu-item v-if="canAudit" index="/approvals">审核中心</el-menu-item>
+          <el-menu-item index="/notifications">消息通知</el-menu-item>
           <el-menu-item v-if="authStore.isAdmin" index="/settings">基础配置</el-menu-item>
           <el-menu-item v-if="authStore.isAdmin" index="/settings/models">AI 模型配置</el-menu-item>
           <el-menu-item index="/settings/quality-gate">质量门禁</el-menu-item>

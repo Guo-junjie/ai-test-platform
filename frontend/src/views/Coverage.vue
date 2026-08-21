@@ -224,8 +224,12 @@ async function loadProjects() {
     const res: any = await projectApi.getList()
     const d = res?.data ?? res
     projects.value = Array.isArray(d) ? d : d?.list || d?.items || []
-  } catch {
+    if (!projects.value.length) {
+      ElMessage.warning('未获取到项目列表，请先在「数据源管理 / 项目」中创建项目后再上传覆盖率')
+    }
+  } catch (e: any) {
     projects.value = []
+    ElMessage.error('加载项目列表失败：' + (e?.message || e?.response?.data?.detail || '请检查后端 /api/projects 是否可用'))
   }
 }
 

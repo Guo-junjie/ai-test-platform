@@ -92,6 +92,10 @@ app = FastAPI(
     description="企业级 AI 自动化测试与质量保障平台",
     version="1.0.0",
     lifespan=lifespan,
+    # 前端 axios 仍有部分调用带尾斜杠（/test-runs/、/upload/、/settings/ 等），
+    # 后端索引路由统一用 ("") 无斜杠约定；开启后 Starlette 自动把尾斜杠
+    # 重定向到无斜杠路径，消除大量 307 + 个别页面的 network error（如覆盖率页空白）。
+    redirect_slashes=True,
 )
 
 # CORS 配置
