@@ -380,12 +380,13 @@ async function testConnection(row: any): Promise<void> {
   testingId.value = row.id
   try {
     const res: any = await modelApi.testConnection(row.id)
-    const d = res?.data ?? res ?? {}
-    if (d.success === false) {
-      ElMessage.error(`连接失败：${d.error || d.message || '未知错误'}`)
+    // 后端约定：HTTP 始终返回 200，code=0 成功 / code=1 失败（含 message 说明）
+    const code: number | undefined = res?.code
+    const msg: string = res?.message || res?.data?.message || ''
+    if (code === 1 || res?.data?.success === false) {
+      ElMessage.error(`连接失败：${msg || '未知错误'}`)
     } else {
-      const latency = d.latency_ms ? `（${d.latency_ms}ms）` : ''
-      ElMessage.success(`连接成功${latency}`)
+      ElMessage.success('连接成功')
     }
   } catch (e: any) {
     ElMessage.error(e?.message || '连接测试失败')
