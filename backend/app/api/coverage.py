@@ -27,6 +27,7 @@ from app.models.database import (
     Project,
     User,
 )
+from app.modules.auth.dependencies import get_current_user
 from app.modules.coverage.parser import parse_coverage_report
 from app.utils.database import get_db_session
 from app.utils.logger import get_logger
