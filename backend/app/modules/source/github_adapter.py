@@ -92,7 +92,32 @@ class GitHubAdapter(CodeSourceAdapter):
             clone_kwargs["branch"] = config.branch
 
         logger.info(f"Cloning from {config.repo_url} to {local_path}")
-        repo = git.Repo.clone_from(authed_url, str(local_path), **clone_kwargs)
+        try:
+            repo = git.Repo.clone_from(authed_url, str(local_path), **clone_kwargs)
+        except Exception as e:
+            # 将 git 原始鉴权错误翻译成清晰、可操作的中文提示，并转为
+            # ValueError 以便上层直接返回 4xx、且不再被重试装饰器重复重试。
+            err_text = (getattr(e, "stderr", "") or str(e) or "").lower()
+            if "write access to repository not granted" in err_text or "403" in err_text:
+                raise ValueError(
+                    "GitHub 克隆失败：token 无权访问该仓库（HTTP 403）。"
+                    "请检查：① token 所属 GitHub 账号是否为该仓库的所有者/协作者；"
+                    "② 若为 fine-grained token，需在 'Repository access' 中授权该仓库"
+                    "并授予 Contents 读权限；③ 若为 classic token，需包含 repo 权限范围。"
+                    f"仓库={config.repo_url}"
+                )
+            if "bad credentials" in err_text or "401" in err_text:
+                raise ValueError(
+                    "GitHub 克隆失败：token 无效或已过期（HTTP 401 bad credentials），"
+                    "请重新生成 Personal Access Token 并更新数据源配置。"
+                )
+            if "repository not found" in err_text or "could not read password" in err_text:
+                raise ValueError(
+                    "GitHub 克隆失败：仓库不存在或凭据无效"
+                    "（私有仓库需有效的可读 token）。"
+                    f"请确认仓库地址与 token 正确。仓库={config.repo_url}"
+                )
+            raise
 
         # 如果指定了 commit_sha，checkout 到对应版本
         if config.commit_sha:

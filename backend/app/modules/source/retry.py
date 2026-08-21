@@ -56,6 +56,15 @@ def _is_auth_error(exc: Exception) -> bool:
         "permission denied",
         "invalid credentials",
         "authentication failed",
+        # GitHub 鉴权失败特征（避免被当作网络错误反复重试）
+        "write access to repository not granted",
+        "could not read password",
+        "bad credentials",
+        "repository not found",
+        "repository access denied",
+        "remote: forbidden",
+        "403",
+        "401",
     ]
     return any(keyword in error_text for keyword in auth_keywords)
 
