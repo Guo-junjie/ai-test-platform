@@ -87,7 +87,7 @@ export const uploadApi = {
   upload: (file: File) => {
     const formData = new FormData()
     formData.append('file', file)
-    return api.post('/upload/', formData, {
+    return api.post('/upload', formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
       timeout: 120000,
     })
@@ -96,8 +96,8 @@ export const uploadApi = {
 
 // ============ 测试任务 ============
 export const testRunApi = {
-  list: () => api.get('/test-runs/'),
-  create: (data: any) => api.post('/test-runs/', data),
+  list: () => api.get('/test-runs'),
+  create: (data: any) => api.post('/test-runs', data),
   get: (id: string) => api.get(`/test-runs/${id}`),
   getProgress: (id: string) => api.get(`/test-runs/${id}/progress`),
   cancel: (id: string) => api.post(`/test-runs/${id}/cancel`),
@@ -181,8 +181,8 @@ export const dashboardApi = {
 // ============ 系统配置 ============
 export const systemApi = {
   health: () => api.get('/health'),
-  getSettings: () => api.get('/settings/'),
-  updateSettings: (data: any) => api.put('/settings/', data),
+  getSettings: () => api.get('/settings'),
+  updateSettings: (data: any) => api.put('/settings', data),
   getQualityGateConfig: () => api.get('/settings/quality-gate'),
   updateQualityGateConfig: (data: any) => api.put('/settings/quality-gate', data),
   testQualityGate: (data: any) => api.post('/settings/quality-gate/test', data),
@@ -192,7 +192,7 @@ export const systemApi = {
 
 // ============ 审计日志 ============
 export const auditApi = {
-  list: (params?: any) => api.get('/audit/', { params }),
+  list: (params?: any) => api.get('/audit', { params }),
   getStatistics: (days?: number) => api.get('/audit/statistics', { params: { days } }),
 }
 
