@@ -51,6 +51,55 @@ class UnifiedModelClient:
         else:
             raise ValueError(f"Unsupported provider: {self.config.provider}")
 
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        """
+        批量嵌入，返回与 texts 等长的 list[float[]]。
+
+        - OPENAI: self._client.embeddings.create(model=..., input=texts)
+                  取 [d.embedding for d in resp.data]（无 _client 时走 httpx）
+        - CUSTOM: _embed_httpx(texts)（POST {api_base_url}/embeddings）
+        - ANTHROPIC: 抛 NotImplementedError（Anthropic 无 embedding API）
+        - 其他: 抛 ValueError
+        """
+        if self.config.provider == ModelProvider.OPENAI:
+            return await self._embed_openai(texts)
+        elif self.config.provider == ModelProvider.CUSTOM:
+            return await self._embed_httpx(texts)
+        elif self.config.provider == ModelProvider.ANTHROPIC:
+            raise NotImplementedError(
+                "Anthropic 无 embedding API，请用 OPENAI/CUSTOM 嵌入模型"
+            )
+        else:
+            raise ValueError(f"Unsupported provider for embedding: {self.config.provider}")
+
+    async def _embed_openai(self, texts: list[str]) -> list[list[float]]:
+        """OpenAI 兼容嵌入；有 openai SDK 客户端走 SDK，否则走 httpx。"""
+        if self._client:
+            response = await self._client.embeddings.create(
+                model=self.config.model_name,
+                input=texts,
+            )
+            return [d.embedding for d in response.data]
+        return await self._embed_openai_httpx(texts)
+
+    async def _embed_openai_httpx(self, texts: list[str]) -> list[list[float]]:
+        """使用 httpx 调用 OpenAI 兼容 /embeddings 接口（无需 openai 包）。"""
+        headers = {
+            "Authorization": f"Bearer {self.config.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {"model": self.config.model_name, "input": texts}
+        url = f"{self.config.api_base_url.rstrip('/')}/embeddings"
+        async with httpx.AsyncClient(timeout=self.config.timeout) as client:
+            response = await client.post(url, json=payload, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+            return [d["embedding"] for d in data["data"]]
+
+    async def _embed_httpx(self, texts: list[str]) -> list[list[float]]:
+        """CUSTOM provider 嵌入：POST {api_base_url}/embeddings。"""
+        return await self._embed_openai_httpx(texts)
+
     async def _call_openai(
         self, messages: list[dict], temp: float, max_tok: int, json_mode: bool
     ) -> str:

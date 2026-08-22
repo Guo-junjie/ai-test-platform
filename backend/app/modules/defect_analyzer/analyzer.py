@@ -13,6 +13,7 @@ import uuid
 from typing import Any
 
 from app.modules.ai.model_router import ModelNotConfiguredError, ModelRouter, get_model_router
+from app.modules.knowledge.retriever import retrieve_and_inject
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -170,7 +171,14 @@ class DefectAnalyzer:
         request_data = result.get("request", {})
         expected = result.get("expected", {})
 
-        prompt = f"""分析以下 API 测试失败，判断缺陷类型和根因。
+        # 能力12：注入历史相似缺陷（开关关闭/异常自动为空，不改主流程）
+        error_summary = f"{case_name} {case_type} {actual_status} {error_message}"
+        kb = ""
+        try:
+            kb = await retrieve_and_inject(None, error_summary, "defect", top_k=5)
+        except Exception:
+            kb = ""
+        prompt = (kb + "\n\n" if kb else "") + f"""分析以下 API 测试失败，判断缺陷类型和根因。
 
 测试用例信息:
 - 用例名称: {case_name}
@@ -244,7 +252,14 @@ class DefectAnalyzer:
         error_rate = result.get("error_rate", 0)
         total_requests = result.get("total_requests", 0)
 
-        prompt = f"""分析以下性能测试结果，判断性能瓶颈根因。
+        # 能力12：注入历史相似性能缺陷（开关关闭/异常自动为空，不改主流程）
+        error_summary = f"{case_name} 性能 avg_rt={avg_rt}ms p95={p95}ms 错误率={error_rate}%"
+        kb = ""
+        try:
+            kb = await retrieve_and_inject(None, error_summary, "defect", top_k=5)
+        except Exception:
+            kb = ""
+        prompt = (kb + "\n\n" if kb else "") + f"""分析以下性能测试结果，判断性能瓶颈根因。
 
 性能测试信息:
 - 场景名称: {case_name}
@@ -307,7 +322,14 @@ class DefectAnalyzer:
         executed_steps = result.get("executed_steps", 0)
         step_results = result.get("step_results", [])
 
-        prompt = f"""分析以下集成测试失败，判断缺陷根因。
+        # 能力12：注入历史相似集成缺陷（开关关闭/异常自动为空，不改主流程）
+        error_summary = f"{case_name} 第{failure_step}步 {failure_reason}"
+        kb = ""
+        try:
+            kb = await retrieve_and_inject(None, error_summary, "defect", top_k=5)
+        except Exception:
+            kb = ""
+        prompt = (kb + "\n\n" if kb else "") + f"""分析以下集成测试失败，判断缺陷根因。
 
 集成测试信息:
 - 场景名称: {case_name}

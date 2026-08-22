@@ -57,4 +57,6 @@ class ModelRoutingConfig(BaseModel):
     sql_generation_model_id: str = "default"
     # 能力9：AI 报告分析（失败分析/摘要/对比）
     report_analysis_model_id: str = "default"
+    # 能力12：嵌入模型插槽（未单独配置时降级到 fallback）
+    embedding_model_id: str = "default"
     fallback_model_id: str = "default"

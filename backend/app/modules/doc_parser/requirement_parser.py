@@ -17,6 +17,7 @@ from typing import Optional
 from loguru import logger
 
 from app.modules.ai.model_router import ModelNotConfiguredError, get_model_router
+from app.modules.knowledge.retriever import retrieve_and_inject
 from app.modules.doc_parser.schemas import RequirementItem
 
 
@@ -49,7 +50,7 @@ _PROMPT_TEMPLATE = """请解析以下需求文档文本：
 {text}
 ===== 文档结束 =====
 
-按系统要求输出 JSON。"""
+{glossary}按系统要求输出 JSON。"""
 
 
 def _parse_json_response(text: str) -> Optional[dict]:
@@ -185,12 +186,18 @@ async def parse_requirements(
     if use_ai:
         try:
             router = get_model_router()
+            glossary = ""
+            try:
+                glossary = await retrieve_and_inject(None, raw_text[:500], "term", top_k=10)
+            except Exception:
+                glossary = ""
+            glossary_block = f"{glossary}\n\n" if glossary else ""
             chunks = _split_chunks(raw_text, max_chars=12000)
             sem = asyncio.Semaphore(3)
 
             async def _one(chunk: str):
                 async with sem:
-                    prompt = _PROMPT_TEMPLATE.format(text=chunk)
+                    prompt = _PROMPT_TEMPLATE.format(text=chunk, glossary=glossary_block)
                     try:
                         resp = await router.call(
                             use_case="doc_parse",

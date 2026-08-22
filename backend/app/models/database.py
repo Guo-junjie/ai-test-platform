@@ -63,6 +63,16 @@ class UserRole(PyEnum):
     VIEWER = "viewer"
 
 
+# ==================== 能力12 枚举 ====================
+
+class KBChunkType(PyEnum):
+    """知识库切片类型（SAEnum 必须显式 name=，避开 PG 枚举名大小写坑）"""
+    DEFECT = "defect"
+    CASE = "case"
+    DOC = "doc"
+    TERM = "term"
+
+
 # ==================== 能力3/4 枚举 ====================
 
 
@@ -199,6 +209,8 @@ class ModelRouting(Base):
     sql_generation_model_id = Column(String(64), ForeignKey("ai_model_configs.id"), nullable=True)
     report_analysis_model_id = Column(String(64), ForeignKey("ai_model_configs.id"), nullable=True)
     fallback_model_id = Column(String(64), ForeignKey("ai_model_configs.id"), nullable=False)
+    # 能力12：嵌入模型插槽（nullable=True，老库兼容）
+    embedding_model_id = Column(String(64), ForeignKey("ai_model_configs.id"), nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
@@ -824,6 +836,53 @@ class AIAnalysisResult(Base):
     )
 
 
+# ==================== 能力12：知识库 RAG ====================
+
+class KnowledgeChunk(Base):
+    """知识库切片表 — embedding 用 JSONB 存 float[]，检索在 Python 侧算余弦（不依赖 pgvector）。"""
+    __tablename__ = "knowledge_chunks"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # SAEnum 必须显式 name=，否则 PG 枚举名全小写易触发 asyncpg DatatypeMismatchError
+    kb_type = Column(SAEnum(KBChunkType, name="kbchunktype"), nullable=False, index=True)
+    source_ref = Column(String(200), nullable=True, index=True)
+    content = Column(Text, nullable=False)
+    # JSONB 存 float[]；无嵌入模型时为 NULL（关键词检索兜底）
+    embedding = Column(JSONB, nullable=True)
+    meta = Column(JSONB, default={})
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        Index("ix_knowledge_chunks_type_created", "kb_type", "created_at"),
+    )
+
+
+class KnowledgeTerm(Base):
+    """业务术语表 — 零配置必可用的术语检索来源，重建后纳入 term 类切片。"""
+    __tablename__ = "knowledge_terms"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    term = Column(String(200), nullable=False, index=True)
+    aliases = Column(JSONB, default=[])          # list[str]
+    technical_meaning = Column(Text, nullable=False)
+    domain = Column(String(100), nullable=True, index=True)
+    meta = Column(JSONB, default={})
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class KBRebuildState(Base):
+    """知识库重建状态机（单行表，供 API 与 Celery Worker 跨进程共享状态）。"""
+    __tablename__ = "kb_rebuild_state"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    state = Column(String(20), default="idle", nullable=False)  # idle | running | failed
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_rebuild = Column(DateTime, nullable=True)
+    last_rebuild_chunks = Column(Integer, nullable=True)
+    error = Column(Text, nullable=True)
+
+
 # ==================== 数据库初始化 ====================
 
 async def init_db():
@@ -989,3 +1048,34 @@ async def init_db():
         logger.warning(f"Skip model_routing new slot columns sync (connection error): {e}")
     else:
         logger.info("ModelRouting script_generation/sql_generation/report_analysis columns ensured")
+
+    # 能力12：补齐 model_routing.embedding_model_id 列（嵌入模型插槽，nullable=True 老库兼容）。
+    # create_all 不会 ALTER 既有表，故此处用幂等 ADD COLUMN IF NOT EXISTS 兜底。
+    try:
+        async with async_engine.connect() as conn:
+            autocommit_conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
+            try:
+                await autocommit_conn.execute(
+                    text("ALTER TABLE model_routing ADD COLUMN IF NOT EXISTS embedding_model_id VARCHAR(64)")
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to add column embedding_model_id: {e}. "
+                    f"请手动 ALTER 或执行 `docker compose down -v` 重建数据库。"
+                )
+    except Exception as e:
+        logger.warning(f"Skip model_routing embedding_model_id column sync (connection error): {e}")
+    else:
+        logger.info("ModelRouting embedding_model_id column ensured")
+
+    # 能力12：best-effort 启用 pgvector 快路径（失败仅记日志，代码绝不依赖；
+    # 检索使用 JSONB + Python 侧余弦相似度，不要求 pgvector 扩展）。
+    try:
+        async with async_engine.connect() as conn:
+            ac = await conn.execution_options(isolation_level="AUTOCOMMIT")
+            try:
+                await ac.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            except Exception as e:
+                logger.info(f"pgvector extension not available (optional, skipped): {e}")
+    except Exception as e:
+        logger.warning(f"Skip pgvector init: {e}")

@@ -373,4 +373,44 @@ export const reportAnalysisApi = {
     api.post(`/results/${resultId}/compare`, data, { timeout: 300000 }),
 }
 
+// ============ 知识库 RAG（能力12：状态概览 / 术语表维护 / 检索预览） ============
+export type KbType = 'defect' | 'case' | 'doc' | 'term'
+
+export const knowledgeApi = {
+  /** 知识库概览：enabled / 切片数 / 术语数 / 嵌入模型 / 上次重建时间 */
+  getStatus: () => api.get('/knowledge'),
+  /** 一键重建：省略 kbType 表示全部重建 */
+  rebuild: (kbType?: KbType) =>
+    api.post('/knowledge/rebuild', kbType ? { kb_type: kbType } : {}),
+  /** 术语列表（分页 + 关键词搜索 q） */
+  listTerms: (params: { page?: number; size?: number; q?: string }) =>
+    api.get('/knowledge/terms', { params }),
+  /** 新建术语 */
+  createTerm: (data: {
+    term: string
+    technical_meaning: string
+    aliases?: string[]
+    domain?: string
+    meta?: Record<string, unknown>
+  }) => api.post('/knowledge/terms', data),
+  /** 术语详情 */
+  getTerm: (id: string) => api.get(`/knowledge/terms/${id}`),
+  /** 更新术语（字段全可选） */
+  updateTerm: (
+    id: string,
+    data: {
+      term?: string
+      technical_meaning?: string
+      aliases?: string[]
+      domain?: string
+      meta?: Record<string, unknown>
+    }
+  ) => api.put(`/knowledge/terms/${id}`, data),
+  /** 删除术语 */
+  removeTerm: (id: string) => api.delete(`/knowledge/terms/${id}`),
+  /** 检索预览 */
+  search: (data: { query: string; kb_type: string; top_k?: number }) =>
+    api.post('/knowledge/search', data),
+}
+
 export default api

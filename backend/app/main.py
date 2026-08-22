@@ -246,3 +246,7 @@ app.include_router(scheduled_tasks_router, prefix="/api/scheduled-tasks", tags=[
 # 报告分析（能力9，复用现有 /api/reports 和 /api/results 前缀）
 from app.api.report_analysis import router as report_analysis_router
 app.include_router(report_analysis_router, prefix="/api", tags=["报告分析"])
+
+# 知识库 RAG（能力12：状态概览 / 术语表维护 / 检索预览）
+from app.api.knowledge import router as knowledge_router
+app.include_router(knowledge_router, prefix="/api/knowledge", tags=["知识库RAG"])

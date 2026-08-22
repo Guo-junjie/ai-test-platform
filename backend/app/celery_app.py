@@ -13,6 +13,7 @@ celery_app = Celery(
         "app.modules.execution.engine",
         "app.modules.pipeline",
         "app.modules.scheduler.tasks",
+        "app.modules.knowledge.tasks",
     ],
 )
 

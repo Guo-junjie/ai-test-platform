@@ -17,6 +17,7 @@ import uuid
 from typing import Any
 
 from app.modules.ai.model_router import ModelNotConfiguredError, get_model_router
+from app.modules.knowledge.retriever import retrieve_and_inject
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -51,7 +52,14 @@ class TestCaseGenerator:
             测试用例列表，每个用例包含 case_id, case_type, case_name,
             request, expected, priority, description。
         """
-        prompt = self._build_prompt(api_info, business_analysis)
+        # 能力12：注入历史有效用例（开关关闭/异常自动为空，不改主流程）
+        kb_query = f"{api_info.get('http_method', '')} {api_info.get('path', '')} {business_analysis.get('business_purpose', '')}"
+        kb = ""
+        try:
+            kb = await retrieve_and_inject(None, kb_query, "case", top_k=5)
+        except Exception:
+            kb = ""
+        prompt = (kb + "\n\n" if kb else "") + self._build_prompt(api_info, business_analysis)
 
         try:
             response = await self.router.call(

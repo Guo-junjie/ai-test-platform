@@ -62,6 +62,8 @@ class ModelRouter:
             "sql_generation": self.routing.sql_generation_model_id or self.routing.case_generation_model_id,
             # 能力9：报告分析；未单独配置时降级到 fallback 插槽
             "report_analysis": self.routing.report_analysis_model_id or self.routing.fallback_model_id,
+            # 能力12：嵌入模型；未单独配置时降级到 fallback 插槽
+            "embedding": self.routing.embedding_model_id or self.routing.fallback_model_id,
         }
 
         config_id = config_id_map.get(use_case)

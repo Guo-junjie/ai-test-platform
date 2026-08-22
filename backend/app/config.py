@@ -57,6 +57,9 @@ class Settings(BaseModel):
     CUSTOM_MODEL_API_KEY: str = os.getenv("CUSTOM_MODEL_API_KEY", "")
     CUSTOM_MODEL_NAME: str = os.getenv("CUSTOM_MODEL_NAME", "")
 
+    # 知识库 RAG 总开关（能力12，默认关闭）：关闭时注入点完全不改变主流程行为
+    KB_RAG_ENABLED: bool = os.getenv("KB_RAG_ENABLED", "false").lower() == "true"
+
     # 文件路径
     WORKSPACE_DIR: str = os.getenv("WORKSPACE_DIR", "/app/data/repos")
     REPORT_DIR: str = os.getenv("REPORT_DIR", "/app/data/reports")
