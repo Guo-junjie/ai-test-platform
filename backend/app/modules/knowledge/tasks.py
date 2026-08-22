@@ -11,15 +11,18 @@ from app.modules.knowledge.retriever import get_rebuild_state, set_rebuild_state
 
 
 @celery_app.task(name="app.modules.knowledge.tasks.rebuild_knowledge_base", bind=True)
-def rebuild_knowledge_base(self, kb_type: str | None = None) -> dict:
-    """触发指定 kb_type（或 None=全部）的全量重建。
+def rebuild_knowledge_base(
+    self, kb_type: str | None = None, force_full: bool = False
+) -> dict:
+    """触发指定 kb_type（或 None=全部）的重建（增量/全量）。
 
-    内部 asyncio.run(_rebuild(kb_type))。
+    force_full=False 走增量（默认），True 走全量清空重插。
+    内部 asyncio.run(_rebuild(kb_type, force_full))。
     """
-    return asyncio.run(_rebuild(kb_type))
+    return asyncio.run(_rebuild(kb_type, force_full))
 
 
-async def _rebuild(kb_type: str | None) -> dict:
+async def _rebuild(kb_type: str | None, force_full: bool = False) -> dict:
     """全量重建逻辑（在 Celery Worker 进程内运行）。
 
     重活必须在 Celery 里，API 只 .delay()，避免阻塞 FastAPI 事件循环。
@@ -35,7 +38,7 @@ async def _rebuild(kb_type: str | None) -> dict:
     try:
         async with AsyncSessionLocal() as db:
             for t in types:
-                n = await rebuild_kb_type(db, t)
+                n = await rebuild_kb_type(db, t, force_full=force_full)
                 total += n
             await db.commit()
         finished = datetime.now(timezone.utc)

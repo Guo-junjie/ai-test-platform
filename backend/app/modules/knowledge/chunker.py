@@ -42,11 +42,14 @@ def build_chunk_records(
     *,
     max_chars: int = 1000,
     overlap: int = 100,
+    src_hash: str | None = None,
 ) -> list[dict[str, Any]]:
     """切片并生成 knowledge_chunks 行(dict)列表。
 
     每条含: {id, kb_type, source_ref, content, embedding(null), meta, created_at}
     embedding 初始为 None，由 embedder 回填。
+    meta 统一并入 _src_hash（内容哈希）：用于增量重建的变更检测。
+    src_hash 为 None 时不写入该键（全量重建路径保持原行为）。
     """
     import uuid
     from datetime import datetime, timezone
@@ -62,7 +65,7 @@ def build_chunk_records(
                 "source_ref": source_ref,
                 "content": piece,
                 "embedding": None,
-                "meta": meta or {},
+                "meta": {**(meta or {}), "_src_hash": src_hash},
                 "created_at": now,
             }
         )

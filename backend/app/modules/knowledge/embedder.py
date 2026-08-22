@@ -1,4 +1,5 @@
 """嵌入层：复用 ModelRouter 的 'embedding' use_case；无模型时返回 None 降级。"""
+import hashlib
 import uuid
 from datetime import datetime, timezone
 
@@ -148,14 +149,24 @@ async def _fetch_source_rows(
     return rows
 
 
-async def rebuild_kb_type(db: AsyncSession, kb_type: str) -> int:
-    """对一个 kb_type 执行全量重建。
+async def rebuild_kb_type(
+    db: AsyncSession, kb_type: str, force_full: bool = False
+) -> int:
+    """对一个 kb_type 执行重建（增量或全量）。
 
-    1) 按 kb_type 从对应源表取数据
-    2) build_chunk_records 切片
-    3) embed_texts 嵌入（None 安全）
-    4) 先 DELETE 该 kb_type 旧 chunks，再批量插入
-    返回总切片数。
+    force_full=True  → 旧逻辑（DELETE 该 kb_type 全量 + 全插），清空全部旧 chunk；
+    force_full=False → 增量：仅对内容哈希变更的 source_ref 重算，并清理孤儿 chunk。
+    返回写入 chunk 数。
+    """
+    if force_full:
+        return await _full_rebuild_kb_type(db, kb_type)
+    return await _incremental_rebuild_kb_type(db, kb_type)
+
+
+async def _full_rebuild_kb_type(db: AsyncSession, kb_type: str) -> int:
+    """旧的全量重建逻辑（清空该 kb_type 全部 chunk 后重插）。
+
+    保留原行为：build_chunk_records 不写入 _src_hash（首次增量会整体重算，符合预期）。
     """
     rows = await _fetch_source_rows(db, kb_type)
     records: list[dict] = []
@@ -177,3 +188,100 @@ async def rebuild_kb_type(db: AsyncSession, kb_type: str) -> int:
     )
     count = await upsert_chunks(db, records)
     return count
+
+
+async def _incremental_rebuild_kb_type(db: AsyncSession, kb_type: str) -> int:
+    """增量重建：仅对内容哈希变更的 source_ref 重算，并清理孤儿 chunk。
+
+    1) 拉取当前源行 (source_ref -> (content, meta))
+    2) 读取已存 chunk 的 _src_hash（按 source_ref 分组取其一）
+    3) 计算当前内容哈希 sha256(content)[:16]，哈希不一致 → 视为变更/新增
+    4) 孤儿：源表已删但 chunk 仍在的 source_ref
+    5) 变更/新增：先删该 ref 旧 chunk，再重插（带新哈希 + 重新 embed，None 安全）
+    6) 孤儿：限定 kb_type 批量删除，杜绝跨类型误删
+    """
+    # 1) 当前源行
+    rows = await _fetch_source_rows(db, kb_type)
+    current: dict[str, tuple[str, dict]] = {}
+    for source_ref, content, meta in rows:
+        current[source_ref] = (content, meta)
+
+    # 2) 已存 chunk 的 _src_hash（按 source_ref 分组，取其一）
+    existing = (
+        await db.execute(
+            select(KnowledgeChunk).where(
+                KnowledgeChunk.kb_type == KBChunkType(kb_type)
+            )
+        )
+    ).scalars().all()
+    existing_hash: dict[str, str | None] = {}
+    for c in existing:
+        h = (c.meta or {}).get("_src_hash") if c.meta else None
+        existing_hash.setdefault(c.source_ref, h)
+
+    # 3) 计算当前哈希，判定变更 / 新增
+    changed_refs: list[tuple[str, str, dict, str]] = []
+    for source_ref, (content, meta) in current.items():
+        src_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
+        if existing_hash.get(source_ref) != src_hash:
+            changed_refs.append((source_ref, content, meta, src_hash))
+
+    # 首次增量：老 chunk 无 _src_hash，会触发整体重算（预期行为，仅记日志）
+    if existing_hash and any(v is None for v in existing_hash.values()):
+        logger.info(
+            f"[KB incremental] kb_type={kb_type} 存在无 _src_hash 老 chunk，"
+            "将整体重算其所属 source_ref（首次增量预期行为）"
+        )
+
+    # 4) 孤儿：源表已无、但 chunk 仍在
+    orphan_refs = [ref for ref in existing_hash if ref not in current]
+
+    total = 0
+    # 5) 变更/新增：先删该 ref 旧 chunk，再重插（带新哈希 + 重新 embed）
+    for source_ref, content, meta, src_hash in changed_refs:
+        await delete_chunks_by_source_ref(db, kb_type, source_ref)
+        records = build_chunk_records(
+            content, kb_type, source_ref, meta, src_hash=src_hash
+        )
+        if records:
+            texts = [r["content"] for r in records]
+            emb = await embed_texts(texts)  # None 安全 → 关键词兜底
+            if emb is not None:
+                for i, r in enumerate(records):
+                    r["embedding"] = emb[i] if i < len(emb) else None
+            total += await upsert_chunks(db, records)
+
+    # 6) 孤儿清理（限定 kb_type，避免跨类型误删）
+    if orphan_refs:
+        await delete_chunks_by_source_refs(db, kb_type, orphan_refs)
+
+    return total
+
+
+async def delete_chunks_by_source_ref(
+    db: AsyncSession, kb_type: str, source_ref: str
+) -> None:
+    """删除指定 kb_type 下某个 source_ref 的全部 chunk（源行粒度增量删插）。"""
+    await db.execute(
+        delete(KnowledgeChunk).where(
+            KnowledgeChunk.kb_type == KBChunkType(kb_type),
+            KnowledgeChunk.source_ref == source_ref,
+        )
+    )
+
+
+async def delete_chunks_by_source_refs(
+    db: AsyncSession, kb_type: str, refs: list[str]
+) -> None:
+    """批量删除指定 kb_type 下多个 source_ref 的 chunk（孤儿清理）。
+
+    refs 为空直接返回；限定 kb_type 防止跨类型误删。
+    """
+    if not refs:
+        return
+    await db.execute(
+        delete(KnowledgeChunk).where(
+            KnowledgeChunk.kb_type == KBChunkType(kb_type),
+            KnowledgeChunk.source_ref.in_(refs),
+        )
+    )

@@ -25,6 +25,9 @@ from app.models.database import (  # noqa: F401
     Defect,
     TestReport,
     AuditLog,
+    KnowledgeChunk,
+    KnowledgeTerm,
+    KBRebuildState,
 )
 
 # Alembic 配置对象

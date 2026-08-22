@@ -76,6 +76,7 @@ class SearchRequest(BaseModel):
 
 class RebuildRequest(BaseModel):
     kb_type: str | None = None
+    force_full: bool = False  # 默认增量；True 走全量清空重插
 
 
 # ==================== 内部工具 ====================
@@ -147,6 +148,10 @@ async def get_kb_status(
     except Exception:
         embedding_model_id = None
 
+    # 语义就绪信号：开关开 且 已配置嵌入模型；不做实时 probe（避免烧嵌入配额/延迟/崩溃）
+    embedding_ready = bool(settings.KB_RAG_ENABLED) and bool(embedding_model_id)
+    retrieval_mode = "semantic" if embedding_ready else "keyword"
+
     state_info = {"state": "idle", "last_rebuild": None}
     try:
         state_info = await get_rebuild_state(db)
@@ -161,6 +166,8 @@ async def get_kb_status(
             "chunk_counts": chunk_counts,
             "term_count": term_count,
             "embedding_model_id": embedding_model_id,
+            "embedding_ready": embedding_ready,
+            "retrieval_mode": retrieval_mode,
             "state": state_info.get("state", "idle"),
             "last_rebuild": state_info.get("last_rebuild"),
         },
@@ -197,7 +204,7 @@ async def rebuild_knowledge(
         db, "running", updated_at=datetime.now(timezone.utc), error=None
     )
     try:
-        task = rebuild_knowledge_base.delay(req.kb_type)
+        task = rebuild_knowledge_base.delay(req.kb_type, req.force_full)
     except Exception as exc:  # noqa: BLE001
         await set_rebuild_state(db, "idle", error=f"队列不可用: {exc}")
         return {"code": 1, "data": None, "message": f"重建任务提交失败: {exc}"}
