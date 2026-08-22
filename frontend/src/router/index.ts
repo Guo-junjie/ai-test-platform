@@ -156,6 +156,12 @@ const routes = [
     component: () => import('@/views/Coverage.vue'),
     meta: { title: '代码覆盖率' },
   },
+  {
+    path: '/knowledge',
+    name: 'KnowledgeBase',
+    component: () => import('@/views/KnowledgeBase.vue'),
+    meta: { title: '知识库RAG' },
+  },
   // 兜底：任何未注册路径统一回仪表盘，避免匹配失败时 router-view 渲染空白页且无任何报错
   {
     path: '/:pathMatch(.*)*',
