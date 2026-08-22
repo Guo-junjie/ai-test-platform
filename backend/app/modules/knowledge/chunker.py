@@ -58,6 +58,9 @@ def build_chunk_records(
     records: list[dict[str, Any]] = []
     now = datetime.now(timezone.utc)
     for piece in pieces:
+        merged_meta: dict[str, Any] = {**(meta or {})}
+        if src_hash is not None:
+            merged_meta["_src_hash"] = src_hash
         records.append(
             {
                 "id": uuid.uuid4(),
@@ -65,7 +68,7 @@ def build_chunk_records(
                 "source_ref": source_ref,
                 "content": piece,
                 "embedding": None,
-                "meta": {**(meta or {}), "_src_hash": src_hash},
+                "meta": merged_meta,
                 "created_at": now,
             }
         )

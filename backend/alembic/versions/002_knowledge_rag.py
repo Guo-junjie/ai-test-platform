@@ -84,9 +84,17 @@ def upgrade() -> None:
             sa.Column("created_at", sa.DateTime(), nullable=True),
             sa.PrimaryKeyConstraint("id"),
         )
-        # 普通（非唯一）索引：一个 source_ref 对应多条 chunk，绝不建唯一约束
+        # 普通（非唯一）索引：一个 source_ref 对应多条 chunk，绝不建唯一约束。
+        # 同时补上与 ORM/database.py 一致的单列索引，避免 future alembic
+        # autogenerate 持续吐 CREATE INDEX 差异（F1）。
         op.create_index(
             "ix_knowledge_chunks_source_ref", "knowledge_chunks", ["source_ref"]
+        )
+        op.create_index(
+            "ix_knowledge_chunks_kb_type", "knowledge_chunks", ["kb_type"]
+        )
+        op.create_index(
+            "ix_knowledge_chunks_created_at", "knowledge_chunks", ["created_at"]
         )
         op.create_index(
             "ix_knowledge_chunks_type_created",
@@ -149,7 +157,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """对称回滚（逆序）。"""
+    """对称回滚（逆序）。全程存在性守卫，避免 init_db()/create_all 抢先建
+    表/列/索引/外键后回滚中断。
+    """
     if _is_offline():
         op.drop_constraint(
             "fk_model_routing_embedding", "model_routing", type_="foreignkey"
@@ -161,6 +171,12 @@ def downgrade() -> None:
             "ix_knowledge_chunks_type_created", table_name="knowledge_chunks"
         )
         op.drop_index(
+            "ix_knowledge_chunks_created_at", table_name="knowledge_chunks"
+        )
+        op.drop_index(
+            "ix_knowledge_chunks_kb_type", table_name="knowledge_chunks"
+        )
+        op.drop_index(
             "ix_knowledge_chunks_source_ref", table_name="knowledge_chunks"
         )
         op.drop_table("knowledge_chunks")
@@ -170,11 +186,14 @@ def downgrade() -> None:
     bind = op.get_bind()
     insp = inspect(bind)
 
+    # 先取 FK 集合——FK 是否存在决定能否 drop（F2 必修）
+    fks = {fk["name"] for fk in insp.get_foreign_keys("model_routing")}
     cols = {c["name"] for c in insp.get_columns("model_routing")}
-    if "embedding_model_id" in cols:
+    if "fk_model_routing_embedding" in fks:
         op.drop_constraint(
             "fk_model_routing_embedding", "model_routing", type_="foreignkey"
         )
+    if "embedding_model_id" in cols:
         op.drop_column("model_routing", "embedding_model_id")
 
     table_names = set(insp.get_table_names())
@@ -183,12 +202,19 @@ def downgrade() -> None:
     if "knowledge_terms" in table_names:
         op.drop_table("knowledge_terms")
     if "knowledge_chunks" in table_names:
-        op.drop_index(
-            "ix_knowledge_chunks_type_created", table_name="knowledge_chunks"
-        )
-        op.drop_index(
-            "ix_knowledge_chunks_source_ref", table_name="knowledge_chunks"
-        )
+        # 与 upgrade 对称；按存在性守卫逐个 drop（drop_table 会自动删索引，
+        # 这些显式 drop 只是为兼容部分索引由外部路径建的场景）
+        existing_idx = {
+            i["name"] for i in insp.get_indexes("knowledge_chunks")
+        }
+        for idx_name in (
+            "ix_knowledge_chunks_type_created",
+            "ix_knowledge_chunks_created_at",
+            "ix_knowledge_chunks_kb_type",
+            "ix_knowledge_chunks_source_ref",
+        ):
+            if idx_name in existing_idx:
+                op.drop_index(idx_name, table_name="knowledge_chunks")
         op.drop_table("knowledge_chunks")
 
     op.execute('DROP TYPE IF EXISTS "kbchunktype"')

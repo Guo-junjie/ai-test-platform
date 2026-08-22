@@ -233,8 +233,15 @@ async def _incremental_rebuild_kb_type(db: AsyncSession, kb_type: str) -> int:
             "将整体重算其所属 source_ref（首次增量预期行为）"
         )
 
-    # 4) 孤儿：源表已无、但 chunk 仍在
-    orphan_refs = [ref for ref in existing_hash if ref not in current]
+    # 4) 孤儿：源表已无、但 chunk 仍在。
+    # 过滤掉 source_ref IS NULL 的历史 chunk（F4）：SQL 三值逻辑下
+    # `source_ref IN (NULL)` 永不匹配 NULL，会导致它们静默滞留并每次增量
+    # 都白算一遍。如需清理 NULL 另发一条 WHERE source_ref IS NULL。
+    orphan_refs = [
+        ref
+        for ref in existing_hash
+        if ref is not None and ref not in current
+    ]
 
     total = 0
     # 5) 变更/新增：先删该 ref 旧 chunk，再重插（带新哈希 + 重新 embed）
