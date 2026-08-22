@@ -16,6 +16,12 @@
                 一键重建
               </el-button>
             </el-tooltip>
+            <el-checkbox
+              v-model="forceFull"
+              title="清空该知识库全部切片后全量重建（默认增量）"
+            >
+              强制全量重建
+            </el-checkbox>
             <el-button :disabled="rebuildLoading" @click="loadStatus">刷新</el-button>
           </div>
         </div>
@@ -51,6 +57,17 @@
             <div class="stat-label">嵌入模型</div>
             <div class="stat-value text-ellipsis" :title="status.embedding_model_id || '未配置'">
               {{ status.embedding_model_id || '未配置' }}
+            </div>
+          </div>
+        </el-col>
+        <el-col :xs="12" :sm="8" :md="6">
+          <div class="stat-item">
+            <div class="stat-label">检索模式</div>
+            <div class="stat-value">
+              <el-tag :type="status.retrieval_mode === 'semantic' ? 'success' : 'info'" effect="plain">
+                {{ status.retrieval_mode === 'semantic' ? '语义检索' : '关键词模式' }}
+              </el-tag>
+              <span v-if="status.embedding_ready" class="ready-badge">✓ 语义就绪</span>
             </div>
           </div>
         </el-col>
@@ -281,6 +298,8 @@ interface KbStatus {
   chunk_count: number
   term_count: number
   embedding_model_id: string | null
+  embedding_ready: boolean
+  retrieval_mode: string
   state: 'idle' | 'running'
   last_rebuild: string | null
 }
@@ -316,6 +335,8 @@ const status = ref<KbStatus>({
   chunk_count: 0,
   term_count: 0,
   embedding_model_id: null,
+  embedding_ready: false,
+  retrieval_mode: 'keyword',
   state: 'idle',
   last_rebuild: null,
 })
@@ -336,6 +357,8 @@ const searchKeyword = ref<string>('')
 const termsLoading = ref<boolean>(false)
 
 // ============ 重建 ============
+// 强制全量重建开关（默认增量；仅作 UI 开关，权限由「一键重建」按钮包裹）
+const forceFull = ref<boolean>(false)
 const rebuildType = ref<KbType | ''>('')
 const rebuildLoading = ref<boolean>(false)
 const rebuildDisabled = computed<boolean>(
@@ -403,6 +426,8 @@ async function loadStatus(): Promise<void> {
         chunk_count: d.chunk_count ?? 0,
         term_count: d.term_count ?? 0,
         embedding_model_id: d.embedding_model_id ?? null,
+        embedding_ready: d.embedding_ready ?? false,
+        retrieval_mode: d.retrieval_mode ?? 'keyword',
         state: d.state === 'running' ? 'running' : 'idle',
         last_rebuild: d.last_rebuild ?? null,
       }
@@ -446,7 +471,7 @@ async function handleRebuild(): Promise<void> {
   try {
     rebuildLoading.value = true
     const payload: KbType | undefined = rebuildType.value === '' ? undefined : rebuildType.value
-    const res: any = await knowledgeApi.rebuild(payload)
+    const res: any = await knowledgeApi.rebuild(payload, forceFull.value)
     if (res?.code === 0) {
       const taskId = res?.data?.task_id
       ElMessage.success(`重建任务已提交（task_id: ${taskId}），请稍后刷新查看进度`)
@@ -630,6 +655,12 @@ onMounted(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.ready-badge {
+  margin-left: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #67c23a;
 }
 .chunk-box {
   background: #f5f7fa;

@@ -202,6 +202,7 @@ const routingFields = [
   { key: 'script_generation_model_id', label: '脚本生成模型' },
   { key: 'sql_generation_model_id', label: 'SQL生成模型' },
   { key: 'report_analysis_model_id', label: '报告分析模型' },
+  { key: 'embedding_model_id', label: '嵌入模型（语义检索）' },
   { key: 'fallback_model_id', label: '备用模型' },
 ] as const
 
@@ -229,6 +230,7 @@ const routingForm = reactive<Record<string, string>>({
   script_generation_model_id: '',
   sql_generation_model_id: '',
   report_analysis_model_id: '',
+  embedding_model_id: '',
   fallback_model_id: '',
 })
 

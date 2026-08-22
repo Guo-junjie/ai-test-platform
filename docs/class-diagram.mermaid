@@ -1,176 +1,58 @@
 classDiagram
-    %% ============ 枚举 ============
-    class ScriptType {
-        <<enumeration>>
-        PRE_SCRIPT
-        POST_SCRIPT
-        SQL_SCRIPT
-    }
-    class ScheduledTaskStatus {
-        <<enumeration>>
-        ACTIVE
-        PAUSED
-        DELETED
-    }
-    class ScheduledTaskTargetType {
-        <<enumeration>>
-        SCENARIO
-        CASE_COLLECTION
-    }
-    class AnalysisType {
-        <<enumeration>>
-        FAILURE
-        REPORT_SUMMARY
-        COMPARE
-    }
-
-    %% ============ 现有模型（引用） ============
-    class TestCaseAsset {
+    class KnowledgeChunk {
         +UUID id
-        +UUID project_id
-        +Text pre_script
-        +Text post_script
-        +Text sql_script
-    }
-    class ModelRouting {
-        +String script_generation_model_id
-        +String sql_generation_model_id
-        +String report_analysis_model_id
-    }
-    class TestResult {
-        +UUID id
-        +Boolean is_passed
-        +JSONB response_body
-        +Text error_message
-        +Text error_trace
-    }
-    class TestReport {
-        +JSONB report_data
-    }
-
-    %% ============ 新增模型 ============
-    class ScriptGenerationRecord {
-        +UUID id
-        +UUID project_id
-        +UUID user_id
-        +ScriptType script_type
-        +Text nl_input
-        +JSONB context
-        +Text generated_script
-        +String model_used
+        +KBChunkType kb_type
+        +str source_ref   %% 非唯一（一个 source_ref → 多条 chunk）
+        +str content
+        +JSONB embedding  %% None=关键词模式
+        +JSONB meta       %% {_src_hash, ...}
         +DateTime created_at
     }
-    class DatabaseConnection {
+    class KBRebuildState {
+        +int id
+        +str state        %% idle|running|failed
+        +DateTime last_rebuild   %% 游标
+        +int last_rebuild_chunks
+        +str error
+    }
+    class ModelRouting {
+        +int id
+        +str code_analysis_model_id
+        +str fallback_model_id
+        +str embedding_model_id   %% 【P0-①】新增插槽
+    }
+    class KnowledgeTerm {
         +UUID id
-        +UUID project_id
-        +String name
-        +String db_type
-        +String host
-        +Integer port
-        +String database
-        +String username
-        +Text password_encrypted
-        +JSONB extra_config
+        +str term
+        +JSONB aliases
+        +str technical_meaning
+        +str domain
     }
-    class ScheduledTask {
-        +UUID id
-        +UUID project_id
-        +String name
-        +Text nl_schedule
-        +String cron_expression
-        +ScheduledTaskTargetType target_type
-        +UUID target_id
-        +JSONB target_config
-        +ScheduledTaskStatus status
-        +DateTime next_run_at
+    class Embedder {
+        +embed_texts(texts) list[float] | None
+        +embed_query(text) float | None
+        +rebuild_kb_type(db, kb_type, force_full) int
+        +_incremental_rebuild_kb_type(db, kb_type) int
+        +delete_chunks_by_source_ref(db, kb_type, ref) void
     }
-    class ScheduledTaskRun {
-        +UUID id
-        +UUID task_id
-        +String status
-        +UUID test_run_id
-        +DateTime started_at
-        +Text error_message
+    class Retriever {
+        +retrieve_and_inject(db, query, kb_type, top_k) str  %% 首行早退铁律
+        +retrieve_chunks(db, query, kb_type, top_k) list
+        +search_terms(db, query, top_k) list
+        +cosine(a, b) float
     }
-    class AIAnalysisResult {
-        +UUID id
-        +UUID project_id
-        +AnalysisType analysis_type
-        +UUID test_run_id
-        +UUID test_result_id
-        +JSONB analysis_json
-        +String model_used
+    class KBTasks {
+        +rebuild_knowledge_base(kb_type, force_full) dict
+        +_rebuild(kb_type, force_full) dict
     }
-
-    %% ============ 业务模块 ============
-    class ScriptGenerator {
-        +router ModelRouter
-        +generate(script_type, nl_input, context) dict
-        +_build_prompt() str
-        +_parse_script() str
-        +_syntax_check(code) bool
+    class KnowledgeAPI {
+        +GET "" get_kb_status()   %% 返回 embedding_ready / retrieval_mode
+        +POST /rebuild rebuild_knowledge(RebuildRequest{force_full})
+        +terms CRUD
+        +POST /search
     }
-    class SqlGenerator {
-        +router ModelRouter
-        +generate(nl_input, schema_context) dict
-        +_build_prompt() str
-    }
-    class SqlSecurity {
-        +check(sql) dict
-        +_extract_statement_types(sql) list
-        +allowed_types list
-    }
-    class CronParser {
-        +parse(nl_input) dict
-        +_rule_parse(nl_input) str
-        +_llm_parse(nl_input) str
-        +next_run(cron) DateTime
-    }
-    class SchedulerService {
-        +create(task) ScheduledTask
-        +toggle(id) None
-        +sync_beat() None
-        +trigger(task) None
-    }
-    class ReportAnalyzer {
-        +router ModelRouter
-        +analyze_failure(result_id) dict
-        +analyze_summary(run_id) dict
-        +compare(run_id_a, run_id_b) dict
-        +_build_prompt() str
-    }
-
-    %% ============ Schema ============
-    class GenerateScriptRequest {
-        +str project_id
-        +str script_type
-        +str nl_input
-        +dict context
-    }
-    class ScheduledTaskRequest {
-        +str project_id
-        +str name
-        +str cron_expression
-        +str target_type
-    }
-    class ReportAnalysisRequest {
-        +str project_id
-        +str compare_run_id
-    }
-
-    %% ============ 关系 ============
-    ScriptGenerationRecord --> ScriptType
-    DatabaseConnection --> TestCaseAsset : 无直接关联（独立表）
-    ScheduledTask --> ScheduledTaskStatus
-    ScheduledTask --> ScheduledTaskTargetType
-    ScheduledTaskRun --> ScheduledTask
-    AIAnalysisResult --> AnalysisType
-    AIAnalysisResult --> TestResult
-    AIAnalysisResult --> TestReport
-    ScriptGenerator --> ScriptGenerationRecord : 落库
-    SqlGenerator --> SqlSecurity : 校验
-    SchedulerService --> ScheduledTask : CRUD
-    SchedulerService --> ScheduledTaskRun : 历史
-    ReportAnalyzer --> AIAnalysisResult : 落库
-    ReportAnalyzer --> TestResult : 读取
-    ReportAnalyzer --> TestReport : 读取
+    Embedder ..> KnowledgeChunk : 读写
+    KBTasks ..> Embedder : 调用
+    KnowledgeAPI ..> KBTasks : .delay()
+    Retriever ..> Embedder : embed_query
+    Retriever ..> KnowledgeChunk : 查询

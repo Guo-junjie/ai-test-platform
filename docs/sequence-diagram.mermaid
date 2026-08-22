@@ -1,65 +1,28 @@
 sequenceDiagram
-    autonumber
-    actor U as 用户/前端
-    participant API as FastAPI 路由层
-    participant SG as ScriptGenerator/SqlGenerator
-    participant MR as ModelRouter
-    participant LLM as UnifiedModelClient
-    participant DB as PostgreSQL
+    participant FE as 前端 KnowledgeBase
+    participant API as KnowledgeAPI
+    participant RT as Retriever
+    participant EM as Embedder
+    participant DB as PostgreSQL(JSONB)
 
-    %% ============ 能力5/6：脚本生成 ============
-    Note over U,DB: 能力5/6 — AI 生成前置/后置脚本
-    U->>API: POST /api/scripts/generate {type: pre_script, nl_input, context}
-    API->>SG: generate(script_type, nl_input, context)
-    SG->>MR: call(use_case="script_generation", messages)
-    MR->>LLM: chat(messages)
-    LLM-->>MR: 生成代码
-    MR-->>SG: 代码文本
-    SG->>SG: _syntax_check(code) via ast.parse
-    SG-->>API: {script, syntax_valid}
-    API->>DB: INSERT script_generation_records
-    API-->>U: {code:0, data:{script, ...}}
+    FE->>API: GET /api/knowledge
+    API->>API: embedding_ready = KB_RAG_ENABLED and bool(embedding_model_id)
+    API->>API: retrieval_mode = semantic | keyword
+    API-->>FE: {embedding_ready, retrieval_mode, state, ...}
 
-    %% ============ 能力7：SQL 生成 ============
-    Note over U,DB: 能力7 — AI 生成 SQL（表结构感知 + 白名单）
-    U->>API: POST /api/scripts/generate {type: sql_script, context:{schema?}}
-    alt 未携带表结构
-        API->>DB: GET /api/databases/{id}/schema（取表结构）
-        DB-->>API: tables/columns
+    FE->>API: POST /api/knowledge/rebuild {kb_type, force_full}
+    API->>API: 防重(running+1h) → set_rebuild_state(running)
+    API->>KBTasks: rebuild_knowledge_base.delay(kb_type, force_full)
+    KBTasks->>EM: rebuild_kb_type(db, kb_type, force_full)
+    alt force_full=true
+        EM->>DB: DELETE chunks WHERE kb_type=:t
+        EM->>EM: build + embed_texts(None安全)
+        EM->>DB: INSERT chunks
+    else 增量(默认)
+        EM->>DB: SELECT 源行 + 已存 chunks(取 _src_hash)
+        EM->>EM: 算 content hash，判变更/孤儿
+        EM->>DB: DELETE chunks WHERE kb_type=:t AND source_ref IN(变更/孤儿)
+        EM->>EM: 仅对变更行 build + embed_texts + 写 _src_hash
+        EM->>DB: INSERT 新 chunks
     end
-    API->>SG: generate(sql_script, nl_input, schema)
-    SG->>MR: call(use_case="sql_generation")
-    MR->>LLM: chat(messages)
-    LLM-->>SG: SQL 语句
-    SG->>SG: SqlSecurity.check(sql) 白名单校验
-    alt 危险语句（DROP/TRUNCATE）
-        SG-->>API: 拦截 + 提示
-        API-->>U: {code:1, message:"危险SQL被拦截"}
-    else 合法（SELECT/INSERT/UPDATE/DELETE）
-        SG-->>API: {sql, safety_check}
-        API->>DB: INSERT script_generation_records
-        API-->>U: {code:0, data:{sql, ...}}
-    end
-
-    %% ============ 能力8：定时任务 ============
-    Note over U,DB: 能力8 — AI 生成定时任务
-    U->>API: POST /api/scheduled-tasks {nl_schedule, target_type, target_id}
-    API->>API: CronParser.parse(nl_schedule) 规则 + LLM 辅助
-    API->>DB: INSERT scheduled_tasks
-    API->>API: SchedulerService.sync_beat() 同步到 django-celery-beat
-    API-->>U: {code:0, data:{cron_expression, next_run_at}}
-    Note over DB: Celery Beat 按 Cron 触发
-    DB->>DB: 触发 Celery 任务 → 执行场景/用例
-    DB->>DB: INSERT scheduled_task_runs（历史）
-
-    %% ============ 能力9：报告分析 ============
-    Note over U,DB: 能力9 — AI 分析测试报告
-    U->>API: POST /api/results/{id}/ai-analysis {project_id}
-    API->>DB: SELECT test_results（request/response/logs）
-    DB-->>API: 用例执行数据
-    API->>API: ReportAnalyzer.analyze_failure(result_id)
-    API->>MR: call(use_case="report_analysis", messages)
-    MR->>LLM: chat(messages)
-    LLM-->>API: 根因分析 + 修复建议 + 置信度
-    API->>DB: INSERT ai_analysis_results
-    API-->>U: {code:0, data:{root_cause, suggestion, confidence}}
+    KBTasks->>DB: set_rebuild_state(idle, last_rebuild)
