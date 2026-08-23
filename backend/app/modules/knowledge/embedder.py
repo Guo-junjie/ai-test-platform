@@ -164,14 +164,18 @@ async def rebuild_kb_type(
 
 
 async def _full_rebuild_kb_type(db: AsyncSession, kb_type: str) -> int:
-    """旧的全量重建逻辑（清空该 kb_type 全部 chunk 后重插）。
+    """全量重建逻辑（清空该 kb_type 全部 chunk 后重插）。
 
-    保留原行为：build_chunk_records 不写入 _src_hash（首次增量会整体重算，符合预期）。
+    与增量路径一致：写入 _src_hash（content sha256[:16]），让紧接的下一次增量
+    重建能正确识别"未变更的 source_ref"而跳过重复嵌入（F6），节省嵌入 API 配额。
     """
     rows = await _fetch_source_rows(db, kb_type)
     records: list[dict] = []
     for source_ref, content, meta in rows:
-        records.extend(build_chunk_records(content, kb_type, source_ref, meta))
+        src_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
+        records.extend(
+            build_chunk_records(content, kb_type, source_ref, meta, src_hash=src_hash)
+        )
 
     if records:
         texts = [r["content"] for r in records]
