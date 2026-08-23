@@ -1,6 +1,6 @@
 """知识库全量重建 Celery 任务。需加入 celery_app.py 的 include。"""
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime
 
 from loguru import logger
 
@@ -29,7 +29,7 @@ async def _rebuild(kb_type: str | None, force_full: bool = False) -> dict:
     """
     types = [kb_type] if kb_type else ["defect", "case", "doc", "term"]
     total = 0
-    started = datetime.now(timezone.utc)
+    started = datetime.utcnow()
 
     # 标记运行中（独立 session，立即落库，前端可立即看到 state=running）
     async with AsyncSessionLocal() as s:
@@ -41,7 +41,7 @@ async def _rebuild(kb_type: str | None, force_full: bool = False) -> dict:
                 n = await rebuild_kb_type(db, t, force_full=force_full)
                 total += n
             await db.commit()
-        finished = datetime.now(timezone.utc)
+        finished = datetime.utcnow()
         async with AsyncSessionLocal() as s:
             await set_rebuild_state(
                 s,

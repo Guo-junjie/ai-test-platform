@@ -11,7 +11,7 @@
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -174,7 +174,7 @@ async def update_database(
     if req.password is not None and req.password:
         conn.password_encrypted = encrypt(req.password)
 
-    conn.updated_at = datetime.now(timezone.utc)
+    conn.updated_at = datetime.utcnow()
     await db.flush()
     await db.refresh(conn)
 

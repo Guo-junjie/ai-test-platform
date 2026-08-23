@@ -14,7 +14,7 @@
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -94,8 +94,8 @@ async def generate_cases(
             priority=case.get("priority", "P2"),
             status="DRAFT",
             source="ai_generated",
-            created_at=datetime.now(timezone.utc),
-            updated_at=datetime.now(timezone.utc),
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
         )
         db.add(asset)
         saved.append(asset)
@@ -253,7 +253,7 @@ async def update_case(
     if req.case_type is not None:
         item.case_type = req.case_type
 
-    item.updated_at = datetime.now(timezone.utc)
+    item.updated_at = datetime.utcnow()
     await db.flush()
 
     return {"code": 0, "data": None, "message": "ok"}
@@ -296,7 +296,7 @@ async def adopt_case(
         raise HTTPException(status_code=404, detail="Case not found")
 
     item.status = "ADOPTED"
-    item.updated_at = datetime.now(timezone.utc)
+    item.updated_at = datetime.utcnow()
     await db.flush()
 
     return {"code": 0, "data": None, "message": "ok"}
@@ -318,7 +318,7 @@ async def deprecate_case(
         raise HTTPException(status_code=404, detail="Case not found")
 
     item.status = "DEPRECATED"
-    item.updated_at = datetime.now(timezone.utc)
+    item.updated_at = datetime.utcnow()
     await db.flush()
 
     return {"code": 0, "data": None, "message": "ok"}
@@ -339,7 +339,7 @@ async def adopt_batch(
 
     for item in items:
         item.status = "ADOPTED"
-        item.updated_at = datetime.now(timezone.utc)
+        item.updated_at = datetime.utcnow()
 
     await db.flush()
 
@@ -375,7 +375,7 @@ async def bind_scripts(
     if req.sql_script is not None:
         item.sql_script = req.sql_script
 
-    item.updated_at = datetime.now(timezone.utc)
+    item.updated_at = datetime.utcnow()
     await db.flush()
 
     return {

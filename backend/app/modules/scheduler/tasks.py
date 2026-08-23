@@ -5,7 +5,7 @@ Scheduler Celery Tasks
 """
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 
 from app.celery_app import celery_app
 from app.utils.database import AsyncSessionLocal
@@ -64,7 +64,7 @@ async def _execute_async(task_id: str) -> dict:
                 id=uuid.uuid4(),
                 task_id=uuid.UUID(task_id),
                 status="running",
-                started_at=datetime.now(timezone.utc),
+                started_at=datetime.utcnow(),
             )
             session.add(run)
             await session.flush()
@@ -88,8 +88,8 @@ async def _execute_async(task_id: str) -> dict:
                 run.status = "failed"
                 run.error_message = f"Unknown target_type: {task.target_type}"
 
-            run.finished_at = datetime.now(timezone.utc)
-            task.last_run_at = datetime.now(timezone.utc)
+            run.finished_at = datetime.utcnow()
+            task.last_run_at = datetime.utcnow()
             task.last_run_status = run.status
             await session.flush()
 

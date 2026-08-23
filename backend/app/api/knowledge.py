@@ -8,7 +8,7 @@
 鉴权失败由依赖（require_admin / require_role）返回 403/401（符合权限验收标准）。
 """
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
@@ -193,7 +193,7 @@ async def rebuild_knowledge(
         if updated:
             try:
                 upd = datetime.fromisoformat(updated)
-                if (datetime.now(timezone.utc) - upd).total_seconds() > 3600:
+                if (datetime.utcnow() - upd).total_seconds() > 3600:
                     recent = False
             except Exception:
                 recent = True
@@ -201,7 +201,7 @@ async def rebuild_knowledge(
             return {"code": 1, "data": None, "message": "重建任务进行中，请勿重复提交"}
 
     await set_rebuild_state(
-        db, "running", updated_at=datetime.now(timezone.utc), error=None
+        db, "running", updated_at=datetime.utcnow(), error=None
     )
     try:
         task = rebuild_knowledge_base.delay(req.kb_type, req.force_full)

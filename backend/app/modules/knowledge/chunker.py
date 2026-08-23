@@ -52,11 +52,11 @@ def build_chunk_records(
     src_hash 为 None 时不写入该键（全量重建路径保持原行为）。
     """
     import uuid
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     pieces = chunk_text(text, max_chars=max_chars, overlap=overlap)
     records: list[dict[str, Any]] = []
-    now = datetime.now(timezone.utc)
+    now = datetime.utcnow()
     for piece in pieces:
         merged_meta: dict[str, Any] = {**(meta or {})}
         if src_hash is not None:

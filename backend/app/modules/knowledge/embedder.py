@@ -1,7 +1,7 @@
 """嵌入层：复用 ModelRouter 的 'embedding' use_case；无模型时返回 None 降级。"""
 import hashlib
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -60,7 +60,7 @@ async def upsert_chunks(db: AsyncSession, records: list[dict]) -> int:
             content=rec["content"],
             embedding=rec.get("embedding"),
             meta=rec.get("meta") or {},
-            created_at=rec.get("created_at") or datetime.now(timezone.utc),
+            created_at=rec.get("created_at") or datetime.utcnow(),
         )
         db.add(chunk)
         count += 1
