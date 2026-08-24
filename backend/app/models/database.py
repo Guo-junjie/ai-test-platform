@@ -948,11 +948,13 @@ async def init_db():
         logger.info(f"UserRole enum labels ensured: {', '.join(role_labels)}")
 
     # 旧库补齐 PG 枚举的小写标签（SAEnum 写 bind 用 member.value；老库 create_all 用 member.name）
-    # 涉及枚举：casesource / caseassetstatus / scenariostatus / endpointsource / docstatus / ...
+    # 涉及枚举：kbchunktype / casesource / caseassetstatus / scenariostatus / endpointsource
     # SAEnum 默认持久化是 PyEnum 成员 NAME（大写），但有些列会按 member.value（小写）写入；
-    # 当 PG 枚举仅有大写标签时，写入会抛 "invalid input value for enum casesource: 'ai_generated'"。
-    # 同时插入大写 + 小写标签，兼容两种 bind 方式（002 迁移对 kbchunktype 也用此模式）。
+    # 当 PG 枚举仅有大写标签时，写入会抛 "invalid input value for enum xxx: 'yyy'"。
+    # 同时插入大写 + 小写标签，兼容两种 bind 方式（002 迁移对 kbchunktype 也用此模式，
+    # 但**老库用户 002 迁移未生效时（init_db 启动期 create_all 已建大写枚举）**，这里兜底补小写）。
     _ENUM_CASE_PAIRS: tuple[tuple[str, type[PyEnum]], ...] = (
+        ("kbchunktype", KBChunkType),
         ("casesource", CaseSource),
         ("caseassetstatus", CaseAssetStatus),
         ("scenariostatus", ScenarioStatus),
@@ -976,7 +978,7 @@ async def init_db():
     except Exception as e:
         logger.warning(f"Skip enum case-pair sync (connection error): {e}")
     else:
-        logger.info("casesource/caseassetstatus/scenariostatus/endpointsource enum labels (both case) ensured")
+        logger.info("kbchunktype/casesource/caseassetstatus/scenariostatus/endpointsource enum labels (both case) ensured")
 
     # 旧库补齐 model_routing 两列（doc_parse_model_id / doc_review_model_id）。
     # 这两列在新增需求中加到 ModelRouting 表，使用 nullable=True 以便老库平滑迁移；
