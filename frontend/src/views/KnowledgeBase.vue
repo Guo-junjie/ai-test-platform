@@ -314,7 +314,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { knowledgeApi, KbType } from '@/api'
 import { useAuthStore } from '@/stores'
@@ -459,11 +459,57 @@ function kbTypeLabel(value: string): string {
 }
 
 // ============ 状态加载 ============
+// 上一帧状态（用于检测 running→idle 的边沿变化，弹"重建完成"提示）
+const prevState = ref<'idle' | 'running'>('idle')
+
+// 状态轮询：state==running 时每 5s 拉一次，后端 idle/failed 时停止
+let pollTimer: ReturnType<typeof setInterval> | null = null
+const STATUS_POLL_INTERVAL = 5000
+
+function startStatusPolling(): void {
+  if (pollTimer) return
+  pollTimer = setInterval(() => {
+    void loadStatus()
+  }, STATUS_POLL_INTERVAL)
+}
+
+function stopStatusPolling(): void {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+}
+
+watch(
+  () => status.value.state,
+  (newState) => {
+    if (newState === 'running') startStatusPolling()
+    else stopStatusPolling()
+  },
+  { immediate: true }
+)
+
+onUnmounted(() => {
+  stopStatusPolling()
+})
+
 async function loadStatus(): Promise<void> {
   try {
     const res: any = await knowledgeApi.getStatus()
     if (res?.code === 0 && res?.data) {
       const d = res.data
+      const newState: 'idle' | 'running' =
+        d.state === 'running' ? 'running' : 'idle'
+      const newChunkCount = d.chunk_count ?? 0
+
+      // 边沿检测：running→idle 时弹"重建完成"提示（用户体验核心改进）
+      if (prevState.value === 'running' && newState === 'idle') {
+        ElMessage.success(
+          `重建完成，共 ${newChunkCount} 个切片`
+        )
+      }
+      prevState.value = newState
+
       status.value = {
         enabled: !!d.enabled,
         chunk_counts: {
@@ -472,12 +518,12 @@ async function loadStatus(): Promise<void> {
           doc: d.chunk_counts?.doc ?? 0,
           term: d.chunk_counts?.term ?? 0,
         },
-        chunk_count: d.chunk_count ?? 0,
+        chunk_count: newChunkCount,
         term_count: d.term_count ?? 0,
         embedding_model_id: d.embedding_model_id ?? null,
         embedding_ready: d.embedding_ready ?? false,
         retrieval_mode: d.retrieval_mode ?? 'keyword',
-        state: d.state === 'running' ? 'running' : 'idle',
+        state: newState,
         last_rebuild: d.last_rebuild ?? null,
         is_stuck: !!d.is_stuck,
       }
