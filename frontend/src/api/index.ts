@@ -377,11 +377,16 @@ export const reportAnalysisApi = {
 export type KbType = 'defect' | 'case' | 'doc' | 'term'
 
 export const knowledgeApi = {
-  /** 知识库概览：enabled / 切片数 / 术语数 / 嵌入模型 / 上次重建时间 */
+  /** 知识库概览：enabled / 切片数 / 术语数 / 嵌入模型 / 上次重建时间 / 卡死判定 */
   getStatus: () => api.get('/knowledge'),
   /** 一键重建：省略 kbType 表示全部重建；forceFull=true 清空该知识库全部切片后全量重建（默认增量） */
   rebuild: (kbType?: KbType, forceFull = false) =>
     api.post('/knowledge/rebuild', { kb_type: kbType, force_full: forceFull }),
+  /** 强制重置重建状态机（admin）：用于状态卡死无法自愈时 */
+  reset: () => api.post('/knowledge/reset'),
+  /** 运行时切换 KB_RAG_ENABLED 开关（admin），无需重启 backend */
+  updateConfig: (data: { kb_rag_enabled: boolean }) =>
+    api.put('/knowledge/config', data),
   /** 术语列表（分页 + 关键词搜索 q） */
   listTerms: (params: { page?: number; size?: number; q?: string }) =>
     api.get('/knowledge/terms', { params }),

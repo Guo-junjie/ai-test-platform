@@ -883,6 +883,18 @@ class KBRebuildState(Base):
     error = Column(Text, nullable=True)
 
 
+class KBRuntimeConfig(Base):
+    """知识库运行时配置（key-value 风格，供前端开关切换，无需重启）。
+
+    env 仍是兜底默认；前端切换写入此表后，模块级缓存即时失效。
+    """
+    __tablename__ = "kb_runtime_config"
+
+    key = Column(String(64), primary_key=True)
+    value = Column(JSONB, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 # ==================== 数据库初始化 ====================
 
 async def init_db():

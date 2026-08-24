@@ -13,6 +13,7 @@ from loguru import logger
 
 from app.config import settings
 from app.utils.database import AsyncSessionLocal
+from app.modules.knowledge.runtime_config import get_kb_rag_enabled
 from app.models.database import (
     KnowledgeChunk,
     KnowledgeTerm,
@@ -189,7 +190,7 @@ async def retrieve_and_inject(
 ) -> str:
     """统一注入入口（所有注入点唯一调用）。
 
-    - KB_RAG_ENABLED=False → 直接 return ""（零开销，不改变原行为）
+    - 运行时开关关闭 → 直接 return ""（零开销，不改变原行为）
     - query 空 → return ""
     - db 为 None 时自行开短生命周期 AsyncSessionLocal() 并在 finally 关闭
     - kb_type=='term' → 调 search_terms 拼【业务术语参考】
@@ -197,9 +198,6 @@ async def retrieve_and_inject(
     - 任何异常 → 记日志并 return ""（绝不抛出，不阻塞主流程）
     返回可直接拼到 prompt 顶部的字符串。
     """
-    # 铁律：开关关闭 → 直接返回空字符串，零开销且不改变原行为
-    if not settings.KB_RAG_ENABLED:
-        return ""
     if not query or not query.strip():
         return ""
 
@@ -207,6 +205,20 @@ async def retrieve_and_inject(
     if db is None:
         db = AsyncSessionLocal()
         own_session = True
+
+    # 铁律：运行时开关关闭 → 直接返回空字符串，零开销且不改变原行为。
+    # 用 try/except 包住查开关动作，DB 异常时 fallback 到 env，绝不阻塞主流程。
+    try:
+        enabled = await get_kb_rag_enabled(db)
+        if not enabled:
+            if own_session:
+                await db.close()
+            return ""
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"retrieve_and_inject 读 KB 开关失败，按关闭处理: {exc}")
+        if own_session:
+            await db.close()
+        return ""
 
     start = time.monotonic()
     try:

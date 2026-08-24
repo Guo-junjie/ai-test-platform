@@ -37,6 +37,10 @@ from app.modules.knowledge.retriever import (
     get_rebuild_state,
     set_rebuild_state,
 )
+from app.modules.knowledge.runtime_config import (
+    get_kb_rag_enabled,
+    set_kb_rag_enabled,
+)
 from app.modules.knowledge.tasks import rebuild_knowledge_base
 
 router = APIRouter()
@@ -47,6 +51,10 @@ require_kb_term_admin = require_role(
 )
 
 _KB_TYPES = ("defect", "case", "doc", "term")
+
+# 重建状态卡死阈值（小时）：state==running 且 updated_at 超过此值视为卡死
+_REBUILD_STUCK_HOURS = 1
+_REBUILD_STUCK_SECONDS = _REBUILD_STUCK_HOURS * 3600
 
 
 # ==================== 请求模型 ====================
@@ -77,6 +85,12 @@ class SearchRequest(BaseModel):
 class RebuildRequest(BaseModel):
     kb_type: str | None = None
     force_full: bool = False  # 默认增量；True 走全量清空重插
+
+
+class ConfigUpdate(BaseModel):
+    """运行时配置更新（前端开关切换）。"""
+
+    kb_rag_enabled: bool
 
 
 # ==================== 内部工具 ====================
@@ -148,20 +162,40 @@ async def get_kb_status(
     except Exception:
         embedding_model_id = None
 
+    # 运行时开关（DB 表优先，env 兜底；前端可切换）
+    try:
+        kb_enabled = await get_kb_rag_enabled(db)
+    except Exception:
+        kb_enabled = bool(settings.KB_RAG_ENABLED)
+
     # 语义就绪信号：开关开 且 已配置嵌入模型；不做实时 probe（避免烧嵌入配额/延迟/崩溃）
-    embedding_ready = bool(settings.KB_RAG_ENABLED) and bool(embedding_model_id)
+    embedding_ready = bool(kb_enabled) and bool(embedding_model_id)
     retrieval_mode = "semantic" if embedding_ready else "keyword"
 
-    state_info = {"state": "idle", "last_rebuild": None}
+    state_info = {"state": "idle", "last_rebuild": None, "updated_at": None}
     try:
         state_info = await get_rebuild_state(db)
     except Exception:
         pass
 
+    # 卡死判定：state==running 且 updated_at 超过 1 小时视为卡死。
+    # 前端据此展示「⚠ 卡死 —强制重置」按钮 + 提示检查 celery-worker 容器。
+    is_stuck = False
+    if state_info.get("state") == "running":
+        updated_str = state_info.get("updated_at")
+        if updated_str:
+            try:
+                upd = datetime.fromisoformat(updated_str)
+                is_stuck = (
+                    datetime.utcnow() - upd
+                ).total_seconds() > _REBUILD_STUCK_SECONDS
+            except Exception:
+                pass
+
     return {
         "code": 0,
         "data": {
-            "enabled": bool(settings.KB_RAG_ENABLED),
+            "enabled": kb_enabled,
             "chunk_count": total,
             "chunk_counts": chunk_counts,
             "term_count": term_count,
@@ -170,6 +204,7 @@ async def get_kb_status(
             "retrieval_mode": retrieval_mode,
             "state": state_info.get("state", "idle"),
             "last_rebuild": state_info.get("last_rebuild"),
+            "is_stuck": is_stuck,
         },
         "message": "success",
     }
@@ -186,19 +221,28 @@ async def rebuild_knowledge(
         return {"code": 1, "data": None, "message": f"无效的 kb_type: {req.kb_type}"}
 
     state = await get_rebuild_state(db)
-    # 防重复提交：running 且更新时间在 1 小时内视为进行中（超时则视为卡死可重触发）
+    # 防重复提交：running 且更新时间在 1 小时内视为进行中（超时则视为卡死可重触发）。
+    # 卡死路径自动把状态推回 idle，再提交新任务；同时在响应里提示用户。
+    is_stuck_reset = False
     if state.get("state") == "running":
         updated = state.get("updated_at")
         recent = True
         if updated:
             try:
                 upd = datetime.fromisoformat(updated)
-                if (datetime.utcnow() - upd).total_seconds() > 3600:
+                if (datetime.utcnow() - upd).total_seconds() > _REBUILD_STUCK_SECONDS:
                     recent = False
             except Exception:
                 recent = True
         if recent:
             return {"code": 1, "data": None, "message": "重建任务进行中，请勿重复提交"}
+        # 卡死：先重置再继续
+        await set_rebuild_state(
+            db, "idle",
+            updated_at=datetime.utcnow(),
+            error="自动重置：上次任务疑似卡死（>1h 无响应），请检查 celery-worker 容器",
+        )
+        is_stuck_reset = True
 
     await set_rebuild_state(
         db, "running", updated_at=datetime.utcnow(), error=None
@@ -209,7 +253,44 @@ async def rebuild_knowledge(
         await set_rebuild_state(db, "idle", error=f"队列不可用: {exc}")
         return {"code": 1, "data": None, "message": f"重建任务提交失败: {exc}"}
 
-    return {"code": 0, "data": {"task_id": task.id}, "message": "success"}
+    message = "success"
+    if is_stuck_reset:
+        message = (
+            "已自动重置上次卡死任务并提交新任务，请检查 celery-worker 容器是否正常运行"
+        )
+    return {"code": 0, "data": {"task_id": task.id, "stuck_reset": is_stuck_reset}, "message": message}
+
+
+@router.post("/reset")
+async def reset_rebuild_state(
+    current_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """强制把重建状态机改回 idle（仅 super_admin/admin）。
+
+    用于：状态卡死无法自愈、worker 已修好但 DB 状态未更新等场景。
+    """
+    await set_rebuild_state(
+        db, "idle",
+        updated_at=datetime.utcnow(),
+        error="管理员手动重置",
+    )
+    return {"code": 0, "data": {"state": "idle"}, "message": "已强制重置"}
+
+
+@router.put("/config")
+async def update_kb_config(
+    req: ConfigUpdate,
+    current_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """运行时切换 KB_RAG_ENABLED（仅 super_admin/admin），无需重启。"""
+    await set_kb_rag_enabled(db, req.kb_rag_enabled)
+    return {
+        "code": 0,
+        "data": {"kb_rag_enabled": req.kb_rag_enabled},
+        "message": "已切换，立即生效（5s 内全进程可见）",
+    }
 
 
 @router.get("/terms")

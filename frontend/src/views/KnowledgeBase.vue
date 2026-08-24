@@ -32,8 +32,8 @@
         type="warning"
         :closable="false"
         show-icon
-        title="知识库检索当前未启用"
-        description="需在后端设置 KB_RAG_ENABLED=true 后重启生效。"
+        title="知识库检索未启用"
+        description="请在下方「RAG 开关」中开启，或联系系统管理员。"
         style="margin-bottom: 16px"
       />
 
@@ -41,9 +41,29 @@
         <el-col :xs="12" :sm="8" :md="6">
           <div class="stat-item">
             <div class="stat-label">RAG 开关</div>
-            <el-tag :type="status.enabled ? 'success' : 'info'" effect="dark">
-              {{ status.enabled ? '已启用' : '未启用' }}
-            </el-tag>
+            <div class="stat-value">
+              <el-switch
+                v-model="kbEnabled"
+                :loading="kbEnabledLoading"
+                :disabled="!canToggleKb"
+                @change="onKbEnabledChange"
+              />
+              <el-tag
+                :type="status.enabled ? 'success' : 'info'"
+                effect="plain"
+                size="small"
+                style="margin-left: 8px"
+              >
+                {{ status.enabled ? '已启用' : '未启用' }}
+              </el-tag>
+              <el-tooltip
+                v-if="!canToggleKb"
+                content="仅超级管理员 / 系统管理员可切换"
+                placement="top"
+              >
+                <el-icon style="margin-left: 4px; color: #909399"><QuestionFilled /></el-icon>
+              </el-tooltip>
+            </div>
           </div>
         </el-col>
         <el-col :xs="12" :sm="8" :md="6">
@@ -74,9 +94,28 @@
         <el-col :xs="12" :sm="8" :md="6">
           <div class="stat-item">
             <div class="stat-label">重建状态</div>
-            <el-tag :type="status.state === 'running' ? 'warning' : 'success'" effect="plain">
-              {{ status.state === 'running' ? '重建中…' : '空闲' }}
-            </el-tag>
+            <div>
+              <el-tag :type="status.state === 'running' ? (status.is_stuck ? 'danger' : 'warning') : 'success'" effect="plain">
+                {{ status.state === 'running' ? (status.is_stuck ? '⚠ 卡死' : '重建中…') : '空闲' }}
+              </el-tag>
+              <el-tooltip
+                v-if="status.is_stuck"
+                content="重建任务超过 1 小时无响应，可能 celery-worker 容器异常。点击「强制重置」恢复。"
+                placement="top"
+              >
+                <el-icon style="margin-left: 4px; color: #f56c6c"><WarningFilled /></el-icon>
+              </el-tooltip>
+              <el-button
+                v-if="status.is_stuck && canRebuild"
+                type="danger"
+                size="small"
+                style="margin-left: 8px"
+                :loading="resetLoading"
+                @click="handleForceReset"
+              >
+                强制重置
+              </el-button>
+            </div>
           </div>
         </el-col>
         <el-col :xs="24" :md="12">
@@ -302,6 +341,7 @@ interface KbStatus {
   retrieval_mode: string
   state: 'idle' | 'running'
   last_rebuild: string | null
+  is_stuck: boolean
 }
 
 interface TermItem {
@@ -339,7 +379,15 @@ const status = ref<KbStatus>({
   retrieval_mode: 'keyword',
   state: 'idle',
   last_rebuild: null,
+  is_stuck: false,
 })
+
+// 知识库总开关 toggle（admin 可切；切换即生效，无需重启）
+const kbEnabled = ref<boolean>(false)
+const kbEnabledLoading = ref<boolean>(false)
+const canToggleKb = computed<boolean>(
+  () => ['super_admin', 'admin'].includes(role.value)
+)
 
 const chunkCountList = computed<Array<{ key: string; label: string; count: number }>>(() => [
   { key: 'defect', label: '缺陷', count: status.value.chunk_counts.defect },
@@ -361,6 +409,7 @@ const termsLoading = ref<boolean>(false)
 const forceFull = ref<boolean>(false)
 const rebuildType = ref<KbType | ''>('')
 const rebuildLoading = ref<boolean>(false)
+const resetLoading = ref<boolean>(false)
 const rebuildDisabled = computed<boolean>(
   () => !canRebuild.value || status.value.state === 'running'
 )
@@ -430,7 +479,10 @@ async function loadStatus(): Promise<void> {
         retrieval_mode: d.retrieval_mode ?? 'keyword',
         state: d.state === 'running' ? 'running' : 'idle',
         last_rebuild: d.last_rebuild ?? null,
+        is_stuck: !!d.is_stuck,
       }
+      // 同步 toggle 状态；与后端状态一致
+      kbEnabled.value = !!d.enabled
     }
   } catch {
     /* 网络异常，保持默认状态 */
@@ -474,7 +526,11 @@ async function handleRebuild(): Promise<void> {
     const res: any = await knowledgeApi.rebuild(payload, forceFull.value)
     if (res?.code === 0) {
       const taskId = res?.data?.task_id
-      ElMessage.success(`重建任务已提交（task_id: ${taskId}），请稍后刷新查看进度`)
+      const stuckReset = res?.data?.stuck_reset
+      const msg = stuckReset
+        ? `上次任务疑似卡死已自动重置，新任务已提交（task_id: ${taskId}）。请检查 celery-worker 容器。`
+        : `重建任务已提交（task_id: ${taskId}），请稍后刷新查看进度`
+      ElMessage.success(msg)
       void loadStatus()
     } else if (res?.code === 1) {
       // 后端返回 code:1（如「重建任务进行中，请勿重复提交」）—— 作为警告提示，不当异常抛
@@ -486,6 +542,57 @@ async function handleRebuild(): Promise<void> {
     /* 拦截器已处理网络异常 */
   } finally {
     rebuildLoading.value = false
+  }
+}
+
+// 强制重置状态机（admin）：用于卡死时人工干预
+async function handleForceReset(): Promise<void> {
+  try {
+    await ElMessageBox.confirm(
+      '确认强制重置重建状态？这会清掉当前卡死任务并把状态推回 idle，但不会终止 Celery 中可能仍在跑的任务。',
+      '强制重置',
+      { type: 'warning', confirmButtonText: '确认重置', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  try {
+    resetLoading.value = true
+    const res: any = await knowledgeApi.reset()
+    if (res?.code === 0) {
+      ElMessage.success('重建状态已重置')
+      void loadStatus()
+    } else {
+      ElMessage.error(res?.message || '重置失败')
+    }
+  } catch {
+    /* 拦截器已处理网络异常 */
+  } finally {
+    resetLoading.value = false
+  }
+}
+
+// 运行时切换 KB_RAG_ENABLED（admin）。后端写入 kb_runtime_config 表 + 即时失效缓存。
+async function onKbEnabledChange(value: boolean): Promise<void> {
+  if (!canToggleKb.value) {
+    kbEnabled.value = status.value.enabled
+    return
+  }
+  try {
+    kbEnabledLoading.value = true
+    const res: any = await knowledgeApi.updateConfig({ kb_rag_enabled: value })
+    if (res?.code === 0) {
+      status.value.enabled = value
+      ElMessage.success(value ? '已启用知识库检索' : '已停用知识库检索')
+    } else {
+      // 失败回滚 UI
+      kbEnabled.value = status.value.enabled
+      ElMessage.error(res?.message || '切换失败')
+    }
+  } catch {
+    kbEnabled.value = status.value.enabled
+  } finally {
+    kbEnabledLoading.value = false
   }
 }
 
