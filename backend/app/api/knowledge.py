@@ -24,6 +24,9 @@ from app.models.database import (
     KBChunkType,
     User,
     UserRole,
+    Defect,
+    TestCase,
+    ApiEndpoint,
 )
 from app.modules.auth.dependencies import (
     get_current_user,
@@ -219,6 +222,41 @@ async def rebuild_knowledge(
     """触发 Celery 全量重建（仅 super_admin/admin）。返回 task_id。"""
     if req.kb_type is not None and req.kb_type not in _KB_TYPES:
         return {"code": 1, "data": None, "message": f"无效的 kb_type: {req.kb_type}"}
+
+    # 空库友好提示：4 类源表全部为空时，重建结果必然是 0，立即告知用户避免无意义等待。
+    # 若用户指定了具体 kb_type，则只检查该类型对应的源表（如 term 类型只需查 knowledge_terms）。
+    async def _count(model) -> int:
+        try:
+            return (
+                await db.execute(select(func.count()).select_from(model))
+            ).scalar() or 0
+        except Exception:
+            return 0
+
+    scope = req.kb_type
+    counts: dict[str, int] = {}
+    if scope is None or scope == "defect":
+        counts["defect"] = await _count(Defect)
+    if scope is None or scope == "case":
+        counts["case"] = await _count(TestCase)
+    if scope is None or scope == "doc":
+        counts["doc"] = await _count(ApiEndpoint)
+    if scope is None or scope == "term":
+        counts["term"] = await _count(KnowledgeTerm)
+
+    if counts and all(v == 0 for v in counts.values()):
+        detail = " / ".join(
+            f"{'缺陷' if k == 'defect' else '用例' if k == 'case' else '接口' if k == 'doc' else '术语'} {v} 条"
+            for k, v in counts.items()
+        )
+        return {
+            "code": 1,
+            "data": {"counts": counts},
+            "message": (
+                f"当前数据库为空（{detail}），重建结果将全部为 0。"
+                f"请先运行测试任务累积缺陷/用例，解析接口文档，或在「术语表」中维护术语。"
+            ),
+        }
 
     state = await get_rebuild_state(db)
     # 防重复提交：running 且更新时间在 1 小时内视为进行中（超时则视为卡死可重触发）。
