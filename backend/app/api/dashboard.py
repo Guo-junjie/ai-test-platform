@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.database import (
     TestRun,
     TestReport,
+    Project,
     TestStatus,
     Defect,
     DefectSeverity,
@@ -295,8 +296,10 @@ async def get_recent_runs(
     """
     获取最近测试任务列表（含质量评分和门禁结果）。
     """
+    # outerjoin Project 让项目名为空时也能保留 run（project_id 缺失/项目被删的兜底）
     result = await db.execute(
-        select(TestRun, TestReport)
+        select(TestRun, Project, TestReport)
+        .outerjoin(Project, Project.id == TestRun.project_id)
         .outerjoin(TestReport, TestReport.test_run_id == TestRun.id)
         .order_by(desc(TestRun.created_at))
         .limit(limit)
@@ -310,6 +313,8 @@ async def get_recent_runs(
             "list": [
                 {
                     "id": str(run.id),
+                    "project_id": str(run.project_id) if run.project_id else None,
+                    "project_name": project.name if project else "—",
                     "status": run.status.value if run.status else "pending",
                     "progress": run.progress or 0,
                     "source_type": run.source_type.value if run.source_type else None,
@@ -321,7 +326,7 @@ async def get_recent_runs(
                     "completed_at": run.completed_at.isoformat() if run.completed_at else None,
                     "created_at": run.created_at.isoformat() if run.created_at else None,
                 }
-                for run, report in rows
+                for run, project, report in rows
             ],
         },
         "message": "success",

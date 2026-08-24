@@ -57,10 +57,14 @@ async def list_test_runs(
     db: AsyncSession = Depends(get_db_session),
 ):
     """列出所有测试任务。"""
+    # outerjoin Project 让项目名为空时也能保留 run（项目被删/未关联兜底）
     result = await db.execute(
-        select(TestRun).order_by(TestRun.created_at.desc()).limit(100)
+        select(TestRun, Project)
+        .outerjoin(Project, Project.id == TestRun.project_id)
+        .order_by(TestRun.created_at.desc())
+        .limit(100)
     )
-    runs = result.scalars().all()
+    rows = result.fetchall()
 
     return {
         "code": 0,
@@ -69,6 +73,7 @@ async def list_test_runs(
                 {
                     "id": str(run.id),
                     "project_id": str(run.project_id) if run.project_id else None,
+                    "project_name": project.name if project else "—",
                     "status": run.status.value if run.status else "pending",
                     "progress": run.progress or 0,
                     "source_type": run.source_type.value if run.source_type else None,
@@ -80,9 +85,9 @@ async def list_test_runs(
                     "completed_at": run.completed_at.isoformat() if run.completed_at else None,
                     "created_at": run.created_at.isoformat() if run.created_at else None,
                 }
-                for run in runs
+                for run, project in rows
             ],
-            "total": len(runs),
+            "total": len(rows),
         },
         "message": "success",
     }

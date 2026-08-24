@@ -1,9 +1,9 @@
 <template>
   <div class="dashboard-page">
-    <!-- 统计卡片 -->
+    <!-- 统计卡片（带跳转） -->
     <el-row :gutter="20">
       <el-col :span="6" v-for="card in statCards" :key="card.title">
-        <el-card shadow="hover">
+        <el-card shadow="hover" class="stat-card-clickable" @click="goStatCard(card)">
           <div class="stat-card">
             <el-icon :size="32" :color="card.color">
               <component :is="card.icon" />
@@ -59,15 +59,22 @@
         <el-card shadow="hover">
           <template #header>最近测试任务</template>
           <el-table :data="recentRuns" v-loading="loading" style="width: 100%">
-            <el-table-column prop="project_name" label="项目" min-width="140" />
-            <el-table-column prop="status" label="状态" width="110">
+            <el-table-column label="项目" min-width="140">
+              <template #default="{ row }">
+                <el-link v-if="row.project_id" type="primary" @click="goProject(row.project_id)">
+                  {{ row.project_name }}
+                </el-link>
+                <span v-else>{{ row.project_name || '—' }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="状态" width="110">
               <template #default="{ row }">
                 <el-tag :type="statusTagType(row.status)" size="small">{{ row.status }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column prop="pass_rate" label="通过率" width="100">
+            <el-table-column label="操作" width="100" fixed="right">
               <template #default="{ row }">
-                <span>{{ row.pass_rate != null ? row.pass_rate + '%' : '--' }}</span>
+                <el-button size="small" link @click="goRunDefects(row.id)">查看缺陷</el-button>
               </template>
             </el-table-column>
             <el-table-column prop="quality_score" label="质量分" width="100">
@@ -85,9 +92,30 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { useRouter } from 'vue-router'
 import * as echarts from 'echarts'
 import TrendChart from '@/components/TrendChart.vue'
 import { dashboardApi, trendApi, testRunApi } from '@/api'
+
+const router = useRouter()
+
+function goStatCard(card: { title: string }) {
+  if (card.title === '发现缺陷') {
+    router.push({ path: '/defects' })
+  } else if (card.title === '测试任务总数') {
+    router.push({ path: '/test-runs' })
+  } else if (card.title === '通过率' || card.title === '平均质量分') {
+    router.push({ path: '/dashboard' })
+  }
+}
+
+function goProject(projectId: string) {
+  router.push({ path: `/projects/${projectId}` })
+}
+
+function goRunDefects(runId: string) {
+  router.push({ path: '/defects', query: { run_id: runId } })
+}
 
 const days = ref(30)
 const loading = ref(false)
@@ -232,5 +260,14 @@ onBeforeUnmount(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.stat-card-clickable {
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.stat-card-clickable:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(64, 158, 255, 0.18);
 }
 </style>

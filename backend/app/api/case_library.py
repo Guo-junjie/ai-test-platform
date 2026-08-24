@@ -38,44 +38,68 @@ async def generate_cases(
     req: GenerateRequest,
     db: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
-    """AI 生成测试用例并落库（DRAFT 状态）。"""
-    from app.models.database import TestCaseAsset
+    """AI 生成测试用例并落库（DRAFT 状态）。
+
+    支持三粒度：
+      - 整项目（req.endpoint_ids / endpoint_id 均空）：自动取 project 下全部 active 接口
+      - 多接口（req.endpoint_ids）：指定待生成的接口资产 id 列表
+      - 单接口（req.endpoint_id）：指定单个接口资产 id
+    """
+    from app.models.database import TestCaseAsset, ApiEndpoint
     from app.modules.case_generator.case_generator import TestCaseGenerator
+
+    # 校验 project_id 合法 UUID
+    try:
+        pid = uuid.UUID(req.project_id)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="invalid project_id (must be UUID)")
 
     generator = TestCaseGenerator()
 
     # 构建 API 列表
     apis = []
     if req.endpoint_ids:
-        from app.models.database import ApiEndpoint
+        # 多接口粒度
         for eid in req.endpoint_ids:
+            try:
+                ep_uuid = uuid.UUID(eid)
+            except (ValueError, TypeError):
+                continue
             result = await db.execute(
-                select(ApiEndpoint).where(ApiEndpoint.id == eid)
+                select(ApiEndpoint).where(ApiEndpoint.id == ep_uuid)
             )
             ep = result.scalar_one_or_none()
             if ep:
-                apis.append({
-                    "path": ep.path,
-                    "http_method": ep.http_method,
-                    "params": getattr(ep, "params", []),
-                    "auth_required": getattr(ep, "auth_required", False),
-                })
+                apis.append(_ep_to_dict(ep))
     elif req.endpoint_id:
-        from app.models.database import ApiEndpoint
+        # 单接口粒度
+        try:
+            ep_uuid = uuid.UUID(req.endpoint_id)
+        except (ValueError, TypeError):
+            pass
+        else:
+            result = await db.execute(
+                select(ApiEndpoint).where(ApiEndpoint.id == ep_uuid)
+            )
+            ep = result.scalar_one_or_none()
+            if ep:
+                apis.append(_ep_to_dict(ep))
+    else:
+        # 整项目粒度：自动取 project 下所有 active 接口（上限 30，避免一次生成过大）
         result = await db.execute(
-            select(ApiEndpoint).where(ApiEndpoint.id == req.endpoint_id)
+            select(ApiEndpoint)
+            .where(ApiEndpoint.project_id == pid, ApiEndpoint.is_active == True)
+            .order_by(ApiEndpoint.method, ApiEndpoint.path)
+            .limit(30)
         )
-        ep = result.scalar_one_or_none()
-        if ep:
-            apis.append({
-                "path": ep.path,
-                "http_method": ep.http_method,
-                "params": getattr(ep, "params", []),
-                "auth_required": getattr(ep, "auth_required", False),
-            })
+        for ep in result.scalars().all():
+            apis.append(_ep_to_dict(ep))
 
     if not apis:
-        raise HTTPException(status_code=400, detail="No valid endpoints found")
+        raise HTTPException(
+            status_code=400,
+            detail="未找到可用接口：请确认项目下已有解析出的接口资产（数据源→接口文档），或在弹窗中勾选接口后再生成",
+        )
 
     # 生成用例
     cases = await generator.generate_all(apis, {})
@@ -115,8 +139,20 @@ async def generate_cases(
                 for a in saved
             ],
             "total": len(saved),
+            "inserted": len(saved),  # 兼容前端 caseApi.generate 返回字段（成功提示用）
         },
         "message": "ok",
+    }
+
+
+def _ep_to_dict(ep) -> dict[str, Any]:
+    """ApiEndpoint ORM → 生成器所需 dict 的标准化映射（前后端字段名统一）。"""
+    return {
+        "path": ep.path,
+        "http_method": ep.method,  # ApiEndpoint 列名是 method，前端/生成器期望 http_method
+        "params": ep.params or [],
+        "auth_required": bool(ep.auth_required),
+        "summary": ep.summary or "",
     }
 
 
