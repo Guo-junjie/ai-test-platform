@@ -21,7 +21,8 @@ from typing import Any, Optional
 
 from loguru import logger
 
-from app.models.database import AsyncSessionLocal, CoverageReport, CoverageSource, CoverageTool
+from app.models.database import CoverageReport, CoverageSource, CoverageTool
+from app.utils.database import AsyncSessionLocal
 from app.modules.coverage.parser import parse_coverage_report
 
 
