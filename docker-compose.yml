@@ -6,6 +6,7 @@ services:
     image: postgres:16-alpine
     container_name: aitp-postgres
     environment:
+      TZ: Asia/Shanghai
       POSTGRES_DB: ${POSTGRES_DB:-ai_test_platform}
       POSTGRES_USER: ${POSTGRES_USER:-aitp}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aitp_secret_2026}
@@ -14,10 +15,6 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      # 必须带 -d 指定库名：libpq 在缺省 dbname 时会拿用户名当库名，
-      # 于是每 10s 探活一次都会去连不存在的 "aitp" 库，PG 服务端记一条
-      # `FATAL: database "aitp" does not exist` 日志噪音（探活本身仍返回 OK，
-      # 因为 pg_isready 只要服务器可响应就判定 PQPING_OK），干扰故障排查。
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aitp} -d ${POSTGRES_DB:-ai_test_platform}"]
       interval: 10s
       timeout: 5s
@@ -26,6 +23,8 @@ services:
   redis:
     image: redis:7-alpine
     container_name: aitp-redis
+    environment:
+      TZ: Asia/Shanghai
     ports:
       - "${REDIS_PORT:-6379}:6379"
     volumes:
@@ -40,6 +39,7 @@ services:
     image: rabbitmq:3.13-management-alpine
     container_name: aitp-rabbitmq
     environment:
+      TZ: Asia/Shanghai
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-aitp}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-aitp_secret_2026}
     ports:
@@ -57,6 +57,7 @@ services:
     image: minio/minio:latest
     container_name: aitp-minio
     environment:
+      TZ: Asia/Shanghai
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-aitp}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-aitp_secret_2026}
     ports:
@@ -77,6 +78,8 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: aitp-backend
+    environment:
+      TZ: Asia/Shanghai
     env_file: .env
     ports:
       - "${BACKEND_PORT:-8000}:8000"
@@ -99,6 +102,8 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: aitp-celery-worker
+    environment:
+      TZ: Asia/Shanghai
     env_file: .env
     depends_on:
       postgres:
@@ -117,6 +122,8 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: aitp-celery-beat
+    environment:
+      TZ: Asia/Shanghai
     env_file: .env
     depends_on:
       rabbitmq:
@@ -130,6 +137,8 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     container_name: aitp-frontend
+    environment:
+      TZ: Asia/Shanghai
     ports:
       - "${FRONTEND_PORT:-3000}:80"
     depends_on:
