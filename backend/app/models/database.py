@@ -947,6 +947,37 @@ async def init_db():
     else:
         logger.info(f"UserRole enum labels ensured: {', '.join(role_labels)}")
 
+    # 旧库补齐 PG 枚举的小写标签（SAEnum 写 bind 用 member.value；老库 create_all 用 member.name）
+    # 涉及枚举：casesource / caseassetstatus / scenariostatus / endpointsource / docstatus / ...
+    # SAEnum 默认持久化是 PyEnum 成员 NAME（大写），但有些列会按 member.value（小写）写入；
+    # 当 PG 枚举仅有大写标签时，写入会抛 "invalid input value for enum casesource: 'ai_generated'"。
+    # 同时插入大写 + 小写标签，兼容两种 bind 方式（002 迁移对 kbchunktype 也用此模式）。
+    _ENUM_CASE_PAIRS: tuple[tuple[str, type[PyEnum]], ...] = (
+        ("casesource", CaseSource),
+        ("caseassetstatus", CaseAssetStatus),
+        ("scenariostatus", ScenarioStatus),
+        ("endpointsource", EndpointSource),
+    )
+    try:
+        async with async_engine.connect() as conn:
+            autocommit_conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
+            for type_name, enum_cls in _ENUM_CASE_PAIRS:
+                # 同时建大小写两个 label（兼容大写 NAME 写入 + 小写 VALUE 写入）
+                for label in tuple(m.name for m in enum_cls) + tuple(m.value for m in enum_cls):
+                    try:
+                        await autocommit_conn.execute(
+                            text(f"ALTER TYPE {type_name} ADD VALUE IF NOT EXISTS '{label}'")
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to add enum label '{label}' to {type_name}: {e}. "
+                            f"若落库报 invalid input value for enum，请执行 `docker compose down -v` 重建数据库。"
+                        )
+    except Exception as e:
+        logger.warning(f"Skip enum case-pair sync (connection error): {e}")
+    else:
+        logger.info("casesource/caseassetstatus/scenariostatus/endpointsource enum labels (both case) ensured")
+
     # 旧库补齐 model_routing 两列（doc_parse_model_id / doc_review_model_id）。
     # 这两列在新增需求中加到 ModelRouting 表，使用 nullable=True 以便老库平滑迁移；
     # create_all 只会建新表、不会 ALTER 已有表，故此处用幂等 ADD COLUMN IF NOT EXISTS 兜底。

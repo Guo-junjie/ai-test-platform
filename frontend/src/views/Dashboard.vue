@@ -101,11 +101,12 @@ const router = useRouter()
 
 function goStatCard(card: { title: string }) {
   if (card.title === '发现缺陷') {
-    router.push({ path: '/defects' })
+    // 平台无独立 /defects 路由 — 缺陷查看走「质量趋势」或「报告详情」
+    router.push({ path: '/quality-trend' })
   } else if (card.title === '测试任务总数') {
     router.push({ path: '/test-runs' })
   } else if (card.title === '通过率' || card.title === '平均质量分') {
-    router.push({ path: '/dashboard' })
+    router.push({ path: '/quality-trend' })
   }
 }
 
@@ -114,7 +115,8 @@ function goProject(projectId: string) {
 }
 
 function goRunDefects(runId: string) {
-  router.push({ path: '/defects', query: { run_id: runId } })
+  // 跳到测试报告详情（含缺陷列表）
+  router.push({ path: `/report/${runId}` })
 }
 
 const days = ref(30)
