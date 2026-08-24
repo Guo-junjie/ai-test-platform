@@ -64,30 +64,36 @@ def debug_task(self):
 
 @worker_process_init.connect
 def _init_celery_worker(**_kwargs) -> None:
-    """Celery prefork worker 子进程启动 hook：清理 fork 继承的 async engine 连接池。
+    """Celery prefork worker 子进程启动 hook：完全重建 async engine。
 
     根因
     ----
     Celery 默认 prefork 模式：主进程加载代码 → fork 出 worker 子进程。
-    `app.utils.database.async_engine` 是模块级单例，fork 后子进程继承其内部状态；
+    ``app.utils.database.async_engine`` 是模块级单例，fork 后子进程继承其内部状态；
     asyncpg 持有的 Future / Socket 状态绑定的是主进程的 event loop。
-    子进程 `asyncio.run(...)` 会创建新 event loop，复用连接会抛：
+    子进程 ``asyncio.run(...)`` 会创建新 event loop，复用连接会抛：
         RuntimeError: ... got Future ... attached to a different loop
 
-    修复
-    ----
-    子进程启动时 dispose 父进程的 connection pool，迫使 asyncpg 在本进程首次
-    访问时按本进程的 event loop 重新建立连接。这是 Celery 官方推荐做法。
+    历史修复
+    --------
+    2728d61c 用 ``async_engine.pool.dispose()`` 关掉 inherited connection pool，
+    但 **engine 内部其他状态仍可能含旧 loop 引用**——用户部署机仍偶发报错。
+
+    最终修复（本次）
+    ----------------
+    通过 ``reset_async_engine()`` **完全重建** async engine + sessionmaker：
+    1. 旧 engine 关闭（同步 dispose）
+    2. 新 engine 创建（worker 子进程内全新的 engine + 全新的 pool）
+    3. 新 sessionmaker 绑定新 engine
+    4. module attr 替换完成
+    5. 17 处 ``from app.utils.database import AsyncSessionLocal`` 拿到的都是 proxy 对象
+       → proxy 内部始终从最新 module attr 取 → 自动用新 engine（**无需改 17 处 import**）
+
+    这是 Celery 官方推荐做法 + 自定义 proxy 解决多 import 路径问题。
     """
     try:
-        # 延迟导入，避免主进程启动时过早加载数据库连接
-        from app.utils.database import async_engine
-        # async_engine.pool 是同步 API；直接 dispose 所有 inherited 连接
-        async_engine.pool.dispose()
-        logger.info(
-            "Celery worker 子进程已 dispose 继承的 async engine 连接池，"
-            "下次访问将按子进程 event loop 重建。"
-        )
+        from app.utils.database import reset_async_engine
+        reset_async_engine()
     except Exception as exc:  # noqa: BLE001
         # 任何意外不影响 worker 启动；engine 仍可下次访问时惰性重建
-        logger.warning(f"worker_process_init dispose failed (non-fatal): {exc}")
+        logger.warning(f"worker_process_init reset failed (non-fatal): {exc}")

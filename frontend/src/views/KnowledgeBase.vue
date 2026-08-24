@@ -95,8 +95,8 @@
           <div class="stat-item">
             <div class="stat-label">重建状态</div>
             <div>
-              <el-tag :type="status.state === 'running' ? (status.is_stuck ? 'danger' : 'warning') : 'success'" effect="plain">
-                {{ status.state === 'running' ? (status.is_stuck ? '⚠ 卡死' : '重建中…') : '空闲' }}
+              <el-tag :type="stateTagType" effect="plain">
+                {{ stateLabel }}
               </el-tag>
               <el-tooltip
                 v-if="status.is_stuck"
@@ -115,6 +115,9 @@
               >
                 强制重置
               </el-button>
+            </div>
+            <div v-if="status.state === 'failed' && status.error" class="state-error">
+              <el-text type="danger" size="small">上次失败：{{ status.error }}</el-text>
             </div>
           </div>
         </el-col>
@@ -339,9 +342,10 @@ interface KbStatus {
   embedding_model_id: string | null
   embedding_ready: boolean
   retrieval_mode: string
-  state: 'idle' | 'running'
+  state: 'idle' | 'running' | 'failed'
   last_rebuild: string | null
   is_stuck: boolean
+  error?: string | null
 }
 
 interface TermItem {
@@ -458,9 +462,31 @@ function kbTypeLabel(value: string): string {
   return hit ? hit.label : value
 }
 
+// ============ 状态展示计算属性 ============
+// 区分 running / idle / failed 三态：失败时显式提示 + 红色 tag
+const stateTagType = computed<'success' | 'warning' | 'danger'>(() => {
+  if (status.value.state === 'running') {
+    return status.value.is_stuck ? 'danger' : 'warning'
+  }
+  if (status.value.state === 'failed') {
+    return 'danger'
+  }
+  return 'success'
+})
+
+const stateLabel = computed<string>(() => {
+  if (status.value.state === 'running') {
+    return status.value.is_stuck ? '⚠ 卡死' : '重建中…'
+  }
+  if (status.value.state === 'failed') {
+    return '失败'
+  }
+  return '空闲'
+})
+
 // ============ 状态加载 ============
-// 上一帧状态（用于检测 running→idle 的边沿变化，弹"重建完成"提示）
-const prevState = ref<'idle' | 'running'>('idle')
+// 上一帧状态（用于检测 running→idle/failed 的边沿变化，弹提示）
+const prevState = ref<'idle' | 'running' | 'failed'>('idle')
 
 // 状态轮询：state==running 时每 5s 拉一次，后端 idle/failed 时停止
 let pollTimer: ReturnType<typeof setInterval> | null = null
@@ -498,8 +524,9 @@ async function loadStatus(): Promise<void> {
     const res: any = await knowledgeApi.getStatus()
     if (res?.code === 0 && res?.data) {
       const d = res.data
-      const newState: 'idle' | 'running' =
-        d.state === 'running' ? 'running' : 'idle'
+      const newState: 'idle' | 'running' | 'failed' =
+        d.state === 'running' ? 'running' :
+        d.state === 'failed' ? 'failed' : 'idle'
       const newChunkCount = d.chunk_count ?? 0
 
       // 边沿检测：running→idle 时弹"重建完成"提示（用户体验核心改进）
@@ -507,6 +534,10 @@ async function loadStatus(): Promise<void> {
         ElMessage.success(
           `重建完成，共 ${newChunkCount} 个切片`
         )
+      }
+      // 边沿检测：running→failed 时弹"重建失败"提示（用户能立即看到异常）
+      if (prevState.value === 'running' && newState === 'failed') {
+        ElMessage.error(`重建失败：${d.error || '未知错误'}`)
       }
       prevState.value = newState
 
@@ -526,6 +557,7 @@ async function loadStatus(): Promise<void> {
         state: newState,
         last_rebuild: d.last_rebuild ?? null,
         is_stuck: !!d.is_stuck,
+        error: d.error ?? null,
       }
       // 同步 toggle 状态；与后端状态一致
       kbEnabled.value = !!d.enabled
