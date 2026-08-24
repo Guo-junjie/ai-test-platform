@@ -8,6 +8,7 @@ from sqlalchemy import (
     Column, Integer, String, Text, Boolean, DateTime, JSON, Float,
     ForeignKey, Enum as SAEnum, Index, UniqueConstraint, text
 )
+from app.utils.case_pair_enum import CasePairEnum  # 修复后替代裸 SAEnum（兼容老数据大小写）
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import declarative_base, relationship
 import uuid
@@ -546,7 +547,7 @@ class ApiEndpoint(Base):
     auth_required = Column(Boolean, default=False)
     version = Column(Integer, default=1)                   # 每次 upsert 覆盖 +1
     is_active = Column(Boolean, default=True)
-    source = Column(SAEnum(EndpointSource, values_callable=lambda x: [e.value for e in x], name="endpointsource"), default=EndpointSource.DOC_IMPORT, nullable=False)
+    source = Column(CasePairEnum(EndpointSource, values_callable=lambda x: [e.value for e in x], name="endpointsource"), default=EndpointSource.DOC_IMPORT, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -674,8 +675,8 @@ class TestCaseAsset(Base):
     request_data = Column(JSONB, nullable=False, default={})  # {method, url, headers, body, params}
     expected_result = Column(JSONB, nullable=True)            # {status_code, assertions:[...]}
     priority = Column(String(10), default="P2")               # P0-P3
-    status = Column(SAEnum(CaseAssetStatus, values_callable=lambda x: [e.value for e in x], name="caseassetstatus"), default=CaseAssetStatus.DRAFT, nullable=False)
-    source = Column(SAEnum(CaseSource, values_callable=lambda x: [e.value for e in x], name="casesource"), default=CaseSource.AI_GENERATED, nullable=False)
+    status = Column(CasePairEnum(CaseAssetStatus, values_callable=lambda x: [e.value for e in x], name="caseassetstatus"), default=CaseAssetStatus.DRAFT, nullable=False)
+    source = Column(CasePairEnum(CaseSource, values_callable=lambda x: [e.value for e in x], name="casesource"), default=CaseSource.AI_GENERATED, nullable=False)
     # 能力5/6/7：脚本字段
     pre_script = Column(Text, nullable=True)
     post_script = Column(Text, nullable=True)
@@ -703,7 +704,7 @@ class Scenario(Base):
     name = Column(String(200), nullable=False)
     description = Column(Text, nullable=True)
     nl_input = Column(Text, nullable=False)  # 用户自然语言场景描述（编排输入）
-    status = Column(SAEnum(ScenarioStatus, values_callable=lambda x: [e.value for e in x], name="scenariostatus"), default=ScenarioStatus.DRAFT, nullable=False)
+    status = Column(CasePairEnum(ScenarioStatus, values_callable=lambda x: [e.value for e in x], name="scenariostatus"), default=ScenarioStatus.DRAFT, nullable=False)
     # 每步结构：{step_order, endpoint_id, action_desc, method, url, extract, inject, depend_on_step, request}
     steps = Column(JSONB, default=list)
     created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
@@ -844,7 +845,7 @@ class KnowledgeChunk(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     # SAEnum 必须显式 name=，否则 PG 枚举名全小写易触发 asyncpg DatatypeMismatchError
-    kb_type = Column(SAEnum(KBChunkType, values_callable=lambda x: [e.value for e in x], name="kbchunktype"), nullable=False, index=True)
+    kb_type = Column(CasePairEnum(KBChunkType, values_callable=lambda x: [e.value for e in x], name="kbchunktype"), nullable=False, index=True)
     source_ref = Column(String(200), nullable=True, index=True)
     content = Column(Text, nullable=False)
     # JSONB 存 float[]；无嵌入模型时为 NULL（关键词检索兜底）
