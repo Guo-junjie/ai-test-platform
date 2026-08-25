@@ -65,6 +65,18 @@ class ConnectRequest(BaseModel):
     owner_id: str | None = None
 
 
+class UpdateSourceRequest(BaseModel):
+    """数据源更新请求 — 支持就地编辑，无需删除重建。
+
+    仅更新提供的字段：
+    - name: 数据源显示名
+    - config: 新的配置字典（敏感字段会重新加密；repo_url 会 strip）
+    """
+
+    name: str | None = None
+    config: dict[str, Any] | None = None
+
+
 # ==================== API 路由 ====================
 
 
@@ -283,6 +295,46 @@ async def disconnect_source(
     logger.info(f"Source config deactivated: {source_id}")
 
     return {"code": 0, "data": None, "message": "Data source disconnected"}
+
+
+@router.put("/{source_id}")
+async def update_source(
+    source_id: str,
+    req: UpdateSourceRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """
+    更新已配置的数据源（就地编辑，避免误填后只能删除重建）。
+
+    仅更新提供的字段：name / config。config 中敏感字段会重新加密，
+    repo_url 会做首尾去空格，避免再产生脏数据。
+    """
+    result = await db.execute(
+        select(Project).where(Project.id == uuid.UUID(source_id))
+    )
+    project = result.scalar_one_or_none()
+    if project is None:
+        raise HTTPException(404, f"Source config not found: {source_id}")
+
+    if req.name is not None:
+        project.name = req.name
+
+    if req.config is not None:
+        # 清理 repo_url 首尾空白，避免再产生脏数据
+        if isinstance(req.config.get("repo_url"), str):
+            req.config["repo_url"] = req.config["repo_url"].strip()
+        project.source_config = encrypt_dict(req.config)
+
+    project.updated_at = datetime.utcnow()
+    await db.flush()
+
+    logger.info(f"Source config updated: {source_id}")
+    return {
+        "code": 0,
+        "data": {"id": str(project.id), "name": project.name},
+        "message": "Data source updated successfully",
+    }
 
 
 # ==================== 工具函数 ====================

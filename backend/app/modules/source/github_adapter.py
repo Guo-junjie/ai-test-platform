@@ -60,20 +60,46 @@ class GitHubAdapter(CodeSourceAdapter):
         repo_name = self._extract_repo_name(config.repo_url)
         local_path = Path(config.workspace_dir) / repo_name
 
+        # 清理历史上 repo_url 末尾多空格时留下的「同名带尾随空格」残留目录。
+        # 那些目录名带了空格，后续用干净 URL 拉取时匹配不上 local_path，
+        # 会一直走失败分支。这里把 '<repo_name> ' 这类脏目录清掉。
+        self._cleanup_stale_repo_dirs(config.workspace_dir, repo_name)
+
         logger.info(
             f"GitHub fetch: repo={repo_name}, branch={config.branch}, "
             f"commit={config.commit_sha or 'HEAD'}, incremental={config.incremental}, "
             f"local_exists={local_path.exists()}"
         )
 
+        # 健壮性：本地目录存在但不是有效 git 仓库（上次失败 clone 的残留）时，
+        # 删除后改走全量克隆，避免对损坏仓库做增量 pull 报错。
+        if local_path.exists() and not self._is_valid_repo(local_path):
+            import shutil
+
+            logger.warning(
+                f"Local repo at {local_path} exists but is not a valid git repo; "
+                "removing and performing fresh clone."
+            )
+            shutil.rmtree(str(local_path), ignore_errors=True)
+
         if local_path.exists() and config.incremental:
-            return self._incremental_pull(config, local_path)
+            try:
+                return self._incremental_pull(config, local_path)
+            except Exception as e:  # noqa: BLE001
+                # 增量 pull 失败（如本地仓库与远端不一致、分支被删等）→ 回退全量克隆
+                logger.warning(
+                    f"Incremental pull failed ({e}); falling back to fresh clone."
+                )
+                import shutil
+
+                shutil.rmtree(str(local_path), ignore_errors=True)
+                return self._fresh_clone(config, local_path)
         else:
             # 如果目录存在但不使用增量，先清理
             if local_path.exists():
                 import shutil
 
-                shutil.rmtree(str(local_path))
+                shutil.rmtree(str(local_path), ignore_errors=True)
             return self._fresh_clone(config, local_path)
 
     def _fresh_clone(
@@ -205,6 +231,46 @@ class GitHubAdapter(CodeSourceAdapter):
             "files_changed": changed_files,
             "total_files": total_files,
         }
+
+    def _is_valid_repo(self, path: Path) -> bool:
+        """
+        判断本地目录是否为有效 git 仓库。
+
+        用于避免对「上次失败 clone 留下的损坏/空目录」执行增量 pull 而报错。
+        """
+        try:
+            repo = git.Repo(str(path))
+            _ = repo.head.commit
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _cleanup_stale_repo_dirs(
+        self, workspace_dir: str, repo_name: str
+    ) -> None:
+        """
+        删除与 repo_name 同名但带尾随/多余空白的残留克隆目录。
+
+        历史 bug：repo_url 末尾多空格时，克隆目录名也带了空格，后续用干净
+        URL 拉取时匹配不上，导致一直走失败分支。这里把 '<repo_name> ' 这类
+        残留目录清掉（不误伤名字完全一致的干净目录）。
+        """
+        try:
+            base = Path(workspace_dir)
+            if not base.exists():
+                return
+            for cand in base.iterdir():
+                if (
+                    cand.is_dir()
+                    and cand.name.rstrip() == repo_name
+                    and cand.name != repo_name
+                ):
+                    import shutil
+
+                    logger.warning(f"Removing stale repo dir: {cand}")
+                    shutil.rmtree(str(cand), ignore_errors=True)
+        except Exception:  # noqa: BLE001
+            pass
 
     def _extract_repo_name(self, repo_url: str) -> str:
         """
