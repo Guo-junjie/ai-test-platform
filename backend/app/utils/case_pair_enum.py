@@ -54,6 +54,8 @@ class CasePairEnum(TypeDecorator):
     其余参数一致。
     """
 
+    # SQLAlchemy 1.4+ TypeDecorator **强制要求**类级 ``impl`` 变量（可以是 class 或 instance）。
+    # 设成 SAEnum class 而非 instance —— instance 的话 hash/cache 行为会变麻烦。
     impl = SAEnum
     cache_ok = True
 
@@ -63,19 +65,23 @@ class CasePairEnum(TypeDecorator):
         # 拆 SAEnum 专属参数 vs 透传给 SAEnum 实例构造
         saenum_kw = {k: kw.pop(k) for k in list(kw) if k in _SAENUM_KEYS}
         # 显式构造底层 SAEnum 实例（PG 端用 ENUM impl，asyncpg 走 enum adapter）
-        # **不要**传 `length` 给 SAEnum —— SQLAlchemy 2.0 一旦看到 length 就会走 VARCHAR 路径，
-        # 但 asyncpg dialect 又会因为 impl=SAEnum 看到 enum 列上下文 → 抛
-        # "CompileError: PostgreSQL AsyncPgEnum type requires a name"。
-        # 旧 commit 8cd535e6 误加 `setdefault("length", 64)` 是这个隐形 bug 的源头
-        # ——老库没事是因为表已建过 create_all checkfirst 跳过；新部署 / down -v 后
-        # init_db() 会炸，让 _run_lifecycle_step 吞掉 + 整个 schema 缺失。
+        # **不要**传 `length` 给 SAEnum —— SQLAlchemy 2.0 ``native_enum=True`` 时
+        # length 被忽略，但加 length 是个常见反模式（容易让人误以为 VARCHAR）。
         self._saenum_impl = SAEnum(enum_class, **saenum_kw)
+        # **关键**：手动设 ``impl_instance`` —— SQLAlchemy 1.4+ TypeDecorator 默认会
+        # 调 ``self.impl()`` 无参构造 SAEnum，缺 enum_class → 抛
+        # ``CompileError: PostgreSQL AsyncPgEnum type requires a name``。手动设 instance
+        # 后 TypeDecorator 就跳过无参构造，直接用我们的 instance。
+        # 这是修 commit 10154ea 仍报错的根因（commit 10154ea 只删了 length=64，没改这里）。
+        self.impl_instance = self._saenum_impl
         # 父类 TypeDecorator 不需要再传 enum_class / values_callable
         super().__init__()
 
     def load_dialect_impl(self, dialect):  # type: ignore[override]
-        """关键：让 SAEnum 在 dialect 适配时拿到我们的 enum_class。"""
-        return self._saenum_impl
+        """关键：让 SAEnum 在 dialect 适配时拿到我们的 enum_class。
+        配合 ``self.impl_instance`` —— 我们的 SAEnum instance 已包含 enum_class 与 name。
+        """
+        return self.impl_instance
 
     def process_bind_param(self, value, dialect):  # type: ignore[override]
         """写入：PyEnum → .value（4f75c27c 行为），字符串兼容 .name → .value 转换。
