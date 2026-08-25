@@ -85,8 +85,9 @@ class CaseAssetStatus(PyEnum):
 
 
 class CaseSource(PyEnum):
-    """用例资产来源 — AI 生成 / 人工录入"""
+    """用例资产来源 — AI 接口生成 / 需求文档驱动 / 人工录入"""
     AI_GENERATED = "ai_generated"
+    REQUIREMENT = "requirement"      # 需求文档驱动生成（含 AI 与规则兜底）
     MANUAL = "manual"
 
 

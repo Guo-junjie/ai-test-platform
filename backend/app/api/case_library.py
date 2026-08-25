@@ -162,6 +162,7 @@ async def list_cases(
     endpoint_id: str | None = None,
     case_type: str | None = None,
     status: str | None = None,
+    source: str | None = None,  # 新增：ai_generated / requirement / manual
     keyword: str | None = None,
     page: int = 1,
     page_size: int = 20,
@@ -179,6 +180,8 @@ async def list_cases(
         query = query.where(TestCaseAsset.case_type == case_type)
     if status:
         query = query.where(TestCaseAsset.status == status)
+    if source:
+        query = query.where(TestCaseAsset.source == source)
     if keyword:
         query = query.where(
             TestCaseAsset.title.ilike(f"%{keyword}%")

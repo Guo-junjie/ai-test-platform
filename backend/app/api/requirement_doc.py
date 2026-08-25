@@ -417,7 +417,7 @@ async def generate_cases(
             },
             priority=priority,
             status=CaseAssetStatus.DRAFT,
-            source=CaseSource.AI_GENERATED,
+            source=CaseSource.REQUIREMENT,  # 需求驱动：与 AI_GENERATED（接口生成）区分
             created_by=current_user.id,
         )
         db.add(asset)

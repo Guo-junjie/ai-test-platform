@@ -47,9 +47,30 @@
         <el-tab-pane label="异常" name="exception" />
       </el-tabs>
 
+      <!-- 来源过滤（v1.4 新增） -->
+      <div class="source-filter">
+        <span class="filter-label">来源：</span>
+        <el-radio-group v-model="activeSource" size="small" @change="loadCases">
+          <el-radio-button value="">全部</el-radio-button>
+          <el-radio-button value="requirement">📄 需求生成（{{ sourceCount.requirement }}）</el-radio-button>
+          <el-radio-button value="ai_generated">🤖 AI 接口生成（{{ sourceCount.ai_generated }}）</el-radio-button>
+          <el-radio-button value="manual">👤 手工（{{ sourceCount.manual }}）</el-radio-button>
+        </el-radio-group>
+        <span class="muted" style="margin-left: 12px">
+          点 <b>需求生成</b> 一键筛选来源=requirement 的用例
+        </span>
+      </div>
+
       <el-table :data="filteredCases" border @selection-change="onSelectionChange">
         <el-table-column type="selection" width="48" />
         <el-table-column prop="title" label="标题" min-width="200" show-overflow-tooltip />
+        <el-table-column label="来源" width="110" align="center">
+          <template #default="{ row }">
+            <el-tag size="small" :type="sourceType(row.source)" effect="plain">
+              {{ sourceLabel(row.source) }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="接口" width="260">
           <template #default="{ row }">
             <span class="method-tag">{{ (row.request_data || {}).method || '-' }}</span>
@@ -124,7 +145,19 @@ const batchAdopting = ref(false)
 
 const cases = ref<any[]>([])
 const activeType = ref<string>('all')
+const activeSource = ref<string>('')  // v1.4：来源过滤（''=全部 / requirement / ai_generated / manual）
 const selectedRows = ref<any[]>([])
+
+const SOURCE_LABELS: Record<string, string> = {
+  requirement: '需求生成',
+  ai_generated: 'AI 生成',
+  manual: '手工',
+}
+const SOURCE_TYPES: Record<string, any> = {
+  requirement: 'warning',   // 橙——需求驱动给人「半成品待确认」感
+  ai_generated: 'primary',  // 蓝——AI 主线
+  manual: 'success',        // 绿——已审定
+}
 
 const editVisible = ref(false)
 const savingEdit = ref(false)
@@ -157,13 +190,33 @@ function statusType(s: string): any {
 function priorityType(p: string): any {
   return PRIORITY_TYPES[p] || 'info'
 }
+function sourceLabel(s: string): string {
+  return SOURCE_LABELS[s] || s || '-'
+}
+function sourceType(s: string): any {
+  return SOURCE_TYPES[s] || 'info'
+}
 
 const filteredCases = computed(() => {
-  if (activeType.value === 'all') return cases.value
-  return cases.value.filter((c) => c.case_type === activeType.value)
+  let arr = cases.value
+  if (activeType.value !== 'all') {
+    arr = arr.filter((c) => c.case_type === activeType.value)
+  }
+  return arr
 })
 const draftCount = computed(() => cases.value.filter((c) => c.status === 'draft').length)
 const hasDraft = computed(() => draftCount.value > 0)
+
+/** 各来源计数（前端计算，避免 N 次请求） */
+const sourceCount = computed(() => {
+  const acc: Record<string, number> = { requirement: 0, ai_generated: 0, manual: 0 }
+  for (const c of cases.value) {
+    const s = c.source || 'ai_generated'  // 老数据无 source 字段默认归 ai_generated
+    if (acc[s] === undefined) acc[s] = 0
+    acc[s] += 1
+  }
+  return acc
+})
 
 async function loadProjects() {
   try {
@@ -210,7 +263,12 @@ async function loadCases() {
   }
   listLoading.value = true
   try {
-    const res: any = await caseApi.list({ project_id: projectId.value, page: 1, page_size: 200 })
+    const res: any = await caseApi.list({
+      project_id: projectId.value,
+      page: 1,
+      page_size: 200,
+      source: activeSource.value || undefined,  // ''→不过滤；非空→传后端
+    })
     cases.value = res?.data?.items || []
   } catch {
     cases.value = []
@@ -339,6 +397,23 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+.source-filter {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  background: #fafafa;
+  border-radius: 4px;
+  border: 1px solid #ebeef5;
+}
+.filter-label {
+  color: #606266;
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .muted {
   color: #909399;
   font-size: 13px;
