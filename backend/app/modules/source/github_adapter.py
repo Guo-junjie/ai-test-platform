@@ -13,12 +13,18 @@ from pathlib import Path
 from typing import Any
 
 import git
+import os
 
 from app.modules.source.base import CodeSourceAdapter, SourceAdapterFactory, SourceType
 from app.modules.source.retry import retry_with_backoff
 from app.utils.logger import get_logger
 
 logger = get_logger()
+
+# 给 git 的 HTTP 传输加硬超时：部署机访问不了 github.com（防火墙/代理/无外网）
+# 时，clone 会在 60s 内失败而非无限挂起。否则即使丢进线程池，连接也会长时间
+# 占着线程，且用户只能干等。setdefault 保证不被上层环境变量覆盖。
+os.environ.setdefault("GIT_HTTP_TIMEOUT", "60")
 
 
 class GitHubAdapter(CodeSourceAdapter):

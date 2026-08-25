@@ -8,6 +8,7 @@
 - DELETE /{source_id} — 软删除数据源
 """
 
+import asyncio
 import uuid
 from datetime import datetime
 from typing import Any
@@ -144,10 +145,29 @@ async def fetch_code(
         )
 
     try:
-        result = SourceAdapterFactory.fetch_code(config)
+        # ⚠️ fetch_code 内部是 git.Repo.clone_from 等【阻塞式】网络 I/O。
+        # 绝不能在 async 处理器里直接同步调用，否则会冻结整个事件循环，
+        # 导致其它所有请求排队超时（正是"很多页面操作显示超时"的根因）。
+        # 必须丢到线程池执行，并加总超时保护。
+        loop = asyncio.get_running_loop()
+        try:
+            result = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None, lambda: SourceAdapterFactory.fetch_code(config)
+                ),
+                timeout=600,
+            )
+        except asyncio.TimeoutError:
+            raise HTTPException(
+                504,
+                "代码拉取超时：GitHub 不可达或仓库过大。请确认部署机可访问 "
+                "github.com、Token 有效；或改用「人工上传」数据源。",
+            )
         return {"code": 0, "data": result, "message": "success"}
     except ValueError as e:
         raise HTTPException(400, str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Code fetch failed: {e}")
         raise HTTPException(500, f"Code fetch failed: {e}")
