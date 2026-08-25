@@ -10,6 +10,12 @@ router 不带 prefix，由 main.py 以 prefix="/api/requirements" 注册。
 - GET  /{doc_id}                需求文档详情（含解析出的需求条目）
 - DELETE /{doc_id}              删除需求文档
 - POST /{doc_id}/generate-cases 基于需求一键生成测试用例（可选落库到指定 test_run）
+
+⚠ 历史 Bug：5 个端点原本误用 ``async with get_db_session() as db:``，
+``get_db_session`` 是 FastAPI Depends 注入函数（AsyncGenerator）不是
+async-context-manager，会抛 ``TypeError: 'async_generator' object does
+not support the asynchronous context manager protocol``。全部改为：
+``db: AsyncSession = Depends(get_db_session)``。
 """
 
 import hashlib
@@ -20,6 +26,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import (
     AuditLog,
@@ -89,169 +96,169 @@ async def upload_requirement(
     file: UploadFile = File(...),
     use_ai: bool = Form(True),
     current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
 ):
     """上传需求文档并解析。"""
     # 校验项目
-    async with get_db_session() as db:
-        proj = (
-            await db.execute(select(Project).where(Project.id == project_id))
-        ).scalar_one_or_none()
-        if not proj:
-            raise HTTPException(404, "项目不存在")
+    proj = (
+        await db.execute(select(Project).where(Project.id == project_id))
+    ).scalar_one_or_none()
+    if not proj:
+        raise HTTPException(404, "项目不存在")
 
-        fmt, ext = _detect_format(file.filename or "")
-        if fmt is None:
-            raise HTTPException(400, f"不支持的格式: {ext}（仅支持 .docx/.pdf/.txt）")
+    fmt, ext = _detect_format(file.filename or "")
+    if fmt is None:
+        raise HTTPException(400, f"不支持的格式: {ext}（仅支持 .docx/.pdf/.txt）")
 
-        # 落盘
-        stored_name = f"{uuid.uuid4()}{ext}"
-        storage_path = os.path.join(REQ_DIR, stored_name)
-        content = await file.read()
-        if len(content) > MAX_UPLOAD_SIZE:
-            raise HTTPException(400, "文件超过 20MB 限制")
-        with open(storage_path, "wb") as f:
-            f.write(content)
-        sha = hashlib.sha256(content).hexdigest()
+    # 落盘
+    stored_name = f"{uuid.uuid4()}{ext}"
+    storage_path = os.path.join(REQ_DIR, stored_name)
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_SIZE:
+        raise HTTPException(400, "文件超过 20MB 限制")
+    with open(storage_path, "wb") as f:
+        f.write(content)
+    sha = hashlib.sha256(content).hexdigest()
 
-        # 抽取文本
-        try:
-            if fmt == DocFormat.DOCX:
-                raw_text = extract_text_docx(storage_path)
-            elif fmt == DocFormat.PDF:
-                raw_text = extract_text_pdf(storage_path)
-            else:
-                raw_text = content.decode("utf-8", errors="ignore")
-        except Exception as e:  # noqa: BLE001
-            raw_text = ""
-            logger.warning(f"Extract text failed for {file.filename}: {e}")
+    # 抽取文本
+    try:
+        if fmt == DocFormat.DOCX:
+            raw_text = extract_text_docx(storage_path)
+        elif fmt == DocFormat.PDF:
+            raw_text = extract_text_pdf(storage_path)
+        else:
+            raw_text = content.decode("utf-8", errors="ignore")
+    except Exception as e:  # noqa: BLE001
+        raw_text = ""
+        logger.warning(f"Extract text failed for {file.filename}: {e}")
 
-        # 解析需求
-        try:
-            items, engine = await parse_requirements(raw_text or "", use_ai=use_ai)
-        except ModelNotConfiguredError:
-            items, engine = [], "rule_degraded"
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"Requirement parse failed: {e}")
-            items, engine = [], "rule_degraded"
+    # 解析需求
+    try:
+        items, engine = await parse_requirements(raw_text or "", use_ai=use_ai)
+    except ModelNotConfiguredError:
+        items, engine = [], "rule_degraded"
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"Requirement parse failed: {e}")
+        items, engine = [], "rule_degraded"
 
-        req_doc = RequirementDoc(
-            project_id=uuid.UUID(project_id),
-            uploader_id=current_user.id,
-            filename=file.filename or stored_name,
-            format=fmt,
-            storage_key=storage_path,
-            raw_text=raw_text,
-            status=DocStatus.PARSED if items else DocStatus.FAILED,
-            parse_engine=engine,
-            requirements_json={
-                "title": file.filename or "",
-                "total": len(items),
-                "items": [i.model_dump() for i in items],
-            },
-            file_size=len(content),
-            sha256=sha,
-        )
-        db.add(req_doc)
-        await db.commit()
-        await db.refresh(req_doc)
-        _audit(db, current_user, "upload_requirement", str(req_doc.id))
-        await db.commit()
+    req_doc = RequirementDoc(
+        project_id=uuid.UUID(project_id),
+        uploader_id=current_user.id,
+        filename=file.filename or stored_name,
+        format=fmt,
+        storage_key=storage_path,
+        raw_text=raw_text,
+        status=DocStatus.PARSED if items else DocStatus.FAILED,
+        parse_engine=engine,
+        requirements_json={
+            "title": file.filename or "",
+            "total": len(items),
+            "items": [i.model_dump() for i in items],
+        },
+        file_size=len(content),
+        sha256=sha,
+    )
+    db.add(req_doc)
+    await db.commit()
+    await db.refresh(req_doc)
+    _audit(db, current_user, "upload_requirement", str(req_doc.id))
+    await db.commit()
 
-        return {
-            "code": 0,
-            "data": {
-                "id": str(req_doc.id),
-                "filename": req_doc.filename,
-                "status": req_doc.status.value,
-                "parse_engine": engine,
-                "total": len(items),
-                "requirements": [i.model_dump() for i in items],
-            },
-            "message": "解析完成" if items else "未解析到需求（已降级）",
-        }
+    return {
+        "code": 0,
+        "data": {
+            "id": str(req_doc.id),
+            "filename": req_doc.filename,
+            "status": req_doc.status.value,
+            "parse_engine": engine,
+            "total": len(items),
+            "requirements": [i.model_dump() for i in items],
+        },
+        "message": "解析完成" if items else "未解析到需求（已降级）",
+    }
 
 
 @router.get("")
 async def list_requirements(
     project_id: str,
     current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
 ):
     """按项目列出需求文档。"""
-    async with get_db_session() as db:
-        rows = (
-            await db.execute(
-                select(RequirementDoc)
-                .where(RequirementDoc.project_id == project_id)
-                .order_by(RequirementDoc.created_at.desc())
-            )
-        ).scalars().all()
-        return {
-            "code": 0,
-            "data": [
-                {
-                    "id": str(r.id),
-                    "filename": r.filename,
-                    "format": r.format.value,
-                    "status": r.status.value,
-                    "parse_engine": r.parse_engine,
-                    "total": (r.requirements_json or {}).get("total", 0),
-                    "created_at": r.created_at.isoformat() if r.created_at else None,
-                }
-                for r in rows
-            ],
-            "message": "success",
-        }
+    rows = (
+        await db.execute(
+            select(RequirementDoc)
+            .where(RequirementDoc.project_id == project_id)
+            .order_by(RequirementDoc.created_at.desc())
+        )
+    ).scalars().all()
+    return {
+        "code": 0,
+        "data": [
+            {
+                "id": str(r.id),
+                "filename": r.filename,
+                "format": r.format.value,
+                "status": r.status.value,
+                "parse_engine": r.parse_engine,
+                "total": (r.requirements_json or {}).get("total", 0),
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in rows
+        ],
+        "message": "success",
+    }
 
 
 @router.get("/{doc_id}")
 async def get_requirement(
     doc_id: str,
     current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
 ):
     """需求文档详情。"""
-    async with get_db_session() as db:
-        r = (
-            await db.execute(select(RequirementDoc).where(RequirementDoc.id == doc_id))
-        ).scalar_one_or_none()
-        if not r:
-            raise HTTPException(404, "需求文档不存在")
-        return {
-            "code": 0,
-            "data": {
-                "id": str(r.id),
-                "filename": r.filename,
-                "format": r.format.value,
-                "status": r.status.value,
-                "parse_engine": r.parse_engine,
-                "requirements": r.requirements_json or {},
-                "error": r.error,
-                "created_at": r.created_at.isoformat() if r.created_at else None,
-            },
-            "message": "success",
-        }
+    r = (
+        await db.execute(select(RequirementDoc).where(RequirementDoc.id == doc_id))
+    ).scalar_one_or_none()
+    if not r:
+        raise HTTPException(404, "需求文档不存在")
+    return {
+        "code": 0,
+        "data": {
+            "id": str(r.id),
+            "filename": r.filename,
+            "format": r.format.value,
+            "status": r.status.value,
+            "parse_engine": r.parse_engine,
+            "requirements": r.requirements_json or {},
+            "error": r.error,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        },
+        "message": "success",
+    }
 
 
 @router.delete("/{doc_id}")
 async def delete_requirement(
     doc_id: str,
     current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
 ):
     """删除需求文档。"""
-    async with get_db_session() as db:
-        r = (
-            await db.execute(select(RequirementDoc).where(RequirementDoc.id == doc_id))
-        ).scalar_one_or_none()
-        if not r:
-            raise HTTPException(404, "需求文档不存在")
-        await db.delete(r)
-        await db.commit()
-        # 清理本地文件
-        try:
-            if r.storage_key and os.path.exists(r.storage_key):
-                os.remove(r.storage_key)
-        except Exception:  # noqa: BLE001
-            pass
-        return {"code": 0, "data": None, "message": "已删除"}
+    r = (
+        await db.execute(select(RequirementDoc).where(RequirementDoc.id == doc_id))
+    ).scalar_one_or_none()
+    if not r:
+        raise HTTPException(404, "需求文档不存在")
+    await db.delete(r)
+    await db.commit()
+    # 清理本地文件
+    try:
+        if r.storage_key and os.path.exists(r.storage_key):
+            os.remove(r.storage_key)
+    except Exception:  # noqa: BLE001
+        pass
+    return {"code": 0, "data": None, "message": "已删除"}
 
 
 # ==================== 一键生成测试用例 ====================
@@ -279,106 +286,106 @@ async def generate_cases(
     doc_id: str,
     req: GenerateCasesRequest,
     current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
 ):
     """基于需求文档一键生成测试用例；提供 test_run_id 则落库为 TestCase。"""
-    async with get_db_session() as db:
-        r = (
-            await db.execute(select(RequirementDoc).where(RequirementDoc.id == doc_id))
-        ).scalar_one_or_none()
-        if not r:
-            raise HTTPException(404, "需求文档不存在")
-        items = (r.requirements_json or {}).get("items", [])
-        if not items:
-            raise HTTPException(400, "该需求文档未解析出任何需求，无法生成用例")
+    r = (
+        await db.execute(select(RequirementDoc).where(RequirementDoc.id == doc_id))
+    ).scalar_one_or_none()
+    if not r:
+        raise HTTPException(404, "需求文档不存在")
+    items = (r.requirements_json or {}).get("items", [])
+    if not items:
+        raise HTTPException(400, "该需求文档未解析出任何需求，无法生成用例")
 
-        cases: list[dict] = []
-        if req.use_ai:
-            try:
-                router_ai = get_model_router()
-                resp = await router_ai.call(
-                    use_case="doc_parse",
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": _PROMPT_GEN.format(
-                                reqs=str(
-                                    [
-                                        {
-                                            "rid": i.get("rid"),
-                                            "title": i.get("title"),
-                                            "acceptance_criteria": i.get("acceptance_criteria", []),
-                                        }
-                                        for i in items
-                                    ]
-                                )
-                            ),
-                        }
-                    ],
-                    response_format_json=True,
-                    temperature=0.2,
-                )
-                import json as _json
-                import re as _re
-
-                def _extract(text: str):
-                    try:
-                        return _json.loads(text)
-                    except Exception:
-                        m = _re.search(r"\{.*\}", text, _re.DOTALL)
-                        return _json.loads(m.group(0)) if m else {}
-
-                parsed = _extract(resp or "")
-                cases = parsed.get("cases", []) or []
-            except ModelNotConfiguredError:
-                cases = []
-            except Exception as e:  # noqa: BLE001
-                logger.warning(f"AI generate cases failed: {e}")
-                cases = []
-
-        if not cases:
-            # 兜底：每个需求生成一条基础功能用例
-            for it in items:
-                cases.append(
+    cases: list[dict] = []
+    if req.use_ai:
+        try:
+            router_ai = get_model_router()
+            resp = await router_ai.call(
+                use_case="doc_parse",
+                messages=[
                     {
-                        "title": f"验证需求：{it.get('title','')}",
-                        "description": it.get("description", ""),
-                        "priority": it.get("priority", "P2"),
-                        "related_requirement": it.get("rid", ""),
-                        "steps": it.get("acceptance_criteria", []) or ["执行需求对应操作"],
-                        "expected": "行为符合需求描述",
-                        "type": "functional",
+                        "role": "user",
+                        "content": _PROMPT_GEN.format(
+                            reqs=str(
+                                [
+                                    {
+                                        "rid": i.get("rid"),
+                                        "title": i.get("title"),
+                                        "acceptance_criteria": i.get("acceptance_criteria", []),
+                                    }
+                                    for i in items
+                                ]
+                            )
+                        ),
                     }
-                )
+                ],
+                response_format_json=True,
+                temperature=0.2,
+            )
+            import json as _json
+            import re as _re
 
-        # 落库
-        created = 0
-        if req.test_run_id:
-            try:
-                run_uuid = uuid.UUID(req.test_run_id)
-            except ValueError:
-                raise HTTPException(400, "test_run_id 格式错误")
-            for c in cases:
-                db.add(
-                    TestCase(
-                        test_run_id=run_uuid,
-                        case_type="requirement",
-                        case_name=c.get("title", "")[:500],
-                        description=c.get("description", ""),
-                        request_data={},
-                        expected_result={
-                            "expected": c.get("expected", ""),
-                            "steps": c.get("steps", []),
-                            "related_requirement": c.get("related_requirement", ""),
-                        },
-                        validation_rules={},
-                        priority=str(c.get("priority", "P2")).upper()[:2] or "P2",
-                    )
-                )
-                created += 1
-            await db.commit()
+            def _extract(text: str):
+                try:
+                    return _json.loads(text)
+                except Exception:
+                    m = _re.search(r"\{.*\}", text, _re.DOTALL)
+                    return _json.loads(m.group(0)) if m else {}
 
-        return {
-            "code": 0,
-            "data": {"total": len(cases), "created": created, "cases": cases},
-            "message": f"生成 {len(cases)} 条用例" + (f"，已落库 {created} 条" if created else ""),
-        }
+            parsed = _extract(resp or "")
+            cases = parsed.get("cases", []) or []
+        except ModelNotConfiguredError:
+            cases = []
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"AI generate cases failed: {e}")
+            cases = []
+
+    if not cases:
+        # 兜底：每个需求生成一条基础功能用例
+        for it in items:
+            cases.append(
+                {
+                    "title": f"验证需求：{it.get('title','')}",
+                    "description": it.get("description", ""),
+                    "priority": it.get("priority", "P2"),
+                    "related_requirement": it.get("rid", ""),
+                    "steps": it.get("acceptance_criteria", []) or ["执行需求对应操作"],
+                    "expected": "行为符合需求描述",
+                    "type": "functional",
+                }
+            )
+
+    # 落库
+    created = 0
+    if req.test_run_id:
+        try:
+            run_uuid = uuid.UUID(req.test_run_id)
+        except ValueError:
+            raise HTTPException(400, "test_run_id 格式错误")
+        for c in cases:
+            db.add(
+                TestCase(
+                    test_run_id=run_uuid,
+                    case_type="requirement",
+                    case_name=c.get("title", "")[:500],
+                    description=c.get("description", ""),
+                    request_data={},
+                    expected_result={
+                        "expected": c.get("expected", ""),
+                        "steps": c.get("steps", []),
+                        "related_requirement": c.get("related_requirement", ""),
+                    },
+                    validation_rules={},
+                    priority=str(c.get("priority", "P2")).upper()[:2] or "P2",
+                )
+            )
+            created += 1
+        await db.commit()
+
+    return {
+        "code": 0,
+        "data": {"total": len(cases), "created": created, "cases": cases},
+        "message": f"生成 {len(cases)} 条用例" + (f"，已落库 {created} 条" if created else ""),
+    }
