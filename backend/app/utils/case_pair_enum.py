@@ -63,8 +63,12 @@ class CasePairEnum(TypeDecorator):
         # 拆 SAEnum 专属参数 vs 透传给 SAEnum 实例构造
         saenum_kw = {k: kw.pop(k) for k in list(kw) if k in _SAENUM_KEYS}
         # 显式构造底层 SAEnum 实例（PG 端用 ENUM impl，asyncpg 走 enum adapter）
-        # 重要：传 length 给 SAEnum 让 impl 实例可创建
-        saenum_kw.setdefault("length", 64)
+        # **不要**传 `length` 给 SAEnum —— SQLAlchemy 2.0 一旦看到 length 就会走 VARCHAR 路径，
+        # 但 asyncpg dialect 又会因为 impl=SAEnum 看到 enum 列上下文 → 抛
+        # "CompileError: PostgreSQL AsyncPgEnum type requires a name"。
+        # 旧 commit 8cd535e6 误加 `setdefault("length", 64)` 是这个隐形 bug 的源头
+        # ——老库没事是因为表已建过 create_all checkfirst 跳过；新部署 / down -v 后
+        # init_db() 会炸，让 _run_lifecycle_step 吞掉 + 整个 schema 缺失。
         self._saenum_impl = SAEnum(enum_class, **saenum_kw)
         # 父类 TypeDecorator 不需要再传 enum_class / values_callable
         super().__init__()
