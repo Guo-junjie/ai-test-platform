@@ -53,8 +53,15 @@ REQ_DIR = os.path.join("/app", "data", "uploads", "requirements")
 os.makedirs(REQ_DIR, exist_ok=True)
 
 MAX_UPLOAD_SIZE = 20 * 1024 * 1024  # 20MB
-ALLOWED_EXT = {".docx", ".pdf", ".txt"}
-EXT_TO_FORMAT = {".docx": DocFormat.DOCX, ".pdf": DocFormat.PDF, ".txt": DocFormat.TXT}
+ALLOWED_EXT = {".docx", ".pdf", ".txt", ".md", ".markdown"}
+EXT_TO_FORMAT = {
+    ".docx": DocFormat.DOCX,
+    ".pdf": DocFormat.PDF,
+    ".txt": DocFormat.TXT,
+    # Markdown 是纯文本超集，等同 .txt（下游解析统一按 UTF-8 读）
+    ".md": DocFormat.TXT,
+    ".markdown": DocFormat.TXT,
+}
 
 
 # ==================== 请求模型 ====================
@@ -98,7 +105,7 @@ async def upload_requirement(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ):
-    """上传需求文档并解析。"""
+    """上传需求文档并解析（支持 .docx / .pdf / .txt / .md）。"""
     # 校验项目
     proj = (
         await db.execute(select(Project).where(Project.id == project_id))
@@ -108,7 +115,7 @@ async def upload_requirement(
 
     fmt, ext = _detect_format(file.filename or "")
     if fmt is None:
-        raise HTTPException(400, f"不支持的格式: {ext}（仅支持 .docx/.pdf/.txt）")
+        raise HTTPException(400, f"不支持的格式: {ext}（仅支持 .docx/.pdf/.txt/.md）")
 
     # 落盘
     stored_name = f"{uuid.uuid4()}{ext}"

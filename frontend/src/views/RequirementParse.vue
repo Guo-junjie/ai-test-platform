@@ -23,7 +23,7 @@
             :auto-upload="false"
             :limit="1"
             :show-file-list="true"
-            accept=".docx,.pdf,.txt"
+            accept=".docx,.pdf,.txt,.md,.markdown"
             :on-change="onFileChange"
             :on-exceed="() => ElMessage.warning('每次仅可上传一个文件')"
           >
@@ -31,7 +31,8 @@
             <div class="el-upload__text">拖入文件或 <em>点击选择</em></div>
             <template #tip>
               <div class="el-upload__tip">
-                支持 Word(docx) / PDF / 纯文本(txt)，单文件 ≤ 20MB。AI 会从 PRD 中抽取功能点、验收标准与建议测试点。
+                支持 Word(.docx) / PDF / 纯文本(.txt) / Markdown(.md)，单文件 ≤ 20MB。
+                AI 会从 PRD 中抽取功能点、验收标准与建议测试点。
               </div>
             </template>
           </el-upload>
