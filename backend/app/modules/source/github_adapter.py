@@ -47,6 +47,13 @@ class GitHubAdapter(CodeSourceAdapter):
         Returns:
             标准化结果字典。
         """
+        # 防御性清理：用户可能在 UI 里误粘了首尾空白（尤其 repo_url 末尾的空格
+        # 会让 git 报 "Malformed input to a URL function"）。必须在构造 authed_url
+        # 和 local_path 之前 strip，否则克隆 URL 与本地目录都会带空格而失败。
+        # 同时能救回库里已存在的带空格脏数据，无需改库。
+        config.repo_url = (config.repo_url or "").strip()
+        config.workspace_dir = (config.workspace_dir or "").strip()
+
         if not config.repo_url:
             raise ValueError("repo_url is required for GitHub source")
 

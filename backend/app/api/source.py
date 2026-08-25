@@ -232,6 +232,11 @@ async def connect_source(
             f"Supported: {[t.value for t in ModelSourceType]}",
         )
 
+    # 清理用户可能误粘的首尾空白（尤其 repo_url 末尾空格会让 git 报
+    # "Malformed input to a URL function"），落库前先 strip 避免产生脏数据。
+    if isinstance(req.config.get("repo_url"), str):
+        req.config["repo_url"] = req.config["repo_url"].strip()
+
     # 加密敏感字段
     encrypted_config = encrypt_dict(req.config)
 
