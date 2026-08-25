@@ -100,44 +100,140 @@ def _split_chunks(text: str, max_chars: int = 12000) -> list[str]:
     return chunks
 
 
-def _coerce_item(item: dict, idx: int) -> RequirementItem:
-    """把 AI 返回的 dict 规整为 RequirementItem。"""
-    rid = item.get("rid") or f"REQ-{idx:03d}"
-    priority = str(item.get("priority") or "P2").upper()
+def _coerce_item(item, idx: int) -> RequirementItem:
+    """把 AI 返回的 dict（或 str）规整为 RequirementItem。
+
+    容错：
+    - dict：按字段读取（标准路径）
+    - str：当作标题，自动生成 rid/title，description=原文（兜底 AI 返回 list of str）
+    - 其他类型：抛 TypeError → 上层 catch 跳过
+    """
+    rid = ""
+    title = ""
+    description = ""
+    priority = "P2"
+    category = "functional"
+    source_section = ""
+    acceptance_criteria: list[str] = []
+    related_modules: list[str] = []
+    test_points: list[str] = []
+    confidence = 0.5
+    evidence = ""
+
+    if isinstance(item, str):
+        # AI 模式有时返回 ["FR-1 用户登录", "FR-2 ...", ...] 这种扁平字符串列表
+        txt = item.strip()
+        if not txt:
+            raise ValueError("empty string requirement")
+        # 尝试从字符串前缀抽 rid（如 "FR-1: 用户登录" / "FR-USER-01 ..." / "[FR-ORDER-02] xxx"）
+        m = re.match(
+            r"^[\s【\[(]*"
+            r"(?P<rid>(?:FR|NFR|R|REQ|US)[-_A-Z0-9]+)"
+            r"[\]）:：\.\s]+(?P<title>.+)$",
+            txt,
+            re.IGNORECASE,
+        )
+        if m:
+            rid = m.group("rid").upper().replace(" ", "-")
+            title = m.group("title").strip()
+        else:
+            title = txt
+        description = txt
+        confidence = 0.4
+    elif isinstance(item, dict):
+        rid = item.get("rid") or f"REQ-{idx:03d}"
+        title = item.get("title", "") or ""
+        description = item.get("description", "") or ""
+        priority = str(item.get("priority") or "P2").upper()
+        category = str(item.get("category") or "functional").lower()
+        source_section = item.get("source_section", "") or ""
+        acceptance_criteria = list(item.get("acceptance_criteria", []) or [])
+        related_modules = list(item.get("related_modules", []) or [])
+        test_points = list(item.get("test_points", []) or [])
+        conf = item.get("confidence")
+        confidence = float(conf) if isinstance(conf, (int, float)) else 0.8
+        evidence = item.get("evidence", "") or ""
+    else:
+        raise TypeError(f"unsupported requirement item type: {type(item).__name__}")
+
+    if not rid:
+        rid = f"REQ-{idx:03d}"
     if priority not in ("P0", "P1", "P2", "P3"):
         priority = "P2"
-    category = str(item.get("category") or "functional").lower()
     if category not in ("functional", "non_functional", "interface", "security"):
         category = "functional"
-    conf = item.get("confidence")
-    conf = float(conf) if isinstance(conf, (int, float)) else 0.8
+
     return RequirementItem(
         rid=str(rid),
-        title=item.get("title", "") or "",
-        description=item.get("description", "") or "",
+        title=str(title)[:500],
+        description=str(description)[:2000],
         category=category,
         priority=priority,
-        source_section=item.get("source_section", "") or "",
-        acceptance_criteria=list(item.get("acceptance_criteria", []) or []),
-        related_modules=list(item.get("related_modules", []) or []),
-        test_points=list(item.get("test_points", []) or []),
-        confidence=conf,
-        evidence=item.get("evidence", "") or "",
+        source_section=str(source_section)[:200],
+        acceptance_criteria=acceptance_criteria,
+        related_modules=related_modules,
+        test_points=test_points,
+        confidence=confidence,
+        evidence=evidence,
     )
+
+
+def _looks_like_requirement_doc(raw_text: str) -> bool:
+    """
+    弱判定：看文本是否「像」需求文档。
+    - 太短（<120 字符）几乎不会包含完整需求，拒绝
+    - 没有 FR/NFR/需求/功能 等关键词，且没有编号列表，也拒绝
+    - pip-style 单行短词（如 `fastapi==0.110.0`）这种纯依赖文件 → 明显不是需求文档
+    """
+    text = raw_text.strip()
+    if len(text) < 120:
+        return False
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if len(lines) < 4:
+        return False
+    # pip-style: 大多数行是 `name==version` 或 `name>=version`
+    pip_like = sum(
+        1
+        for ln in lines
+        if re.fullmatch(r"[A-Za-z0-9_.\-]+\s*[<>=!~]=?\s*[A-Za-z0-9_.\-]+", ln)
+    )
+    if pip_like >= max(3, len(lines) // 2):
+        return False
+    # 含 fr/nfr/需求/功能 关键词 / 编号列表 / 表格
+    if re.search(r"\b(FR|NFR|R|REQ)-?\s*\d+", text, re.IGNORECASE):
+        return True
+    if re.search(r"(需求|功能|验收|用户故事|user\s+story|acceptance)", text, re.IGNORECASE):
+        return True
+    if re.search(r"^\s*\d+(?:\.\d+)*\s*[.、）)\.]", text, re.MULTILINE):
+        return True
+    return False
 
 
 def _regex_fallback(raw_text: str, max_requirements: int = 200) -> list[RequirementItem]:
     """
     无 AI 时的规则兜底：抽取编号条目（1. / 1.1 / (一) / 【需求】 / 功能：）与
-    “需求/功能”章节标题，退化为低置信度需求骨架。
+    "需求/功能"章节标题，退化为低置信度需求骨架。
+
+    若文本不像需求文档（如 pip 依赖文件、纯日志），返回 []（不再生成骨架）。
     """
     items: list[RequirementItem] = []
+    if not _looks_like_requirement_doc(raw_text):
+        logger.info(
+            "regex fallback: text does NOT look like a requirement doc "
+            f"(len={len(raw_text.strip())}); skip"
+        )
+        return items
     seen: set[str] = set()
     # 匹配编号段落开头：数字编号、中文编号、方括号标题、以"需求/功能"开头的行
     patterns = [
+        # 数字编号（1. / 1.1 / 1.1.2）
         re.compile(r"^\s*(\d+(?:\.\d+)*)\s*[.、)]\s*(.+)$"),
+        # 字母编号（FR-USER-01 / NFR-2 / REQ-3）
+        re.compile(r"^\s*(?P<rid>(?:FR|NFR|R|REQ|US)-[A-Z0-9_\-]+)\s*[:：、\.\s]\s*(?P<title>.+)$", re.IGNORECASE),
+        # 中文章节编号 / 括号
         re.compile(r"^\s*[（(](.+?)[)）]\s*(.+)$"),
-        re.compile(r"^\s*【?\s*(需求|功能|特性|规则)\s*】?\s*[:：]?\s*(.+)$"),
+        # 关键词：需求 / 功能 / 特性 / 规则 / 验收标准
+        re.compile(r"^\s*【?\s*(需求|功能|特性|规则|验收标准)\s*】?\s*[:：]?\s*(.+)$"),
     ]
     for line in raw_text.splitlines():
         line = line.strip()
