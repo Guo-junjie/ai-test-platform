@@ -955,28 +955,20 @@ async def init_db():
     # 当 PG 枚举仅有大写标签时，写入会抛 "invalid input value for enum xxx: 'yyy'"。
     # 同时插入大写 + 小写标签，兼容两种 bind 方式（002 迁移对 kbchunktype 也用此模式，
     # 但**老库用户 002 迁移未生效时（init_db 启动期 create_all 已建大写枚举）**，这里兜底补小写）。
-    _ENUM_CASE_PAIRS: tuple[tuple[str, type[PyEnum]], ...] = (
-        ("kbchunktype", KBChunkType),
-        ("casesource", CaseSource),
-        ("caseassetstatus", CaseAssetStatus),
-        ("scenariostatus", ScenarioStatus),
-        ("endpointsource", EndpointSource),
-    )
+    #
+    # 同步逻辑已抽到 ``app/utils/enum_sync.sync_enum_case_pairs``，便于 ``scripts/sync_enum_labels``
+    # 等运维脚本在不重启 backend 的场景下手动补齐。
     try:
+        from app.utils.enum_sync import sync_enum_case_pairs
+
         async with async_engine.connect() as conn:
             autocommit_conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
-            for type_name, enum_cls in _ENUM_CASE_PAIRS:
-                # 同时建大小写两个 label（兼容大写 NAME 写入 + 小写 VALUE 写入）
-                for label in tuple(m.name for m in enum_cls) + tuple(m.value for m in enum_cls):
-                    try:
-                        await autocommit_conn.execute(
-                            text(f"ALTER TYPE {type_name} ADD VALUE IF NOT EXISTS '{label}'")
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            f"Failed to add enum label '{label}' to {type_name}: {e}. "
-                            f"若落库报 invalid input value for enum，请执行 `docker compose down -v` 重建数据库。"
-                        )
+            sync_report = await sync_enum_case_pairs(autocommit_conn)
+            for type_name, info in sync_report.items():
+                if info["added"]:
+                    logger.info(
+                        f"{type_name}: 补齐 label {info['added']} -> current={info['current']}"
+                    )
     except Exception as e:
         logger.warning(f"Skip enum case-pair sync (connection error): {e}")
     else:

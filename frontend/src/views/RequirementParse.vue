@@ -146,7 +146,7 @@
             <el-option
               v-for="r in testRuns"
               :key="r.id"
-              :label="`${r.name} · ${r.status}`"
+              :label="`#${(r.id || '').slice(0, 8)} · ${r.source_type ?? ''} · ${r.status ?? ''} · ${(r.created_at || '').slice(0, 16)}`"
               :value="r.id"
             />
           </el-select>

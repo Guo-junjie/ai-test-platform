@@ -38,11 +38,15 @@ if _PARENT not in sys.path:
 from app.utils.database import AsyncSessionLocal  # noqa: E402
 from app.models.database import (  # noqa: E402
     ApiEndpoint,
+    CaseAssetStatus,
+    CaseSource,
     Defect,
+    EndpointSource,
     KBChunkType,
     KBRebuildState,
     KnowledgeChunk,
     KnowledgeTerm,
+    ScenarioStatus,
     TestCase,
 )
 
@@ -85,16 +89,15 @@ async def check_engine_version(db: AsyncSession) -> None:
 
 async def check_enum_labels(db: AsyncSession) -> None:
     section("② 5 个 SAEnum 枚举双 label 是否齐全")
+    # 全部从 ORM 枚举实况查，避免硬编码过时值
+    # （历史上 verify_kb_rag.py 这里写死{"MANUAL","IMPORTED","AI_GENERATED"}，
+    # 跟 ORM CaseSource 增加 REQUIREMENT 后脱节 —— 让算法自己查才稳）
     expected = {
-        "kbchunktype": {m.name for m in KBChunkType}
-        | {m.value for m in KBChunkType},
-        "casesource": {"MANUAL", "IMPORTED", "AI_GENERATED", "manual", "imported", "ai_generated"},
-        "caseassetstatus": {"DRAFT", "REVIEWED", "APPROVED", "DEPRECATED",
-                             "draft", "reviewed", "approved", "deprecated"},
-        "scenariostatus": {"DRAFT", "ACTIVE", "ARCHIVED",
-                            "draft", "active", "archived"},
-        "endpointsource": {"DOC_IMPORT", "MANUAL", "AI_GENERATED",
-                            "doc_import", "manual", "ai_generated"},
+        "kbchunktype": {m.name for m in KBChunkType} | {m.value for m in KBChunkType},
+        "casesource": {m.name for m in CaseSource} | {m.value for m in CaseSource},
+        "caseassetstatus": {m.name for m in CaseAssetStatus} | {m.value for m in CaseAssetStatus},
+        "scenariostatus": {m.name for m in ScenarioStatus} | {m.value for m in ScenarioStatus},
+        "endpointsource": {m.name for m in EndpointSource} | {m.value for m in EndpointSource},
     }
     for type_name, labels in expected.items():
         try:
@@ -108,11 +111,12 @@ async def check_enum_labels(db: AsyncSession) -> None:
             continue
         missing = labels - actual
         if not missing:
-            ok(f"{type_name}: {len(labels)} 个 label 齐全")
+            ok(f"{type_name}: {len(labels)} 个 label 齐全 ({sorted(actual)})")
         else:
             fail(
-                f"{type_name}: 缺 label {sorted(missing)}",
-                "重启 backend 让 init_db 自动 ALTER TYPE ADD VALUE；"
+                f"{type_name}: 缺 label {sorted(missing)}，当前 PG 端有 {sorted(actual)}",
+                "在 backend 容器内跑 `python -m scripts.sync_enum_labels` 立即补齐；"
+                "或重启 backend 让 init_db 自动 ALTER TYPE ADD VALUE；"
                 "若仍失败执行 `docker compose down -v` 重建数据库（最干净）",
             )
 
