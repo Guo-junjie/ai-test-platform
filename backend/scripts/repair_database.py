@@ -47,7 +47,8 @@ for p in (str(_PARENT), str(_BACKEND_DIR)):
 from sqlalchemy import select, text  # noqa: E402
 from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
 
-from app.utils.database import async_engine, AsyncSessionLocal, Base  # noqa: E402
+from app.utils.database import async_engine, AsyncSessionLocal  # noqa: E402
+from app.models.database import Base  # noqa: E402
 from app.utils.enum_sync import run_enum_sync_and_report  # noqa: E402
 
 # 关键表清单（按业务重要性排列）
@@ -126,28 +127,30 @@ async def step1_check_tables(db: AsyncSession) -> list[str]:
     return missing
 
 
-async def step2_recreate_missing(db: AsyncSession, missing: list[str]) -> None:
+async def step2_recreate_missing(_db_unused: AsyncSession, missing: list[str]) -> None:
     section("② 重建缺表 — Base.metadata.create_all（幂等，不动已有表）")
     if not missing:
         ok("无缺表，跳过")
         return
     try:
-        # 在 AUTOCOMMIT 连接上跑 create_all（DDL 不能在事务里跨语句）
-        async with async_engine.connect() as conn:
-            ac = await conn.execution_options(isolation_level="AUTOCOMMIT")
-            await ac.run_sync(Base.metadata.create_all)
-        ok(f"已尝试 create_all，再次检查")
+        # 与 init_db 完全一致的写法 — async_engine.begin() 隐式 commit，
+        # Base.metadata.create_all 自带 checkfirst=True（已有表不会重建）。
+        async with async_engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        ok("create_all 跑完，再次检查")
         # 再查一次
-        rows = (await db.execute(text(
-            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
-        ))).scalars().all()
-        actual = set(rows)
-        still_missing = [t for t in missing if t not in actual]
-        if still_missing:
-            fail(f"create_all 后仍缺 {still_missing}",
-                 "用户没建表权限？检查 postgres 容器日志：`docker compose logs postgres | tail -50`")
-        else:
-            ok(f"全部 {len(missing)} 张关键表已建回")
+        async with AsyncSessionLocal() as db:
+            rows = (await db.execute(text(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
+            ))).scalars().all()
+            actual = set(rows)
+            still_missing = [t for t in missing if t not in actual]
+            if still_missing:
+                fail(f"create_all 后仍缺 {still_missing}",
+                     "用户没建表权限？检查 postgres 容器日志："
+                     "`docker compose logs postgres | tail -50`")
+            else:
+                ok(f"全部 {len(missing)} 张关键表已建回")
     except Exception as exc:  # noqa: BLE001
         fail(f"create_all 抛错: {type(exc).__name__}: {exc}",
              "检查 PG 连接 / 权限 / 磁盘空间")
