@@ -2,21 +2,64 @@
   <div class="analysis-page">
     <!-- Top action bar -->
     <el-card shadow="hover" class="action-card">
+      <el-radio-group v-model="inputMode" style="margin-bottom: 12px">
+        <el-radio-button value="path">输入路径</el-radio-button>
+        <el-radio-button value="files">上传文件 / Zip</el-radio-button>
+      </el-radio-group>
+
       <div class="action-bar">
         <div class="left-section">
-          <el-input
-            v-model="localPath"
-            placeholder="输入代码本地路径，如 /app/data/repos/my-project"
-            style="width: 400px"
-            clearable
-          />
-          <el-button type="primary" :loading="analyzing" @click="runAnalysis">
-            <el-icon><Search /></el-icon>
-            发起解析
-          </el-button>
+          <!-- 模式 1：手动路径 -->
+          <template v-if="inputMode === 'path'">
+            <el-input
+              v-model="localPath"
+              placeholder="输入代码本地路径，如 /app/data/repos/my-project（容器内路径）"
+              style="width: 400px"
+              clearable
+            />
+            <el-button type="primary" :loading="analyzing" @click="runAnalysis">
+              <el-icon><Search /></el-icon>
+              发起解析
+            </el-button>
+          </template>
+
+          <!-- 模式 2：文件 / Zip 上传 -->
+          <template v-else>
+            <el-upload
+              v-model:file-list="uploadFileList"
+              :auto-upload="false"
+              multiple
+              :limit="50"
+              accept=".py,.js,.jsx,.ts,.tsx,.java,.kt,.go,.rb,.php,.cs,.cpp,.c,.h,.zip"
+              drag
+              class="upload-area"
+            >
+              <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
+              <div class="el-upload__text">
+                拖入源文件 / 代码 zip 包，或<em>点击选择</em>
+              </div>
+              <template #tip>
+                <div class="el-upload__tip">
+                  支持 .py / .js / .ts / .java / .go / .rb / .php 等单/多文件；也支持 .zip 压缩包
+                </div>
+              </template>
+            </el-upload>
+            <el-button
+              type="primary"
+              :loading="analyzing"
+              :disabled="uploadFileList.length === 0"
+              @click="runUploadAnalysis"
+            >
+              <el-icon><Upload /></el-icon>
+              发起解析
+            </el-button>
+          </template>
         </div>
         <div v-if="analysisResult" class="right-section">
           <el-tag type="success">API 总数: {{ analysisResult.total_apis }}</el-tag>
+          <el-tag v-if="analysisResult.tech_stack?.stack" style="margin-left: 8px" type="info">
+            {{ analysisResult.tech_stack.stack }}
+          </el-tag>
         </div>
       </div>
     </el-card>
@@ -181,16 +224,19 @@
 
 <script setup lang="ts">
 import { ref, computed, nextTick, watch } from 'vue'
-import { Search, Loading } from '@element-plus/icons-vue'
+import { Search, Loading, UploadFilled, Upload } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { analysisApi } from '@/api'
+import type { UploadUserFile, UploadRawFile } from 'element-plus'
 
+const inputMode = ref<'path' | 'files'>('path')
 const localPath = ref('')
 const analyzing = ref(false)
 const analysisResult = ref<any>(null)
 const activeTab = ref('apis')
 const expandedModules = ref<number[]>([])
 const graphRef = ref<HTMLElement>()
+const uploadFileList = ref<UploadUserFile[]>([])
 
 // Computed properties
 const hasBusinessModules = computed(() => {
@@ -274,6 +320,45 @@ async function runAnalysis() {
   }
 }
 
+async function runUploadAnalysis() {
+  if (uploadFileList.value.length === 0) {
+    ElMessage.warning('请先选择文件或 zip 包')
+    return
+  }
+  analyzing.value = true
+  analysisResult.value = null
+  activeTab.value = 'apis'
+  try {
+    // 拆 files vs zip
+    const formData = new FormData()
+    const zipItem = uploadFileList.value.find((f) => f.name?.toLowerCase().endsWith('.zip'))
+    const fileItems = uploadFileList.value.filter((f) => !f.name?.toLowerCase().endsWith('.zip'))
+    for (const item of fileItems) {
+      if (item.raw) formData.append('files', item.raw as UploadRawFile)
+    }
+    if (zipItem && zipItem.raw) {
+      formData.append('zip_file', zipItem.raw as UploadRawFile)
+    }
+    const res: any = await analysisApi.upload(formData)
+    analysisResult.value = res
+    ElMessage.success(
+      `上传解析完成，识别到 ${res.total_apis || 0} 个 API 接口` +
+        (res?.tech_stack?.stack ? `（栈：${res.tech_stack.stack}）` : '')
+    )
+    if (hasBusinessModules.value) {
+      expandedModules.value = [0]
+    }
+    await nextTick()
+    if (hasGraphData.value) {
+      renderDependencyGraph()
+    }
+  } catch (err: any) {
+    ElMessage.error('上传解析失败: ' + (err.response?.data?.detail || err.message))
+  } finally {
+    analyzing.value = false
+  }
+}
+
 function renderDependencyGraph() {
   if (!graphRef.value) return
 
@@ -348,13 +433,24 @@ watch(activeTab, (val) => {
 .action-card .action-bar {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
+  gap: 12px;
 }
 
 .left-section {
   display: flex;
   gap: 12px;
   align-items: center;
+  flex: 1;
+}
+
+.upload-area {
+  width: 400px;
+  margin-right: 8px;
+}
+
+.upload-area :deep(.el-upload-dragger) {
+  padding: 12px;
 }
 
 .loading-card {

@@ -106,17 +106,33 @@ curl -X POST http://localhost:8000/api/requirements/$REQ_ID/generate-cases \
   -d '{"count":5}'
 ```
 
-### ④ 代码解析
+### ④ 代码解析（**3 种输入**）
 
 ```bash
-# ⚠️ local_path 必须是 backend 容器**能访问到的绝对路径**。
-# 最简：把代码工程传到 /tmp/code-sample
-ssh gjj@gjj-virtual-machine "mkdir -p /tmp/code-sample && \
-  ls /tmp/code-sample"
-# 在 gjj 用户下解压代码工程到该目录后：
-
+# 方式 1（兼容）：手动指定容器内绝对路径
 curl -X POST http://localhost:8000/api/analysis/run \
   -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"local_path":"/tmp/code-sample"}'
+
+# 方式 2（新）：直接上传文件 / 多文件 / zip 包（无需手动传 path）
+curl -X POST http://localhost:8000/api/analysis/upload \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "files=@code-sample/main.py" \
+  -F "files=@code-sample/requirements.txt"
+# 或者：-F "zip_file=@yourcode.zip"
+
+# 方式 3：栈检测支持单文件（友好降级，自动用 .parent 当 root）
+curl -X POST http://localhost:8000/api/analysis/run \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"local_path":"/tmp/code-sample/main.py"}'
+# 返回栈识别（可能 unknown + hint），不报错
+```
+
+**前端 UI**：知识库→代码解析页有「输入路径 / 上传文件」单选切换 + 拖拽区。
+
+返回示例： \
   -H "Content-Type: application/json" \
   -d '{"local_path":"/tmp/code-sample"}'
 ```
@@ -144,7 +160,7 @@ curl -X POST http://localhost:8000/api/analysis/run \
 
 ## 关键提示
 
-1. **`POST /api/analysis/run` 必须信任容器挂载的路径**：本平台 backend 容器默认挂载 `/workspace` 或宿主机的 `/tmp`——具体看 `docker-compose.yml` 的 volumes。`code-sample` 这套目录能放在 backend 容器的任何可读路径即可。
+1. **代码解析 3 种输入**：① 手动 `local_path`（兼容） ② 上传源码文件 / zip 包（推荐） ③ 单文件路径自动用 `.parent` 当 root（友好降级）。前端 UI 提供「输入路径 / 上传文件」切换；上传文件后容器自动落到 `/app/data/code-analysis/{uuid}/`。
 
 2. **`POST /api/requirements/{id}/generate-cases` 必须跑过完整的 seed_e2e** 否则 `test_case_assets` 已有 10 条历史用例，本功能会基于历史 + 需求生成增量。
 

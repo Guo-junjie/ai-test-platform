@@ -200,6 +200,11 @@ export const auditApi = {
 export const analysisApi = {
   run: (data: { local_path: string; test_run_id?: string }) =>
     api.post('/analysis/run', data, { timeout: 300000 }),
+  upload: (formData: FormData) =>
+    api.post('/analysis/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 300000,
+    }),
   get: (id: string) => api.get(`/analysis/${id}`),
 }
 

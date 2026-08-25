@@ -130,13 +130,42 @@ class StackDetector:
         - 导入/装饰器/注解/路由模式在源码中出现：+0.1 / 个
 
         Args:
-            project_path: 项目根目录路径。
+            project_path: 项目**根目录**路径，或单个源文件路径。
 
         Returns:
             包含 stack / language / framework / confidence 的字典。
             如果都不匹配，返回 unknown + confidence=0.0。
+
+        Note:
+            支持两种输入（v1.3）：
+            - 目录：完整识别（最强信号）
+            - 单文件：用 ``Path.parent`` 作为 root，但仍执行同样的评分逻辑
+              —— 这样用户直接选一个 main.py 也能拿到有用的栈识别结果（友好降级）。
+              若要提取完整 API 列表请传目录；单文件仅做栈识别。
         """
-        root = Path(project_path)
+        raw = Path(project_path)
+        if not raw.exists():
+            logger.warning(
+                f"Project path does not exist: {project_path}; "
+                "请确认路径（目录或源文件绝对路径）正确"
+            )
+            return {
+                "stack": "unknown",
+                "language": "unknown",
+                "framework": "unknown",
+                "confidence": 0.0,
+                "hint": "路径不存在或不可访问。请上传代码包或在容器内放置该目录。",
+            }
+
+        if raw.is_file():
+            # 单文件输入：把 root 设为所在目录（友好降级）
+            root = raw.parent
+            logger.info(
+                f"project_path is a file ({raw.name}); 用父目录作为 root: {root}"
+            )
+        else:
+            root = raw
+
         if not root.is_dir():
             logger.warning(f"Project path does not exist or is not a directory: {project_path}")
             return {
