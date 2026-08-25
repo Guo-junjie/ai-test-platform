@@ -51,11 +51,12 @@ from app.utils.database import async_engine, AsyncSessionLocal  # noqa: E402
 from app.models.database import Base  # noqa: E402
 from app.utils.enum_sync import run_enum_sync_and_report  # noqa: E402
 
-# 关键表清单（按业务重要性排列）
+# 关键表清单（按业务重要性排列）—— 表名严格对齐 app/models/database.py 中
+# ``__tablename__`` 实际声明（注意 model_routing 是单数！历史写错过 KEY_TABLES 现修）
 KEY_TABLES = (
     "users",
     "projects",
-    "model_routings",
+    "model_routing",   # 单数，对齐 ModelRouting.__tablename__
     "ai_model_configs",
     "test_runs",
     "api_endpoints",
