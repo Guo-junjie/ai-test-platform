@@ -30,11 +30,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import (
     AuditLog,
+    CaseAssetStatus,
+    CaseSource,
     DocFormat,
     DocStatus,
     Project,
     RequirementDoc,
     TestCase,
+    TestCaseAsset,
     User,
 )
 from app.modules.auth.dependencies import get_current_user
@@ -295,7 +298,21 @@ async def generate_cases(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ):
-    """基于需求文档一键生成测试用例；提供 test_run_id 则落库为 TestCase。"""
+    """基于需求文档一键生成测试用例。
+
+落库策略（v1.4 重构）：
+- **始终落库到 test_case_assets**（项目用例资产库，`project_id` 关联）——这是
+  用户在「用例库」页面看到的库；不依赖 test_run_id 也能立即看到
+- **如果提供 test_run_id**：同时把每条用例实例化为 test_cases（test_run 执行实例表）
+  ，即「项目级资产」+「执行实例」双写，让该 test_run 跑时可直接拉这些用例
+- 不依赖 test_run_id，避免之前「不填就 0 created」的 UX 短板
+
+返回：
+- total: AI/兜底生成的 case 条数
+- assets_created: 写入 test_case_assets 的条数（≥ 1 always）
+- instances_created: 写入 test_cases 的条数（仅在提供 test_run_id 时 > 0）
+- cases: 原始 JSON（不持久化细节）
+"""
     r = (
         await db.execute(select(RequirementDoc).where(RequirementDoc.id == doc_id))
     ).scalar_one_or_none()
@@ -364,35 +381,90 @@ async def generate_cases(
                 }
             )
 
-    # 落库
-    created = 0
+    # 解析 test_run_id（如提供）；并查项目级用例库写 assets 表
+    run_uuid = None
     if req.test_run_id:
         try:
             run_uuid = uuid.UUID(req.test_run_id)
         except ValueError:
             raise HTTPException(400, "test_run_id 格式错误")
+
+    # === 1) 永远写 test_case_assets（项目用例资产库） ===
+    assets_created = 0
+    for c in cases:
+        priority = str(c.get("priority", "P2")).upper()[:2] or "P2"
+        asset = TestCaseAsset(
+            project_id=r.project_id,
+            case_type=c.get("type", "functional"),
+            title=c.get("title", "")[:500],
+            description=c.get("description", ""),
+            request_data={
+                "expected": c.get("expected", ""),
+                "steps": c.get("steps", []),
+                "related_requirement": c.get("related_requirement", ""),
+                "source": "requirement_doc",
+                "requirement_doc_id": str(r.id),
+                # 端点 URL 不从需求文档来，留空占位；用户在「用例库」可手动绑定 endpoint
+                "method": None,
+                "url": None,
+            },
+            expected_result={
+                "status_code": 200,  # 兜底占位，便于「采纳」后自动派单时使用
+                "assertions": [
+                    {"path": "$.code", "op": "==", "value": 0,
+                     "note": "或业务自定义 HTTP code"}
+                ],
+            },
+            priority=priority,
+            status=CaseAssetStatus.DRAFT,
+            source=CaseSource.AI_GENERATED,
+            created_by=current_user.id,
+        )
+        db.add(asset)
+        assets_created += 1
+
+    # === 2) 如果提供了 test_run_id，额外写 test_cases（执行实例表） ===
+    instances_created = 0
+    if run_uuid:
         for c in cases:
+            priority = str(c.get("priority", "P2")).upper()[:2] or "P2"
             db.add(
                 TestCase(
                     test_run_id=run_uuid,
                     case_type="requirement",
                     case_name=c.get("title", "")[:500],
                     description=c.get("description", ""),
-                    request_data={},
-                    expected_result={
+                    request_data={
                         "expected": c.get("expected", ""),
                         "steps": c.get("steps", []),
                         "related_requirement": c.get("related_requirement", ""),
+                        "source": "requirement_doc",
                     },
+                    expected_result={},
                     validation_rules={},
-                    priority=str(c.get("priority", "P2")).upper()[:2] or "P2",
+                    priority=priority,
                 )
             )
-            created += 1
+            instances_created += 1
+
+    if assets_created or instances_created:
         await db.commit()
+        logger.info(
+            f"Requirement→Cases generated: assets={assets_created}, "
+            f"instances={instances_created}, doc_id={doc_id}"
+        )
 
     return {
         "code": 0,
-        "data": {"total": len(cases), "created": created, "cases": cases},
-        "message": f"生成 {len(cases)} 条用例" + (f"，已落库 {created} 条" if created else ""),
+        "data": {
+            "total": len(cases),
+            "assets_created": assets_created,
+            "instances_created": instances_created,
+            "test_run_id": str(run_uuid) if run_uuid else None,
+            "cases": cases,
+        },
+        "message": (
+            f"生成 {len(cases)} 条用例，已入项目用例库 {assets_created} 条"
+            + (f"，并实例化到测试任务 {instances_created} 条" if instances_created else "")
+        ),
     }

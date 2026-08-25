@@ -97,6 +97,7 @@ export const uploadApi = {
 // ============ 测试任务 ============
 export const testRunApi = {
   list: () => api.get('/test-runs'),
+  getList: (params?: any) => api.get('/test-runs', { params }),
   create: (data: any) => api.post('/test-runs', data),
   get: (id: string) => api.get(`/test-runs/${id}`),
   getProgress: (id: string) => api.get(`/test-runs/${id}/progress`),

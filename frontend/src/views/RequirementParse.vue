@@ -8,7 +8,13 @@
 
           <el-form label-width="100px">
             <el-form-item label="项目" required>
-              <el-select v-model="projectId" placeholder="选择项目" filterable style="width: 100%">
+              <el-select
+                v-model="projectId"
+                placeholder="选择项目"
+                filterable
+                style="width: 100%"
+                @change="onProjectChange"
+              >
                 <el-option v-for="p in projects" :key="p.id" :label="p.name" :value="p.id" />
               </el-select>
             </el-form-item>
@@ -123,10 +129,30 @@
     </el-row>
 
     <!-- 生成用例对话框 -->
-    <el-dialog v-model="genVisible" title="生成测试用例" width="460px">
-      <el-form label-width="110px">
+    <el-dialog v-model="genVisible" title="生成测试用例" width="480px">
+      <p class="hint" style="margin-bottom: 12px">
+        用例默认会写进<b>项目用例库</b>（用例库页面可见、可采纳/废除）。
+        如果想关联到某个正在跑的测试任务，下方选择一下即可（可选）。
+      </p>
+      <el-form label-width="100px">
         <el-form-item label="关联测试任务">
-          <el-input v-model="testRunId" placeholder="可选：填写测试任务 ID 以直接落库为用例" />
+          <el-select
+            v-model="testRunId"
+            placeholder="（不选——只入用例库）"
+            clearable
+            filterable
+            style="width: 100%"
+          >
+            <el-option
+              v-for="r in testRuns"
+              :key="r.id"
+              :label="`${r.name} · ${r.status}`"
+              :value="r.id"
+            />
+          </el-select>
+          <span class="hint" style="margin-left: 8px">
+            选中的话，会同时往该测试任务下塞一份「可执行实例」
+          </span>
         </el-form-item>
         <el-form-item label="使用 AI">
           <el-switch v-model="genUseAi" />
@@ -141,10 +167,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { ElMessage, type UploadFile } from 'element-plus'
-import { requirementApi, projectApi } from '@/api'
+import { useRouter } from 'vue-router'
+import { requirementApi, projectApi, testRunApi } from '@/api'
 
+const router = useRouter()
 const projects = ref<any[]>([])
 const projectId = ref<string>('')
 const useAi = ref(true)
@@ -157,6 +185,7 @@ const requirements = ref<any[]>([])
 const docs = ref<any[]>([])
 const docsLoading = ref(false)
 
+const testRuns = ref<any[]>([])
 const genVisible = ref(false)
 const genLoading = ref(false)
 const genUseAi = ref(true)
@@ -215,6 +244,7 @@ async function uploadAndParse() {
 
 function openGen() {
   genVisible.value = true
+  testRunId.value = ''  // 默认不选 → 落库到用例库
 }
 async function doGenerate() {
   if (!currentDoc.value?.id) return
@@ -225,7 +255,18 @@ async function doGenerate() {
       test_run_id: testRunId.value || undefined,
     })
     const d = res?.data || {}
-    ElMessage.success(`生成 ${d.total} 条用例` + (d.created ? `，已落库 ${d.created} 条` : ''))
+    const total = d.total ?? 0
+    const assets = d.assets_created ?? 0
+    const instances = d.instances_created ?? 0
+    if (instances > 0) {
+      ElMessage.success(
+        `已生成 ${total} 条用例；入项目用例库 ${assets} 条，关联到测试任务 ${instances} 条`
+      )
+    } else if (assets > 0) {
+      ElMessage.success(`已生成 ${total} 条用例，全部入项目用例库（可在「用例库」查看）`)
+    } else {
+      ElMessage.warning(`生成 ${total} 条但未落库（请检查）`)
+    }
     genVisible.value = false
   } catch (e: any) {
     /* 拦截器已提示 */
@@ -235,7 +276,10 @@ async function doGenerate() {
 }
 
 async function loadDocs() {
-  if (!projectId.value) return
+  if (!projectId.value) {
+    docs.value = []
+    return
+  }
   docsLoading.value = true
   try {
     const res: any = await requirementApi.list({ project_id: projectId.value })
@@ -246,6 +290,29 @@ async function loadDocs() {
     docsLoading.value = false
   }
 }
+
+async function loadTestRuns() {
+  if (!projectId.value) {
+    testRuns.value = []
+    return
+  }
+  try {
+    const res: any = await testRunApi.getList({ project_id: projectId.value })
+    testRuns.value = res?.data ?? res?.list ?? res?.items ?? []
+  } catch {
+    testRuns.value = []
+  }
+}
+
+function onProjectChange(id: string) {
+  // 切项目 → 立刻拉这一项目下的需求文档 + 测试任务下拉
+  loadDocs()
+  loadTestRuns()
+  // 清掉旧文档视图，避免跨项目串
+  currentDoc.value = null
+  requirements.value = []
+}
+
 async function viewDoc(row: any) {
   try {
     const detail: any = await requirementApi.get(row.id)
@@ -256,6 +323,7 @@ async function viewDoc(row: any) {
     /* ignore */
   }
 }
+
 async function removeDoc(row: any) {
   try {
     await requirementApi.remove(row.id)
