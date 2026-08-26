@@ -25,6 +25,12 @@ const routes = [
     meta: { title: '测试运行' },
   },
   {
+    path: '/report',
+    name: 'ReportList',
+    component: () => import('@/views/Report.vue'),
+    meta: { title: '测试报告' },
+  },
+  {
     path: '/report/:id',
     name: 'Report',
     component: () => import('@/views/Report.vue'),

@@ -36,6 +36,7 @@
           <el-menu-item index="/doc-review">接口文档评审</el-menu-item>
           <el-menu-item index="/requirement-parse">需求文档解析</el-menu-item>
           <el-menu-item index="/coverage">代码覆盖率</el-menu-item>
+          <el-menu-item index="/report">测试报告</el-menu-item>
           <el-menu-item index="/report-analysis">报告分析</el-menu-item>
         </el-sub-menu>
 

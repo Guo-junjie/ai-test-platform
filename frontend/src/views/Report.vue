@@ -116,6 +116,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { Search, View, Download, Share } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { reportApi } from '@/api'
@@ -230,8 +231,23 @@ function formatTime(time: string): string {
 
 // ==================== Lifecycle ====================
 
-onMounted(() => {
-  loadReports()
+onMounted(async () => {
+  await loadReports()
+  // 支持「从仪表盘点击'查看缺陷'跳到 /report/:id」直达打开 viewer
+  const route = useRoute()
+  const idFromQuery = (route.query.id as string) || (route.params.id as string) || ''
+  if (idFromQuery) {
+    const target = reports.value.find(
+      (r) => r.test_run_id === idFromQuery || r.id === idFromQuery
+    )
+    if (target) {
+      viewReport(target)
+    } else {
+      // 列表里没找到（也许还没生成）—— 仍尝试拿一下报告
+      ElMessage.info('正在尝试打开该测试报告...')
+      viewReport({ test_run_id: idFromQuery })
+    }
+  }
 })
 </script>
 

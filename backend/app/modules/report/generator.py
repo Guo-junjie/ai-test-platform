@@ -321,8 +321,16 @@ class ReportGenerator:
         )
 
     def _render_pdf(self, report_data: dict[str, Any]) -> bytes | None:
-        """渲染 PDF 报告（使用 weasyprint）。"""
+        """渲染 PDF 报告（使用 weasyprint）。
+
+        历史坑：weasyprint 60.x 的 `HTML(string=html).write_pdf()` 在某些版本
+        内部调用 PDF 类签名变了（PDF.__init__() takes 1 positional argument but 3 were given）。
+        解法：把 HTML 写到临时文件后用 `HTML(filename=path).write_pdf()` —— 走文件
+        IO 路径，避开 string= 路径的 API 变化。
+        """
         try:
+            import os
+            import tempfile
             from weasyprint import HTML
 
             template = self.env.get_template("report_pdf.html")
@@ -333,8 +341,18 @@ class ReportGenerator:
                 report_data_json=json.dumps(report_data, ensure_ascii=False, default=str),
             )
 
-            pdf_bytes = HTML(string=html_content).write_pdf()
-            return pdf_bytes
+            # 写到临时 HTML 文件 → 用 filename 模式渲染（绕开 weasyprint v60 string= 路径的 PDF 初始化问题）
+            fd, tmp_html = tempfile.mkstemp(suffix=".html", prefix="report_")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(html_content)
+                pdf_bytes = HTML(filename=tmp_html).write_pdf()
+                return pdf_bytes
+            finally:
+                try:
+                    os.unlink(tmp_html)
+                except Exception:  # noqa: BLE001
+                    pass
         except ImportError:
             logger.warning("weasyprint not installed, skipping PDF generation")
             return None

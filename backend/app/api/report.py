@@ -389,24 +389,93 @@ async def _load_test_results(
         return None
 
     api_results: list[dict[str, Any]] = []
+    perf_results: list[dict[str, Any]] = []
+    integ_results: list[dict[str, Any]] = []
+
+    # 一次 join 拿到 TestCase 信息（避免 N+1）
+    from app.models.database import TestCase
+
+    case_ids = [r.test_case_id for r in rows if r.test_case_id]
+    case_map: dict[Any, Any] = {}
+    if case_ids:
+        case_rows = (
+            await db.execute(select(TestCase).where(TestCase.id.in_(case_ids)))
+        ).scalars().all()
+        case_map = {c.id: c for c in case_rows}
+
     for r in rows:
-        api_results.append({
-            "test_case_id": str(r.test_case_id),
-            "passed": bool(r.is_passed),
-            "status_code": r.status_code,
+        case = case_map.get(r.test_case_id)
+        case_name = case.case_name if case else "(未知用例)"
+        case_type = case.case_type if case else "api"  # 兜底默认 api
+        api_path = case.api_path if case else ""
+        http_method = case.http_method if case else ""
+
+        # 字段名按 HTML 模板约定（template: r.get('case_name' / 'actual_status_code' / 'actual_response')）
+        item = {
+            "case_name": case_name,
+            "case_type": case_type,
+            "api_path": api_path,
+            "http_method": http_method,
+            "actual_status_code": r.status_code,
+            "actual_response": r.response_body,
             "response_time_ms": r.response_time_ms,
+            "passed": bool(r.is_passed),
             "error_message": r.error_message,
             "error_trace": r.error_trace,
             "executed_at": r.executed_at.isoformat() if r.executed_at else None,
-        })
-    total = len(api_results)
-    passed = sum(1 for r in api_results if r.get("passed"))
+            "tps": r.tps,
+            "qps": r.qps,
+            "error_rate": r.error_rate,
+            "concurrent_users": r.concurrent_users,
+        }
+
+        # 按 case_type 分桶到对应 results[]（性能/集成用对应模板字段）
+        if case_type == "performance":
+            # 模板性能测试表读取 total_requests / total_errors / avg_response_time / p95 / p99 / tps / bottlenecks
+            item.update({
+                "total_requests": None,
+                "total_errors": None,
+                "avg_response_time": r.response_time_ms,
+                "p95": None,
+                "p99": None,
+                "bottlenecks": [] if r.is_passed else [(r.error_message or "未知瓶颈")[:200]],
+            })
+            perf_results.append(item)
+        elif case_type == "integration":
+            # 模板集成测试表读取 total_steps / executed_steps / failure_step / failure_reason / step_results
+            item.update({
+                "total_steps": None,
+                "executed_steps": None,
+                "failure_step": 0 if r.is_passed else 1,
+                "failure_reason": r.error_message,
+                "step_results": [],
+            })
+            integ_results.append(item)
+        else:
+            # 兜底算 api
+            api_results.append(item)
+
+    total_api = len(api_results)
+    passed_api = sum(1 for r in api_results if r.get("passed"))
+    total_perf = len(perf_results)
+    passed_perf = sum(1 for r in perf_results if not r.get("bottlenecks"))
+    total_integ = len(integ_results)
+    passed_integ = sum(1 for r in integ_results if r.get("passed"))
+
+    # 兼容两种消费方：
+    # 1) DefectAnalyzer.analyze 期望 {api_results: [...], summary: {...}}
+    # 2) ReportGenerator 期望 {api_tests: {results:[]}, performance_tests: {results:[]}, integration_tests: {results:[]}, summary: {...}}
     return {
         "api_results": api_results,
+        "api_tests": {"results": api_results, "total": total_api, "passed": passed_api, "failed": total_api - passed_api},
+        "performance_tests": {"results": perf_results, "total": total_perf, "passed": passed_perf, "failed": total_perf - passed_perf},
+        "performance_results": perf_results,
+        "integration_tests": {"results": integ_results, "total": total_integ, "passed": passed_integ, "failed": total_integ - passed_integ},
+        "integration_results": integ_results,
         "summary": {
-            "total": total,
-            "passed": passed,
-            "failed": total - passed,
+            "total": total_api + total_perf + total_integ,
+            "passed": passed_api + passed_perf + passed_integ,
+            "failed": (total_api - passed_api) + (total_perf - passed_perf) + (total_integ - passed_integ),
             "source": "db_fallback",
         },
     }
