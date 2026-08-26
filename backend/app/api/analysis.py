@@ -78,7 +78,11 @@ async def do_analyze(project_path: str, db: AsyncSession, test_run_id: str | Non
     try:
         ai_analysis = await ai_analyzer.analyze_project(project_path, apis, stack_info)
     except ModelNotConfiguredError:
-        raise
+        # 无 AI 模型：降级为规则化分析，保证返回可用结果而非 500
+        logger.warning(
+            "AI model not configured; falling back to rule-based analysis"
+        )
+        ai_analysis = ai_analyzer.rule_based_analysis(project_path, apis, stack_info)
     except Exception as e:
         logger.error(f"AI analysis failed (non-blocking): {e}", exc_info=True)
         ai_analysis = {

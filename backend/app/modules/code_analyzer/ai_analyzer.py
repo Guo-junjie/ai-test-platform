@@ -28,6 +28,42 @@ _MAX_CONCURRENT_AI_CALLS = 5
 # 单个 API 代码片段读取的最大字符数
 _CODE_SNIPPET_MAX_CHARS = 2000
 
+# 规则化分析扫描的源码扩展名
+_RULE_SCAN_EXT = {
+    ".py", ".java", ".kt", ".go", ".js", ".jsx", ".ts", ".tsx", ".php", ".vue",
+}
+_RULE_SKIP_DIRS = {
+    "node_modules", ".git", "__pycache__", ".venv", "venv",
+    "env", ".idea", ".vscode", "dist", "build", "target",
+}
+
+# 风险规则：(标签, 正则, 严重级别)。用于无 AI 模型时的规则化兜底分析。
+_RISK_RULES: list[tuple[str, "re.Pattern[str]", str]] = [
+    ("动态执行 eval/exec", re.compile(r"\b(?:eval|exec)\s*\("), "high"),
+    (
+        "命令注入风险",
+        re.compile(r"(?:os\.system|subprocess|os\.popen|child_process|execSync|shell_exec|system\()"),
+        "high",
+    ),
+    (
+        "SQL 拼接（注入风险）",
+        re.compile(r"(?:execute\(|raw\(|cursor\.execute|query\(|SELECT|INSERT|UPDATE|DELETE).*?(?:\%|f[\"\']|\.format|\+)"),
+        "high",
+    ),
+    (
+        "硬编码密钥/口令",
+        re.compile(r"(?:password|passwd|secret|api_key|apikey|token)\s*=\s*[\"\'][^\"\']{4,}[\"\']"),
+        "medium",
+    ),
+    (
+        "不安全反序列化",
+        re.compile(r"(?:pickle\.loads|yaml\.load|unserialize|jsonpickle)"),
+        "medium",
+    ),
+    ("裸 except / 空 catch", re.compile(r"except\s*:|catch\s*\([^)]*\)\s*\{\s*\}"), "low"),
+    ("调试接口/日志泄露", re.compile(r"(?:/debug|/actuator|print\(|console\.log\()"), "low"),
+]
+
 
 class AICodeAnalyzer:
     """
@@ -137,6 +173,112 @@ class AICodeAnalyzer:
             "data_flow": data_flow,
             "risk_areas": risk_areas,
             "api_analyses": api_analyses,
+        }
+
+    def rule_based_analysis(
+        self,
+        project_path: str,
+        apis: list[dict[str, Any]],
+        stack_info: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        规则化兜底分析（无 AI 模型可用时使用）。
+
+        不调用 LLM，直接扫描源码做风险模式识别，并按文件聚合业务模块，
+        保证即使离线也能返回可用的分析结果。
+
+        Args:
+            project_path: 项目根目录路径。
+            apis: APIExtractor.extract() 返回的代码单元列表。
+            stack_info: StackDetector.detect() 返回的技术栈信息。
+
+        Returns:
+            与 analyze_project 同结构的标准化字典。
+        """
+        root = Path(project_path)
+
+        # 1. 按文件聚合业务模块
+        modules_map: dict[str, dict[str, Any]] = {}
+        for api in apis:
+            file_rel = api.get("file", "unknown")
+            module_key = file_rel
+            if module_key not in modules_map:
+                modules_map[module_key] = {
+                    "name": module_key,
+                    "apis": [],
+                    "description": f"Source file: {module_key}",
+                    "api_count": 0,
+                }
+            modules_map[module_key]["apis"].append({
+                "path": api.get("path", ""),
+                "http_method": api.get("http_method", ""),
+                "business_purpose": api.get("method_name", ""),
+            })
+            modules_map[module_key]["api_count"] += 1
+        business_modules = list(modules_map.values())
+
+        # 2. 扫描源码风险模式
+        risk_areas: list[dict[str, Any]] = []
+        for file_path in root.rglob("*"):
+            if not file_path.is_file():
+                continue
+            if file_path.suffix.lower() not in _RULE_SCAN_EXT:
+                continue
+            if any(part in _RULE_SKIP_DIRS for part in file_path.parts):
+                continue
+            try:
+                text = file_path.read_text(encoding="utf-8", errors="ignore")
+            except Exception as e:
+                logger.debug(f"Failed to read {file_path}: {e}")
+                continue
+
+            hits: list[str] = []
+            for label, pat, _sev in _RISK_RULES:
+                if pat.search(text):
+                    hits.append(label)
+
+            if hits:
+                severity = "low"
+                if any(
+                    _sev == "high"
+                    for _lbl, _pat, _sev in _RISK_RULES
+                    if _lbl in hits
+                ):
+                    severity = "high"
+                elif any(
+                    _sev == "medium"
+                    for _lbl, _pat, _sev in _RISK_RULES
+                    if _lbl in hits
+                ):
+                    severity = "medium"
+                risk_areas.append({
+                    "path": str(file_path.relative_to(root)),
+                    "http_method": "",
+                    "risk_points": hits,
+                    "severity": severity,
+                })
+
+        # 按严重级别排序（与 analyze_project 一致）
+        severity_order = {"high": 0, "medium": 1, "low": 2}
+        risk_areas.sort(key=lambda x: severity_order.get(x["severity"], 3))
+
+        logger.info(
+            f"Rule-based analysis completed: {len(business_modules)} modules, "
+            f"{len(risk_areas)} risk areas (no AI model)"
+        )
+
+        return {
+            "business_modules": business_modules,
+            "data_flow": {
+                "nodes": [
+                    {"name": m["name"], "api_count": m["api_count"]}
+                    for m in business_modules
+                ],
+                "edges": [],
+            },
+            "risk_areas": risk_areas,
+            "api_analyses": [],
+            "offline": True,
         }
 
     async def analyze_api(

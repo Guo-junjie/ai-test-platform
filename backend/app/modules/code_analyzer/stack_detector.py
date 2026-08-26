@@ -112,6 +112,26 @@ _MAX_SCAN_FILES = 200
 # 单文件最大读取字符数
 _MAX_FILE_READ_CHARS = 100_000
 
+# 文件扩展名 → 编程语言（用于未识别到 Web 框架时的语言级兜底）
+_EXT_LANG: dict[str, str] = {
+    ".py": "python",
+    ".java": "java",
+    ".kt": "kotlin",
+    ".kts": "kotlin",
+    ".go": "go",
+    ".js": "javascript",
+    ".jsx": "javascript",
+    ".mjs": "javascript",
+    ".cjs": "javascript",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".php": "php",
+    ".vue": "javascript",
+}
+
+# 通用提取支持的语言集合（无框架适配器时按语言做通用分析）
+GENERIC_LANGUAGES = set(_EXT_LANG.values())
+
 
 class StackDetector:
     """
@@ -199,12 +219,28 @@ class StackDetector:
                 "confidence": round(best_score, 2),
             }
         else:
-            result = {
-                "stack": "unknown",
-                "language": "unknown",
-                "framework": "unknown",
-                "confidence": 0.0,
-            }
+            # 兜底：未识别到具体 Web 框架时，按文件扩展名识别主导语言，
+            # 返回 language=语言名 / framework=unknown / stack=语言名，
+            # 供 APIExtractor 走通用提取（提取函数/类/路由模式）。
+            lang = self._detect_language(root)
+            if lang:
+                result = {
+                    "stack": lang,
+                    "language": lang,
+                    "framework": "unknown",
+                    "confidence": 0.3,
+                    "hint": (
+                        "未识别到具体 Web 框架，已按编程语言做通用分析"
+                        "（提取函数/类与风险点）。上传完整项目可识别框架级接口。"
+                    ),
+                }
+            else:
+                result = {
+                    "stack": "unknown",
+                    "language": "unknown",
+                    "framework": "unknown",
+                    "confidence": 0.0,
+                }
 
         logger.info(
             f"Tech stack detected: {result['stack']} "
@@ -277,6 +313,30 @@ class StackDetector:
                     break
 
         return score
+
+    def _detect_language(self, root: Path) -> str | None:
+        """
+        按文件扩展名识别项目主导语言（框架识别失败时的兜底）。
+
+        Args:
+            root: 项目根目录。
+
+        Returns:
+            语言名（python/java/javascript/...）或 None（无任何已知源码）。
+        """
+        counts: dict[str, int] = {}
+        for file_path in root.rglob("*"):
+            if not file_path.is_file():
+                continue
+            ext = file_path.suffix.lower()
+            lang = _EXT_LANG.get(ext)
+            if lang:
+                counts[lang] = counts.get(lang, 0) + 1
+
+        if not counts:
+            return None
+        # 取文件数最多的语言
+        return max(counts.items(), key=lambda kv: kv[1])[0]
 
     def _scan_source_files(self, root: Path) -> list[str]:
         """
