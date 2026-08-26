@@ -42,8 +42,14 @@
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="200" fixed="right">
+            <el-table-column label="操作" width="280" fixed="right">
               <template #default="{ row }">
+                <el-button
+                  size="small"
+                  @click="handleEdit(row)"
+                >
+                  编辑
+                </el-button>
                 <el-button
                   size="small"
                   type="primary"
@@ -94,8 +100,14 @@
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="200" fixed="right">
+            <el-table-column label="操作" width="280" fixed="right">
               <template #default="{ row }">
+                <el-button
+                  size="small"
+                  @click="handleEdit(row)"
+                >
+                  编辑
+                </el-button>
                 <el-button
                   size="small"
                   type="primary"
@@ -170,8 +182,9 @@
     <SourceForm
       :source-type="activeTab === 'svn' ? 'svn' : 'github'"
       :visible="formVisible"
+      :editing-source="editingSource"
       @save="handleFormSave"
-      @cancel="formVisible = false"
+      @cancel="handleFormCancel"
     />
 
     <!-- 拉取结果弹窗 -->
@@ -226,6 +239,8 @@ const loading = ref(false)
 const fetchingId = ref<string | null>(null)
 const uploading = ref(false)
 const formVisible = ref(false)
+/** 编辑模式：传入要编辑的 source 行；null = 添加模式 */
+const editingSource = ref<any | null>(null)
 const fetchResultVisible = ref(false)
 
 const allSources = ref<any[]>([])
@@ -261,12 +276,24 @@ function handleTabChange() {
 }
 
 function openForm() {
+  editingSource.value = null  // 添加模式
+  formVisible.value = true
+}
+
+function handleEdit(row: any) {
+  editingSource.value = row   // 编辑模式，把整行传给表单
   formVisible.value = true
 }
 
 function handleFormSave() {
   formVisible.value = false
+  editingSource.value = null
   loadSources()
+}
+
+function handleFormCancel() {
+  formVisible.value = false
+  editingSource.value = null
 }
 
 async function handleFetch(row: any) {

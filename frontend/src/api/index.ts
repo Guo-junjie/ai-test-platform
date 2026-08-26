@@ -78,6 +78,8 @@ api.interceptors.response.use(
 export const sourceApi = {
   list: () => api.get('/source/configs'),
   connect: (data: any) => api.post('/source/connect', data),
+  /** 就地编辑数据源（name/config）；后端 merge 逻辑，Token 留空 = 保持不变 */
+  update: (id: string, data: any) => api.put(`/source/${id}`, data),
   disconnect: (id: string) => api.delete(`/source/${id}`),
   fetch: (data: any) => api.post('/source/fetch', data),
 }

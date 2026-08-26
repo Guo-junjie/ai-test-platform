@@ -321,10 +321,26 @@ async def update_source(
         project.name = req.name
 
     if req.config is not None:
+        # ⚠️ 必须用 merge 而不是 replace：
+        # - 列表接口返回的 github_token / svn_password 是掩码 "***xxx"，
+        #   前端如果原样回传，直接覆盖会把真 Token 改成掩码 → 下次拉取必失败。
+        # - 用户在编辑表单里把 Token 字段留空 = "保持不变"，也不应覆盖。
+        # 所以：以解密后的已有 config 为基线，叠加 req.config；对敏感字段
+        # 若传入为空 / 仅空白 / 含 "***" 掩码，则保留原值。
+        existing = decrypt_dict(project.source_config or {})
+        merged: dict[str, Any] = {**existing, **req.config}
+        for sensitive in ("github_token", "svn_password"):
+            if sensitive in req.config:
+                val = req.config.get(sensitive) or ""
+                if not str(val).strip() or "***" in str(val):
+                    if sensitive in existing:
+                        merged[sensitive] = existing[sensitive]
+                    else:
+                        merged.pop(sensitive, None)
         # 清理 repo_url 首尾空白，避免再产生脏数据
-        if isinstance(req.config.get("repo_url"), str):
-            req.config["repo_url"] = req.config["repo_url"].strip()
-        project.source_config = encrypt_dict(req.config)
+        if isinstance(merged.get("repo_url"), str):
+            merged["repo_url"] = merged["repo_url"].strip()
+        project.source_config = encrypt_dict(merged)
 
     project.updated_at = datetime.utcnow()
     await db.flush()

@@ -146,7 +146,7 @@
             <el-option
               v-for="r in testRuns"
               :key="r.id"
-              :label="`#${(r.id || '').slice(0, 8)} · ${r.source_type ?? ''} · ${r.status ?? ''} · ${(r.created_at || '').slice(0, 16)}`"
+              :label="`#${(r.id || '').slice(0, 8)} · ${r.project_name || r.source_type || ''} · ${r.status || ''} · ${(r.created_at || '').slice(0, 16)}`"
               :value="r.id"
             />
           </el-select>
@@ -298,7 +298,23 @@ async function loadTestRuns() {
   }
   try {
     const res: any = await testRunApi.getList({ project_id: projectId.value })
-    testRuns.value = res?.data ?? res?.list ?? res?.items ?? []
+    // 后端响应是 { code: 0, data: { list: [...], total: N } }
+    // 必须从包装对象里解出真正的数组，否则 v-for 会把 { list, total }
+    // 当成 2 个值渲染（之前显示两条 "#...." 就是这个 bug）。
+    const payload = res?.data
+    if (Array.isArray(payload)) {
+      testRuns.value = payload
+    } else if (payload && typeof payload === 'object') {
+      testRuns.value = Array.isArray(payload.list)
+        ? payload.list
+        : Array.isArray(payload.items)
+        ? payload.items
+        : []
+    } else if (Array.isArray(res?.list)) {
+      testRuns.value = res.list
+    } else {
+      testRuns.value = []
+    }
   } catch {
     testRuns.value = []
   }
