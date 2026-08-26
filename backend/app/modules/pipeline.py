@@ -65,6 +65,67 @@ def _mark_run_failed(test_run_id: str, error: str) -> None:
         logger.error(f"[{test_run_id}] Failed to update DB status: {db_err}")
 
 
+def _persist_test_cases(test_run_id: str, test_cases: dict[str, list[dict[str, Any]]]) -> int:
+    """
+    把流水线生成的 3 类测试用例（api / performance / integration）入库到 test_cases 表。
+
+    原数据流缺这一段 —— generate_all 只返回内存 dict，没写入 DB，会让后续
+    测试结果（test_results.test_case_id）没有 FK 可挂。
+
+    Args:
+        test_run_id: 测试任务 ID（字符串 UUID）。
+        test_cases: {"api": [...], "performance": [...], "integration": [...]}。
+
+    Returns:
+        实际入库的用例数（用于 logging）。
+    """
+    from app.models.database import TestCase
+    from app.utils.database import AsyncSessionLocal
+
+    total = 0
+    try:
+        run_uuid = uuid.UUID(test_run_id)
+    except (ValueError, TypeError):
+        logger.warning(f"[{test_run_id}] invalid uuid, skip persist_test_cases")
+        return 0
+
+    async def _do_persist() -> int:
+        nonlocal total
+        from sqlalchemy import insert as sa_insert
+
+        async with AsyncSessionLocal() as session:
+            rows: list[dict[str, Any]] = []
+            for case_type, cases in test_cases.items():
+                if not cases:
+                    continue
+                for case in cases:
+                    rows.append({
+                        "id": uuid.uuid4(),
+                        "test_run_id": run_uuid,
+                        "case_type": case_type,  # api / performance / integration
+                        "case_name": (case.get("name") or case.get("case_name") or "")[:500],
+                        "description": case.get("description") or "",
+                        "request_data": case.get("request_data") or {},
+                        "expected_result": case.get("expected_result") or {},
+                        "validation_rules": case.get("validation_rules") or {},
+                        "priority": case.get("priority") or "P2",
+                        "api_path": case.get("api_path") or "",
+                        "http_method": case.get("http_method") or "",
+                    })
+            if not rows:
+                return 0
+            await session.execute(sa_insert(TestCase), rows)
+            await session.commit()
+            return len(rows)
+
+    try:
+        total = asyncio.run(_do_persist())
+        logger.info(f"[{test_run_id}] Persisted {total} test_cases to DB")
+    except Exception as db_err:  # pragma: no cover - 兜底日志
+        logger.warning(f"[{test_run_id}] persist_test_cases failed (non-fatal): {db_err}")
+    return total
+
+
 # ==================== Celery 任务 ====================
 
 
@@ -164,6 +225,10 @@ def run_test_pipeline(self, test_run_id: str, req_dict: dict[str, Any]) -> dict[
             f"perf={len(test_cases.get('performance', []))}, "
             f"integ={len(test_cases.get('integration', []))}"
         )
+
+        # Step 3.5: 用例入库（test_results.test_case_id FK 需要真实 TestCase.id）
+        _set_task_progress_sync(test_run_id, 45, "用例入库")
+        _persist_test_cases(test_run_id, test_cases)
 
         # Step 4: 测试执行（内部为 Celery chain 的 apply_async，非阻塞）
         _set_task_status_sync(test_run_id, "executing", {"step": "test_execution"})

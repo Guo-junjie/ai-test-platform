@@ -4,14 +4,14 @@
 使用 Celery chain + group 实现测试并行执行：
 1. prepare_environment: 启动被测服务
 2. group(run_api_tests, run_performance_tests, run_integration_tests): 并行执行三类测试
-3. aggregate_results: 汇总结果
+3. aggregate_results: 汇总结果 + 持久化 TestResult
 
 Celery 任务是同步的，内部通过 asyncio.run() 调用异步测试器。
 """
 
 import asyncio
 import json
-import uuid
+import uuid as _uuid
 from typing import Any
 
 from celery import chain, group
@@ -54,6 +54,128 @@ def _set_task_progress_sync(task_id: str, progress: int, step: str = "") -> None
         json.dumps({"progress": progress, "step": step}, ensure_ascii=False),
         ex=7 * 24 * 3600,
     )
+
+
+def _persist_test_results(test_run_id: str, test_results: list[dict[str, Any]]) -> int:
+    """
+    把 aggregate 阶段汇聚到的「逐条用例执行结果」入库到 test_results 表。
+
+    数据流修复：
+    - pipeline 生成用例 → _persist_test_cases 已经入库 test_cases（真实 id）
+    - engine 跑用例 → api_tester / performance_tester / integration_tester 产出 results[]
+    - aggregate 阶段 → 原来只写 Redis `task:result:{run_id}` 汇总结果，
+      现在同时把 results[] 拆开逐条 INSERT 到 test_results 表
+
+    结果 detail 字段对齐 TestResult 模型：
+    - test_run_id / test_case_id（FK）/ is_passed / status_code / response_body /
+      response_time_ms / tps / qps / error_rate / concurrent_users /
+      error_message / error_trace / executed_at
+
+    Args:
+        test_run_id: 测试任务 ID（字符串 UUID）。
+        test_results: 从 group 收集到的 3 类子任务结果列表。
+
+    Returns:
+        实际入库的 TestResult 条数（logging 用）。
+    """
+    from app.models.database import TestCase, TestResult
+    from app.utils.database import AsyncSessionLocal
+
+    try:
+        run_uuid = _uuid.UUID(test_run_id)
+    except (ValueError, TypeError):
+        logger.warning(f"[{test_run_id}] invalid uuid, skip persist_test_results")
+        return 0
+
+    async def _do_persist() -> int:
+        from sqlalchemy import select as sa_select
+        from sqlalchemy import insert as sa_insert
+
+        async with AsyncSessionLocal() as session:
+            # 1. 查出该 run 下所有 TestCase（按 case_type + case_name 映射 case 字典）
+            cases_rows = (
+                await session.execute(
+                    sa_select(TestCase.id, TestCase.case_type, TestCase.case_name).where(
+                        TestCase.test_run_id == run_uuid
+                    )
+                )
+            ).all()
+            if not cases_rows:
+                logger.warning(
+                    f"[{test_run_id}] No TestCase rows for run, skip TestResult persist"
+                )
+                return 0
+
+            # 构建 (case_type, case_name) -> case_id 映射
+            case_key_to_id: dict[tuple[str, str], _uuid.UUID] = {
+                (row.case_type, row.case_name): row.id for row in cases_rows
+            }
+
+            # 2. 遍历 3 类子任务结果，把 results[] 逐条映射并 INSERT
+            rows: list[dict[str, Any]] = []
+            for sub in test_results:
+                if not isinstance(sub, dict):
+                    continue
+                test_type = sub.get("test_type", "unknown")
+                for result in sub.get("results", []) or []:
+                    case_name = result.get("case_name") or result.get("name") or ""
+                    case_id = case_key_to_id.get((test_type, case_name))
+                    if case_id is None:
+                        # 找不到对应 TestCase（孤立 result，跳过并打 warning）
+                        logger.warning(
+                            f"[{test_run_id}] skip orphan result: "
+                            f"type={test_type} name={case_name[:80]}"
+                        )
+                        continue
+
+                    is_passed = bool(result.get("passed", False))
+                    # 性能测试的「失败」判定：bottlenecks 非空
+                    if test_type == "performance":
+                        if result.get("bottlenecks"):
+                            is_passed = False
+                        else:
+                            is_passed = bool(result.get("passed", True))
+
+                    rows.append({
+                        "id": _uuid.uuid4(),
+                        "test_run_id": run_uuid,
+                        "test_case_id": case_id,
+                        "is_passed": is_passed,
+                        "status_code": result.get("status_code")
+                            or result.get("actual_status_code")
+                            or result.get("http_status"),
+                        "response_body": result.get("response_body")
+                            or result.get("actual_response"),
+                        "response_time_ms": result.get("response_time_ms")
+                            or result.get("elapsed_ms"),
+                        "tps": result.get("tps"),
+                        "qps": result.get("qps"),
+                        "error_rate": result.get("error_rate"),
+                        "concurrent_users": result.get("concurrent_users"),
+                        "error_message": (result.get("error_message") or "")[:1000] if not is_passed else None,
+                        "error_trace": (result.get("error_trace") or "")[:2000] if not is_passed else None,
+                        "executed_at": datetime_module_utcnow(),
+                    })
+            if not rows:
+                return 0
+            await session.execute(sa_insert(TestResult), rows)
+            await session.commit()
+            return len(rows)
+
+    try:
+        count = asyncio.run(_do_persist())
+        if count:
+            logger.info(f"[{test_run_id}] Persisted {count} TestResult rows to DB")
+        return count
+    except Exception as db_err:  # pragma: no cover - 兜底，不阻塞汇总
+        logger.warning(f"[{test_run_id}] persist_test_results failed (non-fatal): {db_err}")
+        return 0
+
+
+# 避免 top-level 导入 datetime 与 db 模型耦合（worker 进程冷启动更快）
+def datetime_module_utcnow():
+    from datetime import datetime
+    return datetime.utcnow()
 
 
 class TestExecutionEngine:
@@ -413,6 +535,10 @@ def aggregate_results(
         json.dumps(summary, ensure_ascii=False, default=str),
         ex=7 * 24 * 3600,
     )
+
+    # 把逐条用例执行结果持久化到 DB（修复报告补生成 4 端点 404 的根因：
+    #   Redis 摘要数据是有，但「逐条用例明细」本来没有，导致 test_results 表空）
+    _persist_test_results(test_run_id, test_results)
 
     _set_task_status_sync(test_run_id, "completed", {"summary": {
         "total": summary["total_tests"],
