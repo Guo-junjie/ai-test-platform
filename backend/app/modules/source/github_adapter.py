@@ -23,8 +23,25 @@ logger = get_logger()
 
 # 给 git 的 HTTP 传输加硬超时：部署机访问不了 github.com（防火墙/代理/无外网）
 # 时，clone 会在 60s 内失败而非无限挂起。否则即使丢进线程池，连接也会长时间
-# 占着线程，且用户只能干等。setdefault 保证不被上层环境变量覆盖。
-os.environ.setdefault("GIT_HTTP_TIMEOUT", "60")
+# 占着线程，且用户只能干等。
+#
+# ⚠️ 之前用的 GIT_HTTP_TIMEOUT 是【假】环境变量名（git 不读这个），导致
+# 之前的"60s 超时"根本没生效，clone 一直挂到 asyncio.wait_for 600s 才返回。
+# 必须用 git 标准的 GIT_CONFIG_COUNT / GIT_CONFIG_KEY_n / GIT_CONFIG_VALUE_n
+# 注入，等价于 `git -c http.timeout=60 -c http.lowSpeedLimit=1000
+# -c http.lowSpeedTime=30 clone ...`。这样 git 会在以下任一条件满足时中止：
+#   1) 单次 HTTP 操作 > 60s（覆盖连接等待 / 响应等待）
+#   2) 连续 30s 平均速度 < 1KB/s（覆盖慢速但不超时的场景）
+# 配合 asyncio.wait_for(600) 形成 60s/30s/600s 三层防护。
+_GIT_TIMEOUT_CFGS = [
+    ("http.timeout", "60"),
+    ("http.lowSpeedLimit", "1000"),
+    ("http.lowSpeedTime", "30"),
+]
+os.environ["GIT_CONFIG_COUNT"] = str(len(_GIT_TIMEOUT_CFGS))
+for _i, (_k, _v) in enumerate(_GIT_TIMEOUT_CFGS):
+    os.environ[f"GIT_CONFIG_KEY_{_i}"] = _k
+    os.environ[f"GIT_CONFIG_VALUE_{_i}"] = _v
 
 
 class GitHubAdapter(CodeSourceAdapter):
