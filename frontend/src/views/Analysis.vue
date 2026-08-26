@@ -302,8 +302,8 @@ async function runAnalysis() {
     const res: any = await analysisApi.run({
       local_path: localPath.value.trim(),
     })
-    analysisResult.value = res
-    ElMessage.success(`解析完成，识别到 ${res.total_apis || 0} 个 API 接口`)
+    analysisResult.value = res?.data || res
+    ElMessage.success(`解析完成，识别到 ${analysisResult.value?.total_apis || 0} 个 API 接口`)
     // Auto-expand first module
     if (hasBusinessModules.value) {
       expandedModules.value = [0]
@@ -340,10 +340,10 @@ async function runUploadAnalysis() {
       formData.append('zip_file', zipItem.raw as UploadRawFile)
     }
     const res: any = await analysisApi.upload(formData)
-    analysisResult.value = res
+    analysisResult.value = res?.data || res
     ElMessage.success(
-      `上传解析完成，识别到 ${res.total_apis || 0} 个 API 接口` +
-        (res?.tech_stack?.stack ? `（栈：${res.tech_stack.stack}）` : '')
+      `上传解析完成，识别到 ${analysisResult.value?.total_apis || 0} 个 API 接口` +
+        (analysisResult.value?.tech_stack?.stack ? `（栈：${analysisResult.value.tech_stack.stack}）` : '')
     )
     if (hasBusinessModules.value) {
       expandedModules.value = [0]

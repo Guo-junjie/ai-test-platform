@@ -650,6 +650,7 @@ class CoverageReport(Base):
     covered_branches = Column(Integer, default=0)
 
     files_json = Column(JSONB, default=[])       # 文件级明细 [{path, line_rate, branch_rate, total_lines, covered_lines}]
+    line_json = Column(JSONB, default={})        # P1 增强：行级明细 {path: {lines:[{number,hits,branch,covered_branches,total_branches},...]}}，供源码高亮
     storage_key = Column(String(500), nullable=True)  # 原始报告文件路径（上传时）
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -1106,6 +1107,25 @@ async def init_db():
         logger.warning(f"Skip model_routing embedding_model_id column sync (connection error): {e}")
     else:
         logger.info("ModelRouting embedding_model_id column ensured")
+
+    # P1 覆盖率看板：补齐 coverage_reports.line_json 列（行级命中 JSONB，供源码高亮）。
+    # create_all 不会 ALTER 既有表，故此处用幂等 ADD COLUMN IF NOT EXISTS 兜底。
+    try:
+        async with async_engine.connect() as conn:
+            autocommit_conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
+            try:
+                await autocommit_conn.execute(
+                    text("ALTER TABLE coverage_reports ADD COLUMN IF NOT EXISTS line_json JSONB DEFAULT '{}'::jsonb")
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to add column coverage_reports.line_json: {e}. "
+                    f"请手动 ALTER 或执行 alembic 迁移。"
+                )
+    except Exception as e:
+        logger.warning(f"Skip coverage_reports line_json column sync (connection error): {e}")
+    else:
+        logger.info("CoverageReport line_json column ensured")
 
     # 能力12：best-effort 启用 pgvector 快路径（失败仅记日志，代码绝不依赖；
     # 检索使用 JSONB + Python 侧余弦相似度，不要求 pgvector 扩展）。

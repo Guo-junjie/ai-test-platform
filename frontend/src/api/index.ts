@@ -279,6 +279,14 @@ export const coverageApi = {
   list: (params: any) => api.get('/coverage', { params }),
   get: (reportId: string) => api.get(`/coverage/${reportId}`),
   remove: (reportId: string) => api.delete(`/coverage/${reportId}`),
+  // P1 看板
+  dashboard: (projectId: string) => api.get(`/coverage/dashboard/${projectId}`),
+  trend: (projectId: string, days = 30) =>
+    api.get(`/coverage/trend/${projectId}`, { params: { days } }),
+  files: (reportId: string, params: any) =>
+    api.get(`/coverage/files/${reportId}`, { params }),
+  source: (reportId: string, filePath: string) =>
+    api.get(`/coverage/source/${reportId}`, { params: { file: filePath } }),
 }
 
 // ============ 质量门禁 ============

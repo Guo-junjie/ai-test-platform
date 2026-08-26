@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .env
 dist/
+dist_bak_*/
 .idea/
 .vscode/
 .DS_Store

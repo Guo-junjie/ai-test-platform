@@ -12,8 +12,24 @@ coverage/parser — 把覆盖率工具产出的 XML 报告归一化为统一结�
   "branch_rate": 70.0,      # 分支覆盖率 %
   "total_lines": 1000, "covered_lines": 850,
   "total_branches": 100, "covered_branches": 70,
-  "files": [{"path","line_rate","branch_rate","total_lines","covered_lines"}]
+  "files": [
+    {
+      "path": "src/main.py",
+      "line_rate": 80.0,
+      "branch_rate": 50.0,
+      "total_lines": 100, "covered_lines": 80,
+      "lines": [
+        {"number": 10, "hits": 5, "branch": false, "covered_branches": 0, "total_branches": 0},
+        ...
+      ]
+    }
+  ]
 }
+
+注：
+- `lines` 元素按行号升序；hits>0 视为覆盖
+- Cobertura branch 属性：<line branch="true|false" condition-coverage="x% (a/b)">
+- JaCoCo 行级：<line nr="N" mi="M" ci="C" mb="0" cb="0">，ci+mi>0 视为有指令
 """
 
 from __future__ import annotations
@@ -63,21 +79,45 @@ def _parse_cobertura(root: ET.Element) -> dict[str, Any]:
         lines_el = cls.find("lines")
         f_total = 0
         f_covered = 0
+        f_cb = 0  # covered branches
+        f_mb = 0  # missed branches
+        f_lines: list[dict[str, Any]] = []
         if lines_el is not None:
             for ln in lines_el.findall("line"):
                 f_total += 1
                 try:
-                    if int(ln.get("hits", "0")) > 0:
-                        f_covered += 1
+                    hits = int(ln.get("hits", "0"))
                 except (ValueError, TypeError):
-                    pass
+                    hits = 0
+                if hits > 0:
+                    f_covered += 1
+                # branch info：condition-coverage="100% (2/2)" 解析 a/b
+                cb, mb = 0, 0
+                is_branch = (ln.get("branch") or "").lower() == "true"
+                cond = ln.get("condition-coverage") or ""
+                if "(" in cond and "/" in cond and ")" in cond:
+                    try:
+                        a, b = cond.split("(")[1].split(")")[0].split("/")
+                        cb, mb = int(a), int(b) - int(a)
+                    except (ValueError, TypeError, IndexError):
+                        pass
+                f_cb += cb
+                f_mb += mb
+                f_lines.append({
+                    "number": int(ln.get("number", "0") or 0),
+                    "hits": hits,
+                    "branch": is_branch,
+                    "covered_branches": cb,
+                    "total_branches": cb + mb,
+                })
         files.append(
             {
                 "path": fname,
                 "line_rate": _to_pct(f_covered, f_total),
-                "branch_rate": None,
+                "branch_rate": _to_pct(f_cb, f_cb + f_mb) if (f_cb + f_mb) > 0 else None,
                 "total_lines": f_total,
                 "covered_lines": f_covered,
+                "lines": f_lines,
             }
         )
     return {
@@ -115,27 +155,39 @@ def _parse_jacoco(root: ET.Element) -> dict[str, Any]:
         for sf in pkg.iter("sourcefile"):
             sf_name = sf.get("name", "")
             f_total = f_covered = f_mb = f_cb = 0
+            f_lines: list[dict[str, Any]] = []
             for ln in sf.findall("line"):
                 f_total += 1
                 try:
+                    nr = int(ln.get("nr", "0"))
                     ci = int(ln.get("ci", "0"))
                     mi = int(ln.get("mi", "0"))
                     cb = int(ln.get("cb", "0"))
                     mb = int(ln.get("mb", "0"))
                 except (ValueError, TypeError):
-                    ci = mi = cb = mb = 0
-                if ci + mi > 0:
+                    nr, ci, mi, cb, mb = 0, 0, 0, 0, 0
+                hits = ci  # JaCoCo 用 covered instructions 数代表 hits
+                # 修正：仅当 ci>0 视为覆盖（ci+mi>0 是"有指令"≠"已覆盖"）
+                if ci > 0:
                     f_covered += 1
                 f_mb += mb
                 f_cb += cb
+                f_lines.append({
+                    "number": nr,
+                    "hits": hits,
+                    "branch": (cb + mb) > 0,
+                    "covered_branches": cb,
+                    "total_branches": cb + mb,
+                })
             path = f"{pkg_name}/{sf_name}" if pkg_name else sf_name
             files.append(
                 {
                     "path": path,
                     "line_rate": _to_pct(f_covered, f_total),
-                    "branch_rate": _to_pct(f_cb, f_cb + f_mb),
+                    "branch_rate": _to_pct(f_cb, f_cb + f_mb) if (f_cb + f_mb) > 0 else None,
                     "total_lines": f_total,
                     "covered_lines": f_covered,
+                    "lines": f_lines,
                 }
             )
 
