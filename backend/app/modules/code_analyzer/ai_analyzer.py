@@ -251,11 +251,19 @@ class AICodeAnalyzer:
                     if _lbl in hits
                 ):
                     severity = "medium"
+                rel_path = str(file_path.relative_to(root))
+                # 派生 title/description（前端 Analysis.vue 风险卡 title/description 字段）
+                severity_label = {"high": "高危", "medium": "中危", "low": "低危"}[severity]
                 risk_areas.append({
-                    "path": str(file_path.relative_to(root)),
+                    "path": rel_path,
                     "http_method": "",
                     "risk_points": hits,
                     "severity": severity,
+                    "title": f"[{severity_label}] {rel_path} 命中 {len(hits)} 类风险",
+                    "description": (
+                        "规则化扫描命中以下风险点：" + "、".join(hits) +
+                        f"。文件路径：{rel_path}"
+                    ),
                 })
 
         # 按严重级别排序（与 analyze_project 一致）
@@ -515,11 +523,22 @@ class AICodeAnalyzer:
             elif len(risk_points) > 3:
                 severity = "medium"
 
+            severity_label = {"high": "高危", "medium": "中危", "low": "低危"}[severity]
+            rel_path = analysis.get("path", "")
+            method = analysis.get("http_method", "")
             risk_areas.append({
-                "path": analysis.get("path", ""),
-                "http_method": analysis.get("http_method", ""),
+                "path": rel_path,
+                "http_method": method,
                 "risk_points": risk_points,
                 "severity": severity,
+                "title": (
+                    f"[{severity_label}] {method.upper()} {rel_path} 命中 {len(risk_points)} 项风险"
+                    if method else f"[{severity_label}] {rel_path} 命中 {len(risk_points)} 项风险"
+                ),
+                "description": (
+                    "AI 语义分析识别出以下风险点：" + "、".join(str(r) for r in risk_points) +
+                    f"。位置：{method.upper() + ' ' if method else ''}{rel_path}"
+                ),
             })
 
         # 按严重级别排序

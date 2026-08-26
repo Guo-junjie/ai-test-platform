@@ -37,6 +37,7 @@
           </el-select>
         </div>
         <el-button :disabled="!projectId" @click="refreshAll">刷新</el-button>
+        <el-button type="primary" :icon="UploadFilled" :disabled="!projectId" @click="openUploadDialog">上传报告</el-button>
       </div>
     </el-card>
 
@@ -46,7 +47,12 @@
 
     <template v-else-if="!latestReportId && reports.length === 0 && !loadingReports">
       <el-card shadow="hover" class="empty-card">
-        <el-empty description="该项目暂无覆盖率报告，请先在下方或「数据源管理」中上传" />
+        <el-empty description="该项目暂无覆盖率报告">
+          <el-button type="primary" :icon="UploadFilled" @click="openUploadDialog">上传覆盖率报告</el-button>
+          <div class="empty-tip">
+            支持 coverage.py / JaCoCo / istanbul / Cobertura 格式的 XML 报告
+          </div>
+        </el-empty>
       </el-card>
     </template>
 
@@ -274,12 +280,59 @@
         </div>
       </div>
     </el-drawer>
+
+    <!-- 上传覆盖率报告 对话框 -->
+    <el-dialog
+      v-model="uploadDialogVisible"
+      title="上传覆盖率报告"
+      width="560px"
+      :close-on-click-modal="false"
+      destroy-on-close
+    >
+      <el-form label-width="100px" :model="uploadForm">
+        <el-form-item label="工具" required>
+          <el-select v-model="uploadForm.tool" style="width: 100%">
+            <el-option label="coverage.py (Python)" value="coverage.py" />
+            <el-option label="JaCoCo (Java)" value="jacoco" />
+            <el-option label="istanbul / nyc (Node)" value="istanbul" />
+            <el-option label="Cobertura (通用)" value="cobertura" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="语言">
+          <el-input v-model="uploadForm.language" placeholder="可选：python / java / javascript" />
+        </el-form-item>
+        <el-form-item label="XML 报告" required>
+          <el-upload
+            :auto-upload="false"
+            :limit="1"
+            :show-file-list="true"
+            accept=".xml"
+            :on-change="onUploadFileChange"
+            :on-exceed="() => ElMessage.warning('每次仅可上传一个文件')"
+          >
+            <el-button :icon="UploadFilled">选择文件</el-button>
+            <template #tip>
+              <div class="el-upload__tip">
+                coverage.py 执行 <code>coverage xml</code>、JaCoCo 执行 <code>jacoco:report</code> 生成 XML 后上传（≤ 20MB）
+              </div>
+            </template>
+          </el-upload>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="uploadDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="uploading" :disabled="!uploadForm.file" @click="submitUpload">
+          解析并入库
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
+import { UploadFilled } from '@element-plus/icons-vue'
 import { coverageApi, projectApi } from '@/api'
 import TrendChart from '@/components/TrendChart.vue'
 
@@ -312,6 +365,19 @@ const drawerOpen = ref(false)
 const drawerTitle = ref('')
 const sourceData = ref<any>(null)
 const loadingSource = ref(false)
+
+// 上传对话框
+const uploadDialogVisible = ref(false)
+const uploading = ref(false)
+const uploadForm = ref<{
+  tool: string
+  language: string
+  file: File | null
+}>({
+  tool: 'coverage.py',
+  language: '',
+  file: null,
+})
 
 // ====== 工具 ======
 function fmt(v: any): string {
@@ -468,6 +534,45 @@ async function refreshAll() {
   await loadDashboard()
   await loadTrend()
   await loadFiles()
+}
+
+function openUploadDialog() {
+  if (!projectId.value) {
+    ElMessage.warning('请先选择项目')
+    return
+  }
+  uploadForm.value = { tool: 'coverage.py', language: '', file: null }
+  uploadDialogVisible.value = true
+}
+
+function onUploadFileChange(file: any) {
+  // el-upload 的 file 对象在 raw
+  uploadForm.value.file = file?.raw || null
+}
+
+async function submitUpload() {
+  if (!uploadForm.value.file || !uploadForm.value.tool) {
+    ElMessage.warning('请选择工具和 XML 文件')
+    return
+  }
+  uploading.value = true
+  try {
+    const res: any = await coverageApi.upload(uploadForm.value.file, {
+      project_id: projectId.value,
+      tool: uploadForm.value.tool,
+      language: uploadForm.value.language || undefined,
+    })
+    const d = res?.data || {}
+    ElMessage.success(
+      `已入库：行覆盖 ${d.line_rate}% / 分支 ${d.branch_rate}%（${d.file_count} 个文件）`
+    )
+    uploadDialogVisible.value = false
+    await refreshAll()
+  } catch {
+    /* 拦截器已提示 */
+  } finally {
+    uploading.value = false
+  }
 }
 
 function onFileQueryChange() {
@@ -694,5 +799,13 @@ onMounted(() => {
 }
 .source-line.line-partial .line-icon {
   color: #e6a23c;
+}
+.empty-card {
+  padding: 8px;
+}
+.empty-tip {
+  color: #909399;
+  font-size: 12px;
+  margin-top: 8px;
 }
 </style>
