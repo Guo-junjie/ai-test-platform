@@ -114,11 +114,11 @@ async def analyze_report(
     db: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     """
-    报告级 AI 分析。
+    报告级 AI 分析（仅支持报告摘要 / 质量评估）。
 
-    根据 analysis_type 执行不同分析：
-    - failure_analysis: 失败原因分析
-    - summary: 测试摘要生成
+    报告资源只做摘要，单用例失败分析请走 /results/{id}/ai-analysis。
+    此前该端点默认走 failure_analysis 分支、拿报告 ID 去查 test_results
+    表导致 404，现统一为摘要分析。
     """
     if not req.project_id:
         raise HTTPException(status_code=400, detail="project_id is required")
@@ -126,18 +126,11 @@ async def analyze_report(
     analyzer = ReportAnalyzer()
 
     try:
-        if req.analysis_type == "summary":
-            result = await analyzer.analyze_summary(
-                report_id=report_id,
-                project_id=req.project_id,
-                db_session=db,
-            )
-        else:
-            result = await analyzer.analyze_failure(
-                result_id=req.result_id or report_id,
-                project_id=req.project_id,
-                db_session=db,
-            )
+        result = await analyzer.analyze_summary(
+            report_id=report_id,
+            project_id=req.project_id,
+            db_session=db,
+        )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except ModelNotConfiguredError:

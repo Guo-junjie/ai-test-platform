@@ -17,11 +17,11 @@ class ReportAnalysisRequest(BaseModel):
 
     report_id: Optional[str] = Field(default=None, description="报告 ID（路径已携带，可选）")
     analysis_type: str = Field(
-        default="failure_analysis",
-        description="分析类型: failure_analysis / summary / compare",
+        default="summary",
+        description="报告分析类型，目前固定为 summary（报告摘要）",
     )
     project_id: Optional[str] = Field(default=None, description="所属项目 ID")
-    result_id: Optional[str] = Field(default=None, description="测试结果 ID（失败分析时使用）")
+    result_id: Optional[str] = Field(default=None, description="保留字段，报告分析不使用")
 
 
 class ResultAnalysisRequest(BaseModel):

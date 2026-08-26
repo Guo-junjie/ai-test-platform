@@ -327,7 +327,7 @@ async function handleAnalyze(): Promise<void> {
   try {
     let res: any
     if (analysisType.value === 'summary') {
-      res = await reportAnalysisApi.analyzeReport(reportId.value, { project_id: projectId.value })
+      res = await reportAnalysisApi.analyzeReport(reportId.value, { project_id: projectId.value, analysis_type: 'summary' })
     } else if (analysisType.value === 'failure') {
       res = await reportAnalysisApi.analyzeResult(resultId.value, { project_id: projectId.value })
     } else {
