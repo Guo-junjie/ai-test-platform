@@ -14,6 +14,7 @@ from typing import Any
 
 import git
 import os
+import socket
 
 from app.modules.source.base import CodeSourceAdapter, SourceAdapterFactory, SourceType
 from app.modules.source.retry import retry_with_backoff
@@ -42,6 +43,29 @@ os.environ["GIT_CONFIG_COUNT"] = str(len(_GIT_TIMEOUT_CFGS))
 for _i, (_k, _v) in enumerate(_GIT_TIMEOUT_CFGS):
     os.environ[f"GIT_CONFIG_KEY_{_i}"] = _k
     os.environ[f"GIT_CONFIG_VALUE_{_i}"] = _v
+
+
+def _tcp_reachable(host: str, port: int = 443, timeout: int = 10) -> tuple[bool, str]:
+    """
+    快速 TCP 连通性预检：用 socket.create_connection 在 `timeout` 秒内
+    尝试 TCP 三次握手，连不上立即返回 False。
+
+    为什么不用 git 自带的 http.timeout？
+    - git 的 http.timeout 只管【HTTP 层】（连接建立后等响应），
+      不管 TCP SYN 重传。Linux 默认 tcp_syn_retries=6 意味着 SYN 超时
+      ≈ 127 秒，git 在 C 层会傻等这么久才放弃。
+    - 用 Python socket.create_connection 可以设进程级 connect timeout，
+      10 秒内就能明确知道"这台机器到不了 github.com"。
+
+    Returns:
+        (ok, err_msg): ok=True 表示 TCP 通；ok=False 时 err_msg 是
+        简短错误描述（用于返回给前端）。
+    """
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True, ""
+    except (socket.timeout, socket.gaierror, OSError) as e:
+        return False, f"{type(e).__name__}: {e}"
 
 
 class GitHubAdapter(CodeSourceAdapter):
@@ -132,6 +156,18 @@ class GitHubAdapter(CodeSourceAdapter):
         Returns:
             标准化结果字典。
         """
+        # ⚠️ TCP 预检：避免 git 在 C 层等 TCP SYN 超时（Linux 默认 127s）。
+        # 10s 内确认到不了 github.com，立即清晰报错（不再烧 2+ 分钟）。
+        # git 自带的 http.timeout 只管 HTTP 层，TCP 握手阶段管不到。
+        ok, err = _tcp_reachable("github.com", 443, timeout=10)
+        if not ok:
+            raise ValueError(
+                "无法连接 github.com:443（10s TCP 预检失败："
+                f"{err}）。这台部署机可能没有外网 / 防火墙拦截 443 端口 / "
+                "DNS 解析失败。请改用「人工上传」数据源（zip/tar.gz 上传），"
+                "或联系运维开通出网权限。"
+            )
+
         # Token 注入 URL
         authed_url = config.repo_url.replace(
             "https://github.com",
