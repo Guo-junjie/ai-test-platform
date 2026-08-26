@@ -149,7 +149,7 @@ def _materialize_uploaded_files(files: list[UploadFile]) -> Path:
         out = target / rel
         out.parent.mkdir(parents=True, exist_ok=True)
         with open(out, "wb") as out_f:
-            shutil.copyfileobj(f.file, out)
+            shutil.copyfileobj(f.file, out_f)
     return target
 
 

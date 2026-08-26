@@ -9,41 +9,128 @@
 
       <el-alert
         title="AI 智能分析"
-        description="对测试报告和测试结果进行 AI 深度分析，包括失败根因分析、报告摘要和两次执行对比。"
+        description="对测试报告和测试结果进行 AI 深度分析，包括失败根因分析、报告摘要和两次执行对比。选择项目后，下方会列出该项目已有的报告 / 结果 / 测试任务，直接下拉选择即可，无需手动粘贴 ID。"
         type="info"
         :closable="false"
         style="margin-bottom: 16px;"
       />
 
-      <el-form label-width="120px" style="max-width: 800px;">
+      <el-form label-width="120px" style="max-width: 820px;">
         <el-form-item label="项目">
-          <el-select v-model="projectId" placeholder="选择项目" filterable style="width: 100%;">
+          <el-select
+            v-model="projectId"
+            filterable
+            placeholder="选择项目"
+            style="width: 100%;"
+            @change="onProjectChange"
+          >
             <el-option v-for="p in projects" :key="p.id" :label="p.name" :value="p.id" />
           </el-select>
+          <el-button
+            link
+            type="primary"
+            :loading="loadingOpts"
+            style="margin-left: 8px"
+            @click="loadOptions"
+          >
+            刷新列表
+          </el-button>
         </el-form-item>
 
         <el-form-item label="分析类型">
-          <el-radio-group v-model="analysisType">
+          <el-radio-group v-model="analysisType" @change="onAnalysisTypeChange">
             <el-radio-button value="summary">报告摘要</el-radio-button>
             <el-radio-button value="failure">失败分析</el-radio-button>
             <el-radio-button value="compare">执行对比</el-radio-button>
           </el-radio-group>
         </el-form-item>
 
-        <el-form-item v-if="analysisType === 'summary'" label="报告 ID">
-          <el-input v-model="reportId" placeholder="输入测试报告 ID" />
+        <el-form-item label="输入方式">
+          <el-switch v-model="manualEntry" active-text="手动输入 ID" inactive-text="下拉选择" />
+          <span class="hint">默认下拉选择已有数据；找不到时再切换手动输入</span>
         </el-form-item>
 
-        <el-form-item v-else-if="analysisType === 'failure'" label="结果 ID">
-          <el-input v-model="resultId" placeholder="输入测试结果 ID" />
-        </el-form-item>
+        <!-- 报告摘要：选择已有报告 -->
+        <template v-if="analysisType === 'summary'">
+          <el-form-item label="测试报告">
+            <el-select
+              v-if="!manualEntry"
+              v-model="reportId"
+              filterable
+              clearable
+              placeholder="选择测试报告"
+              :loading="loadingOpts"
+              style="width: 100%;"
+            >
+              <el-option
+                v-for="r in reportOptions"
+                :key="r.id"
+                :label="reportLabel(r)"
+                :value="r.id"
+              />
+            </el-select>
+            <el-input v-else v-model="reportId" placeholder="输入测试报告 ID" />
+          </el-form-item>
+          <el-alert
+            v-if="!manualEntry && !loadingOpts && reportOptions.length === 0"
+            type="warning"
+            :closable="false"
+            title="该项目暂无测试报告"
+            description="请先完成一次测试运行并生成报告后，再来此做 AI 分析。"
+            style="margin: -8px 0 16px 120px; max-width: 640px;"
+          />
+        </template>
 
-        <el-form-item v-else label="结果 ID">
-          <el-input v-model="resultId" placeholder="输入测试结果 ID" />
-        </el-form-item>
+        <!-- 失败分析 / 执行对比：选择已有结果 -->
+        <template v-else>
+          <el-form-item :label="analysisType === 'compare' ? '当前结果' : '测试结果'">
+            <el-select
+              v-if="!manualEntry"
+              v-model="resultId"
+              filterable
+              clearable
+              placeholder="选择测试结果"
+              :loading="loadingOpts"
+              style="width: 100%;"
+            >
+              <el-option
+                v-for="r in resultOptions"
+                :key="r.id"
+                :label="resultLabel(r)"
+                :value="r.id"
+              />
+            </el-select>
+            <el-input v-else v-model="resultId" placeholder="输入测试结果 ID" />
+          </el-form-item>
+          <el-alert
+            v-if="!manualEntry && !loadingOpts && resultOptions.length === 0"
+            type="warning"
+            :closable="false"
+            title="该项目暂无测试结果"
+            description="请先执行测试产生结果后，再来此做 AI 分析。"
+            style="margin: -8px 0 16px 120px; max-width: 640px;"
+          />
+        </template>
 
-        <el-form-item v-if="analysisType === 'compare'" label="对比 Run ID">
-          <el-input v-model="compareRunId" placeholder="输入对比的测试运行 ID" />
+        <!-- 执行对比：选择对比 Run -->
+        <el-form-item v-if="analysisType === 'compare'" label="对比 Run">
+          <el-select
+            v-if="!manualEntry"
+            v-model="compareRunId"
+            filterable
+            clearable
+            placeholder="选择对比的测试任务"
+            :loading="loadingOpts"
+            style="width: 100%;"
+          >
+            <el-option
+              v-for="r in runOptions"
+              :key="r.id"
+              :label="runLabel(r)"
+              :value="r.id"
+            />
+          </el-select>
+          <el-input v-else v-model="compareRunId" placeholder="输入对比的测试运行 ID" />
         </el-form-item>
 
         <el-form-item>
@@ -96,17 +183,23 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { reportAnalysisApi, projectApi } from '@/api'
+import { reportAnalysisApi, projectApi, reportApi, testRunApi } from '@/api'
 
 const projectId = ref('')
 const projects = ref<any[]>([])
 const analysisType = ref('summary')
+const manualEntry = ref(false)
 const reportId = ref('')
 const resultId = ref('')
 const compareRunId = ref('')
+const loadingOpts = ref(false)
 const analyzing = ref(false)
 const analysisResult = ref<Record<string, any> | null>(null)
 const viewMode = ref('structured')
+
+const reportOptions = ref<any[]>([])
+const resultOptions = ref<any[]>([])
+const runOptions = ref<any[]>([])
 
 const jsonPreview = computed(() => {
   return analysisResult.value ? JSON.stringify(analysisResult.value, null, 2) : ''
@@ -135,6 +228,29 @@ function formatKey(key: string): string {
   return keyLabels[key] || key
 }
 
+function shortId(id?: string): string {
+  return id ? id.slice(0, 8) : '—'
+}
+
+function formatDate(s?: string): string {
+  if (!s) return '—'
+  const d = new Date(s)
+  return isNaN(d.getTime()) ? s : d.toLocaleString('zh-CN', { hour12: false })
+}
+
+function reportLabel(r: any): string {
+  return `报告 ${shortId(r.test_run_id)} · 质量分 ${r.quality_score ?? '—'} · ${formatDate(r.created_at)}`
+}
+
+function resultLabel(r: any): string {
+  const status = r.is_passed ? '✓通过' : '✗失败'
+  return `用例 ${r.case_name || 'unknown'} · ${status} · ${r.status_code ?? '—'} · ${formatDate(r.executed_at)}`
+}
+
+function runLabel(r: any): string {
+  return `Run ${shortId(r.id)} · ${r.status || '—'} · ${formatDate(r.created_at)}`
+}
+
 async function loadProjects(): Promise<void> {
   try {
     const res: any = await projectApi.getList()
@@ -144,6 +260,49 @@ async function loadProjects(): Promise<void> {
   }
 }
 
+async function loadOptions(): Promise<void> {
+  if (!projectId.value) {
+    reportOptions.value = []
+    resultOptions.value = []
+    runOptions.value = []
+    return
+  }
+  loadingOpts.value = true
+  try {
+    const [repRes, resRes, runRes] = await Promise.all([
+      reportApi.getList({ project_id: projectId.value }),
+      reportAnalysisApi.listResults({ project_id: projectId.value }),
+      testRunApi.list(),
+    ])
+    const repData = repRes?.data
+    reportOptions.value = Array.isArray(repData) ? repData : (repData?.list || [])
+    const resData = resRes?.data
+    resultOptions.value = Array.isArray(resData) ? resData : (resData?.list || [])
+    const runData = runRes?.data
+    const allRuns = Array.isArray(runData) ? runData : (runData?.list || [])
+    runOptions.value = allRuns.filter((r: any) => r.project_id === projectId.value)
+  } catch (e: any) {
+    ElMessage.error('加载选项失败: ' + (e?.message || e))
+  } finally {
+    loadingOpts.value = false
+  }
+}
+
+function onProjectChange(): void {
+  // 切换项目后清空已选值并重新拉取可选项
+  reportId.value = ''
+  resultId.value = ''
+  compareRunId.value = ''
+  loadOptions()
+}
+
+function onAnalysisTypeChange(): void {
+  // 切换分析类型时清空与目标无关的选择
+  reportId.value = ''
+  resultId.value = ''
+  compareRunId.value = ''
+}
+
 async function handleAnalyze(): Promise<void> {
   if (!projectId.value) {
     ElMessage.warning('请先选择项目')
@@ -151,15 +310,15 @@ async function handleAnalyze(): Promise<void> {
   }
 
   if (analysisType.value === 'summary' && !reportId.value.trim()) {
-    ElMessage.warning('请输入报告 ID')
+    ElMessage.warning(manualEntry.value ? '请输入报告 ID' : '请选择测试报告')
     return
   }
   if (analysisType.value !== 'summary' && !resultId.value.trim()) {
-    ElMessage.warning('请输入结果 ID')
+    ElMessage.warning(manualEntry.value ? '请输入结果 ID' : '请选择测试结果')
     return
   }
   if (analysisType.value === 'compare' && !compareRunId.value.trim()) {
-    ElMessage.warning('请输入对比 Run ID')
+    ElMessage.warning(manualEntry.value ? '请输入对比 Run ID' : '请选择对比的测试任务')
     return
   }
 
@@ -205,6 +364,12 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.hint {
+  color: #909399;
+  font-size: 12px;
+  margin-left: 12px;
 }
 
 .code-block {

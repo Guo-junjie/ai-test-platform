@@ -8,11 +8,14 @@
 """
 
 import logging
+import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.database import TestCase, TestResult, TestRun
 from app.modules.ai.model_router import ModelNotConfiguredError
 from app.modules.report_analysis.analyzer import ReportAnalyzer
 from app.schemas.report_analysis import (
@@ -25,6 +28,83 @@ from app.utils.database import get_db_session
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+@router.get("/results")
+async def list_results(
+    project_id: str | None = Query(None, description="按项目ID过滤"),
+    test_run_id: str | None = Query(None, description="按测试任务ID过滤"),
+    page: int = Query(1, ge=1, description="页码"),
+    page_size: int = Query(50, ge=1, le=200, description="每页数量"),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """
+    列出测试结果（供前端下拉框选择已有结果）。
+
+    支持按 project_id 或 test_run_id 过滤，分页返回。
+    返回字段含关联的用例名，便于下拉框展示可读 label。
+    """
+    query = (
+        select(TestResult, TestCase, TestRun)
+        .join(TestCase, TestCase.id == TestResult.test_case_id)
+        .join(TestRun, TestRun.id == TestResult.test_run_id)
+    )
+
+    if test_run_id:
+        try:
+            query = query.where(TestResult.test_run_id == uuid.UUID(test_run_id))
+        except ValueError:
+            raise HTTPException(400, f"Invalid test_run_id: {test_run_id}")
+
+    if project_id:
+        try:
+            pid = uuid.UUID(project_id)
+        except ValueError:
+            raise HTTPException(400, f"Invalid project_id: {project_id}")
+        run_ids = (
+            await db.execute(select(TestRun.id).where(TestRun.project_id == pid))
+        ).fetchall()
+        run_id_list = [row[0] for row in run_ids]
+        if run_id_list:
+            query = query.where(TestResult.test_run_id.in_(run_id_list))
+        else:
+            return {
+                "code": 0,
+                "data": {"list": [], "total": 0, "page": page, "page_size": page_size},
+                "message": "success",
+            }
+
+    query = query.order_by(desc(TestResult.executed_at))
+    offset = (page - 1) * page_size
+    query = query.offset(offset).limit(page_size)
+
+    result = await db.execute(query)
+    rows = result.fetchall()
+
+    return {
+        "code": 0,
+        "data": {
+            "list": [
+                {
+                    "id": str(res.id),
+                    "test_run_id": str(res.test_run_id),
+                    "test_case_id": str(res.test_case_id),
+                    "case_name": case.case_name if case else "unknown",
+                    "case_type": case.case_type if case else None,
+                    "is_passed": res.is_passed,
+                    "status_code": res.status_code,
+                    "response_time_ms": res.response_time_ms,
+                    "error_message": (res.error_message or "")[:200],
+                    "executed_at": res.executed_at.isoformat() if res.executed_at else None,
+                }
+                for res, case, run in rows
+            ],
+            "total": len(rows),
+            "page": page,
+            "page_size": page_size,
+        },
+        "message": "success",
+    }
 
 
 @router.post("/reports/{report_id}/ai-analysis")

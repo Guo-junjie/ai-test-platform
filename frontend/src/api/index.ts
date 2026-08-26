@@ -382,6 +382,8 @@ export const reportAnalysisApi = {
     api.post(`/results/${resultId}/ai-analysis`, data, { timeout: 300000 }),
   compareResults: (resultId: string, data: any) =>
     api.post(`/results/${resultId}/compare`, data, { timeout: 300000 }),
+  /** 列出测试结果（供下拉框选择已有结果），支持 project_id / test_run_id 过滤 */
+  listResults: (params?: any) => api.get('/results', { params }),
 }
 
 // ============ 知识库 RAG（能力12：状态概览 / 术语表维护 / 检索预览） ============
