@@ -81,7 +81,10 @@ export const sourceApi = {
   /** 就地编辑数据源（name/config）；后端 merge 逻辑，Token 留空 = 保持不变 */
   update: (id: string, data: any) => api.put(`/source/${id}`, data),
   disconnect: (id: string) => api.delete(`/source/${id}`),
-  fetch: (data: any) => api.post('/source/fetch', data),
+  // 单设 120s timeout：后端有 60s git 超时 + 10min wait_for 兜底，
+  // 120s 给后端留够时间返回 504/清晰错误，避免前端 axios 默认 30s timeout
+  // 先触发让用户只看到 "timeout of 30000ms exceeded" 而看不到后端真实原因。
+  fetch: (data: any) => api.post('/source/fetch', data, { timeout: 120000 }),
 }
 
 // ============ 文件上传 ============

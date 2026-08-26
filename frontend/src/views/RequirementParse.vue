@@ -146,7 +146,7 @@
             <el-option
               v-for="r in testRuns"
               :key="r.id"
-              :label="`#${(r.id || '').slice(0, 8)} · ${r.project_name || r.source_type || ''} · ${r.status || ''} · ${(r.created_at || '').slice(0, 16)}`"
+              :label="r.project_name || r.source_type || '未命名测试任务'"
               :value="r.id"
             />
           </el-select>
@@ -283,7 +283,22 @@ async function loadDocs() {
   docsLoading.value = true
   try {
     const res: any = await requirementApi.list({ project_id: projectId.value })
-    docs.value = res?.data || []
+    // 健壮反序列化：兼容 {data:[...]} 直返 和 {data:{list,total}} 包装，
+    // 避免再次踩"v-for 遍历对象"显示空列表的坑（之前 loadTestRuns 的 bug）
+    const payload = res?.data
+    if (Array.isArray(payload)) {
+      docs.value = payload
+    } else if (payload && typeof payload === 'object') {
+      docs.value = Array.isArray(payload.list)
+        ? payload.list
+        : Array.isArray(payload.items)
+        ? payload.items
+        : []
+    } else if (Array.isArray(res?.list)) {
+      docs.value = res.list
+    } else {
+      docs.value = []
+    }
   } catch {
     docs.value = []
   } finally {
