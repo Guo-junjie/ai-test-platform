@@ -103,7 +103,8 @@ async def get_report(
     """
     获取报告数据 JSON。
 
-    从 TestReport 表查询完整 report_data。
+    从 TestReport 表查询完整 report_data。若报告尚未生成（TestReport 行不存在），
+    返回 404 并提示用户先点击「重新生成报告」。
     """
     try:
         run_uuid = uuid.UUID(run_id)
@@ -116,7 +117,12 @@ async def get_report(
     report = result.scalar_one_or_none()
 
     if report is None:
-        raise HTTPException(404, f"Report not found for run: {run_id}")
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"报告尚未生成（run_id={run_id}）。请先点击「重新生成报告」按钮。"
+            ),
+        )
 
     return {
         "code": 0,
@@ -157,11 +163,14 @@ async def get_html_report(
     report = result.scalar_one_or_none()
 
     if report is None:
-        raise HTTPException(404, f"Report not found for run: {run_id}")
+        raise HTTPException(
+            status_code=404,
+            detail=f"报告尚未生成（run_id={run_id}）。请先点击「重新生成报告」按钮。",
+        )
 
     html_object_name = report.html_path
     if not html_object_name:
-        raise HTTPException(404, "HTML report path not available")
+        raise HTTPException(404, "HTML report path not available (请重新生成报告)")
 
     # 尝试从 MinIO 下载
     try:
@@ -211,11 +220,14 @@ async def download_pdf_report(
     report = result.scalar_one_or_none()
 
     if report is None:
-        raise HTTPException(404, f"Report not found for run: {run_id}")
+        raise HTTPException(
+            status_code=404,
+            detail=f"报告尚未生成（run_id={run_id}）。请先点击「重新生成报告」按钮。",
+        )
 
     pdf_object_name = report.pdf_path
     if not pdf_object_name:
-        raise HTTPException(404, "PDF report not available (may not have been generated)")
+        raise HTTPException(404, "PDF report not available (请重新生成报告)")
 
     # 从 MinIO 下载
     try:
@@ -262,11 +274,14 @@ async def get_share_link(
     report = result.scalar_one_or_none()
 
     if report is None:
-        raise HTTPException(404, f"Report not found for run: {run_id}")
+        raise HTTPException(
+            status_code=404,
+            detail=f"报告尚未生成（run_id={run_id}）。请先点击「重新生成报告」按钮。",
+        )
 
     html_object_name = report.html_path
     if not html_object_name:
-        raise HTTPException(404, "HTML report path not available")
+        raise HTTPException(404, "HTML report path not available (请重新生成报告)")
 
     try:
         from app.utils.storage import get_presigned_url
@@ -296,7 +311,7 @@ async def generate_report(
     """
     手动触发报告生成。
 
-    从 Redis 读取测试结果，调用 DefectAnalyzer + ReportGenerator 生成报告。
+    加载测试结果（Redis 优先 → DB TestResult 兜底），调用 DefectAnalyzer + ReportGenerator 生成报告。
     """
     try:
         run_uuid = uuid.UUID(run_id)
@@ -310,12 +325,16 @@ async def generate_report(
     if run is None:
         raise HTTPException(404, f"Test run not found: {run_id}")
 
-    # 从 Redis 读取测试结果
-    from app.utils.redis_client import get_task_result
-
-    test_results = await get_task_result(run_id)
+    # Redis 优先 → DB 兜底
+    test_results = await _load_test_results(run_id, db)
     if test_results is None:
-        raise HTTPException(400, "Test results not found in Redis. Has the test completed?")
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "测试结果不存在（Redis 已过期 / 未执行用例 / TestResult 表为空）。"
+                "请先完成测试（执行用例）后再生成报告，或检查 Redis 状态。"
+            ),
+        )
 
     # 异步执行报告生成
     import asyncio
@@ -324,18 +343,73 @@ async def generate_report(
         _generate_report_async(run_id, test_results)
     )
 
+    source = test_results.get("summary", {}).get("source", "redis")
     return {
         "code": 0,
         "data": {
             "test_run_id": run_id,
             "status": "generating",
-            "message": "Report generation started",
+            "data_source": source,
+            "message": f"Report generation started (data source: {source})",
         },
         "message": "success",
     }
 
 
 # ==================== 内部函数 ====================
+
+
+async def _load_test_results(
+    run_id: str,
+    db: AsyncSession,
+) -> dict[str, Any] | None:
+    """
+    加载测试结果，Redis 优先 → DB TestResult 兜底。
+
+    背景：流水线跑完测试后只把结果写到 Redis（set_task_result），TTL 到期 / 容器重启
+    / Redis 清理后数据丢失。TestResult 表本应持久化但当前流水线未插入（TODO），先做
+    "能读就读、不能读返 None" 的优雅降级。返回结构尽量贴合
+    DefectAnalyzer.analyze 期望的 {api_results: [...], summary: {...}}。
+    """
+    # 1. Redis 优先（完整数据：含 request_body / assertions 等）
+    from app.utils.redis_client import get_task_result
+
+    cached = await get_task_result(run_id)
+    if cached:
+        return cached
+
+    # 2. DB 兜底：从 TestResult 表读（目前流水线未持久化，所以多数情况空，但留兼容）
+    from app.models.database import TestResult
+
+    result = await db.execute(
+        select(TestResult).where(TestResult.test_run_id == uuid.UUID(run_id))
+    )
+    rows = result.scalars().all()
+    if not rows:
+        return None
+
+    api_results: list[dict[str, Any]] = []
+    for r in rows:
+        api_results.append({
+            "test_case_id": str(r.test_case_id),
+            "passed": bool(r.is_passed),
+            "status_code": r.status_code,
+            "response_time_ms": r.response_time_ms,
+            "error_message": r.error_message,
+            "error_trace": r.error_trace,
+            "executed_at": r.executed_at.isoformat() if r.executed_at else None,
+        })
+    total = len(api_results)
+    passed = sum(1 for r in api_results if r.get("passed"))
+    return {
+        "api_results": api_results,
+        "summary": {
+            "total": total,
+            "passed": passed,
+            "failed": total - passed,
+            "source": "db_fallback",
+        },
+    }
 
 
 async def _generate_report_async(
