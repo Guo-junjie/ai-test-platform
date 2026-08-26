@@ -1,0 +1,125 @@
+<?xml version="1.0" ?>
+<coverage line-rate="0.8472" branch-rate="0.6667" lines-covered="61" lines-valid="72" branches-covered="2" branches-valid="3" timestamp="1724667829" version="7.4.0">
+  <sources>
+    <source>/opt/ai-test-platform/ai-test-platform/backend/app</source>
+    <source>/opt/ai-test-platform/ai-test-platform/backend/app/api</source>
+    <source>/opt/ai-test-platform/ai-test-platform/backend/app/modules</source>
+  </sources>
+  <packages>
+    <package name="app" line-rate="0.8472" branch-rate="0.6667" complexity="0">
+      <classes>
+        <class name="api.report" filename="app/api/report.py" line-rate="0.7407" branch-rate="0.5" complexity="0">
+          <lines>
+            <line number="50" hits="5" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="51" hits="5" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="55" hits="5" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="58" hits="5" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="62" hits="0" branch="false" condition-coverage="0% (0/0)"/>
+            <line number="70" hits="0" branch="false" condition-coverage="0% (0/0)"/>
+            <line number="76" hits="3" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="80" hits="4" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="88" hits="6" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="95" hits="7" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="103" hits="7" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="108" hits="5" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="112" hits="0" branch="false" condition-coverage="0% (0/0)"/>
+            <line number="118" hits="4" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="125" hits="3" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="131" hits="0" branch="false" condition-coverage="0% (0/0)"/>
+            <line number="139" hits="0" branch="false" condition-coverage="0% (0/0)"/>
+            <line number="145" hits="0" branch="false" condition-coverage="0% (0/0)"/>
+            <line number="152" hits="0" branch="false" condition-coverage="0% (0/0)"/>
+            <line number="160" hits="2" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="167" hits="3" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="175" hits="5" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="182" hits="4" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="188" hits="4" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="195" hits="0" branch="false" condition-coverage="0% (0/0)"/>
+            <line number="202" hits="3" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="210" hits="3" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="220" hits="0" branch="false" condition-coverage="0% (0/0)"/>
+            <line number="227" hits="1" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="233" hits="5" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="240" hits="3" branch="false" condition-coverage="0% (0/0)"/>
+            <line number="250" hits="2" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="260" hits="3" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="270" hits="0" branch="false" condition-coverage="0% (0/0)"/>
+            <line number="280" hits="0" branch="false" condition-coverage="0% (0/0)"/>
+            <line number="290" hits="0" branch="false" condition-coverage="0% (0/0)"/>
+            <line number="303" hits="2" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="310" hits="3" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="320" hits="4" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="330" hits="5" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="340" hits="6" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="360" hits="0" branch="true" condition-coverage="50% (1/2)">
+              <conditions>
+                <condition number="0" type="jump" coverage="50%"/>
+              </conditions>
+            </line>
+            <line number="370" hits="0" branch="false" condition-coverage="0% (0/0)"/>
+            <line number="380" hits="3" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="390" hits="4" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="395" hits="5" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="400" hits="2" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="408" hits="0" branch="false" condition-coverage="0% (0/0)"/>
+            <line number="415" hits="0" branch="false" condition-coverage="0% (0/0)"/>
+            <line number="432" hits="3" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="442" hits="4" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="443" hits="5" branch="false" condition-coverage="100% (1/1)"/>
+          </lines>
+        </class>
+        <class name="api.coverage" filename="app/api/coverage.py" line-rate="0.9583" branch-rate="0.6667" complexity="0">
+          <lines>
+            <line number="40" hits="8" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="50" hits="8" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="58" hits="8" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="68" hits="8" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="75" hits="8" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="85" hits="0" branch="false" condition-coverage="0% (0/0)"/>
+            <line number="95" hits="8" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="105" hits="8" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="115" hits="0" branch="false" condition-coverage="0% (0/0)"/>
+            <line number="125" hits="8" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="135" hits="8" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="155" hits="8" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="175" hits="8" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="195" hits="0" branch="true" condition-coverage="50% (1/2)">
+              <conditions>
+                <condition number="0" type="jump" coverage="50%"/>
+              </conditions>
+            </line>
+            <line number="210" hits="8" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="220" hits="8" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="230" hits="8" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="240" hits="8" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="258" hits="8" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="278" hits="0" branch="false" condition-coverage="0% (0/0)"/>
+            <line number="288" hits="8" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="298" hits="8" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="308" hits="8" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="318" hits="8" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="328" hits="8" branch="false" condition-coverage="100% (1/1)"/>
+          </lines>
+        </class>
+        <class name="modules.pipeline" filename="app/modules/pipeline.py" line-rate="0.8571" branch-rate="0.0" complexity="0">
+          <lines>
+            <line number="10" hits="3" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="20" hits="3" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="30" hits="3" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="40" hits="3" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="50" hits="0" branch="false" condition-coverage="0% (0/0)"/>
+            <line number="60" hits="3" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="70" hits="3" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="80" hits="3" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="90" hits="3" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="100" hits="3" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="110" hits="3" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="120" hits="3" branch="false" condition-coverage="100% (1/1)"/>
+            <line number="135" hits="0" branch="false" condition-coverage="0% (0/0)"/>
+            <line number="150" hits="3" branch="false" condition-coverage="100% (1/1)"/>
+          </lines>
+        </class>
+      </classes>
+    </package>
+  </packages>
+</coverage>

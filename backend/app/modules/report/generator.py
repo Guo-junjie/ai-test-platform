@@ -29,6 +29,48 @@ _TEMPLATES_DIR = Path(__file__).parent / "templates"
 _REPORT_OUTPUT_DIR = Path(settings.REPORT_DIR) if hasattr(settings, "REPORT_DIR") else Path("/app/data/reports")
 
 
+def _json_safe(obj: Any) -> Any:
+    """
+    递归清洗对象，让任意嵌套结构都可以被 json.dumps 默认 encoder 处理。
+
+    历史 bug：DefectAnalyzer / 生成报告 chain 里偶尔会漏进：
+      - function / method（去重 callback 没去掉）
+      - datetime / UUID（嵌套在 test_results / defects）
+      - bytes / Path（很少见，但遇到就崩）
+    全部统一转字符串，保留可读性，不让 SQLAlchemy 写 JSONB 时 TypeError。
+
+    ⚠️ 这是「兜底粗加工」，真正的清理应该在数据产出端做；这里只兜住 crash。
+    """
+    if obj is None or isinstance(obj, (str, int, float, bool)):
+        return obj
+    if isinstance(obj, dict):
+        return {str(k): _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [_json_safe(x) for x in obj]
+    # datetime / date
+    if hasattr(obj, "isoformat"):
+        try:
+            return obj.isoformat()
+        except Exception:  # noqa: BLE001
+            pass
+    # UUID
+    try:
+        import uuid as _uuid_mod
+
+        if isinstance(obj, _uuid_mod.UUID):
+            return str(obj)
+    except Exception:  # noqa: BLE001
+        pass
+    # bytes
+    if isinstance(obj, (bytes, bytearray)):
+        try:
+            return obj.decode("utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            return repr(obj)
+    # Path / 其他带 __str__ 的：最后兜底
+    return str(obj)
+
+
 class ReportGenerator:
     """
     报告生成器。
@@ -311,6 +353,11 @@ class ReportGenerator:
     ) -> None:
         """保存报告记录到 TestReport 表。"""
         try:
+            # 递归清洗：把 datetime / UUID / function / bytes 等不可 JSON 序列化的值
+            # 统一切成字符串，避免 SQLAlchemy 写 JSONB 时 TypeError
+            # 历史 bug：DefectAnalyzer 去重时偶尔注入 function 引用；报告里也有 datetime 字段
+            safe_report_data = _json_safe(report_data)
+
             async with AsyncSessionLocal() as session:
                 # 检查是否已有报告
                 result = await session.execute(
@@ -322,7 +369,7 @@ class ReportGenerator:
 
                 if existing:
                     # 更新已有记录
-                    existing.report_data = report_data
+                    existing.report_data = safe_report_data
                     existing.html_path = html_path
                     existing.pdf_path = pdf_path
                     existing.quality_score = quality_score
@@ -336,7 +383,7 @@ class ReportGenerator:
                     report = TestReport(
                         id=uuid.uuid4(),
                         test_run_id=uuid.UUID(test_run_id),
-                        report_data=report_data,
+                        report_data=safe_report_data,
                         html_path=html_path,
                         pdf_path=pdf_path,
                         share_token=uuid.uuid4().hex,
