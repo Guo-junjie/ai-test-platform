@@ -482,43 +482,49 @@ async def _load_test_results(
     if cached:
         return cached
 
-    # 2. DB 兜底：从 TestResult 表读（目前流水线未持久化，所以多数情况空，但留兼容）
-    from app.models.database import TestResult
+    # 2. DB 兜底：从 TestResult 表读，LEFT JOIN TestCase 恢复真实用例名。
+    #    冗余列 case_name 可能为 NULL（历史数据：列是后加的），此时用 test_case_id
+    #    回 TestCase 取真实名；仍取不到才兜底为「未知用例」。
+    from app.models.database import TestResult, TestCase
 
     result = await db.execute(
-        select(TestResult).where(TestResult.test_run_id == uuid.UUID(run_id))
+        select(TestResult, TestCase)
+        .outerjoin(TestCase, TestCase.id == TestResult.test_case_id)
+        .where(TestResult.test_run_id == uuid.UUID(run_id))
     )
-    rows = result.scalars().all()
-    if not rows:
+    joined = result.all()
+    if not joined:
         return None
 
     api_results: list[dict[str, Any]] = []
     perf_results: list[dict[str, Any]] = []
     integ_results: list[dict[str, Any]] = []
 
-    for r in rows:
-        # 优化：case_type / case_name 已经在 TestResult 行上冗余写入
-        # 不必再 join TestCase 表。如果旧数据没写（NULL），按 'api' 兜底
-        case_type = getattr(r, "case_type", None) or "api"
-        case_name = getattr(r, "case_name", None) or "(未知用例)"
+    for tr, tc in joined:
+        # case_type 冗余列优先；旧数据可能 NULL → 按 'api' 兜底
+        case_type = tr.case_type or "api"
+        # case_name 冗余列优先；若为 NULL，用 test_case_id JOIN 回 TestCase 取真实名；
+        # 仍取不到才兜底为「未知用例」
+        case_name = tr.case_name or (tc.case_name if tc else None) or "(未知用例)"
 
         # 字段名按 HTML 模板约定
         item = {
+            "case_id": str(tr.test_case_id) if tr.test_case_id else "",
             "case_name": case_name,
             "case_type": case_type,
             "api_path": "",  # 老数据可能缺
             "http_method": "",
-            "actual_status_code": r.status_code,
-            "actual_response": r.response_body,
-            "response_time_ms": r.response_time_ms,
-            "passed": bool(r.is_passed),
-            "error_message": r.error_message,
-            "error_trace": r.error_trace,
-            "executed_at": r.executed_at.isoformat() if r.executed_at else None,
-            "tps": r.tps,
-            "qps": r.qps,
-            "error_rate": r.error_rate,
-            "concurrent_users": r.concurrent_users,
+            "actual_status_code": tr.status_code,
+            "actual_response": tr.response_body,
+            "response_time_ms": tr.response_time_ms,
+            "passed": bool(tr.is_passed),
+            "error_message": tr.error_message,
+            "error_trace": tr.error_trace,
+            "executed_at": tr.executed_at.isoformat() if tr.executed_at else None,
+            "tps": tr.tps,
+            "qps": tr.qps,
+            "error_rate": tr.error_rate,
+            "concurrent_users": tr.concurrent_users,
         }
 
         # 按 case_type 分桶
@@ -526,18 +532,18 @@ async def _load_test_results(
             item.update({
                 "total_requests": None,
                 "total_errors": None,
-                "avg_response_time": r.response_time_ms,
+                "avg_response_time": tr.response_time_ms,
                 "p95": None,
                 "p99": None,
-                "bottlenecks": [] if r.is_passed else [(r.error_message or "未知瓶颈")[:200]],
+                "bottlenecks": [] if tr.is_passed else [(tr.error_message or "未知瓶颈")[:200]],
             })
             perf_results.append(item)
         elif case_type == "integration":
             item.update({
                 "total_steps": None,
                 "executed_steps": None,
-                "failure_step": 0 if r.is_passed else 1,
-                "failure_reason": r.error_message,
+                "failure_step": 0 if tr.is_passed else 1,
+                "failure_reason": tr.error_message,
                 "step_results": [],
             })
             integ_results.append(item)
