@@ -15,18 +15,25 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.responses import StreamingResponse, FileResponse
+from pathlib import Path
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import TestReport, TestRun
 from app.utils.database import get_db_session
 from app.utils.logger import get_logger
+from app.config import settings
 
 logger = get_logger(__name__)
 
 router = APIRouter()
+
+# 后端直接对外提供 echarts bundle（避免前端源 / 外网 CDN 依赖，分享链接整页打开也能渲染图表）
+_ECHARTS_PATH = (
+    Path(__file__).parent.parent / "modules" / "report" / "static" / "echarts.min.js"
+)
 
 
 # ==================== API 路由 ====================
@@ -172,31 +179,64 @@ async def get_html_report(
     if not html_object_name:
         raise HTTPException(404, "HTML report path not available (请重新生成报告)")
 
-    # 尝试从 MinIO 下载
+    html_content = await _load_report_html(html_object_name)
+    if html_content is None:
+        raise HTTPException(500, "Failed to read HTML report (MinIO 与本地均读取失败)")
+
+    return {"code": 0, "data": {"html": html_content}, "message": "success"}
+
+
+@router.get("/static/echarts.min.js")
+async def serve_echarts_bundle():
+    """
+    后端直接提供 echarts bundle。
+
+    报告 HTML 里的 <script src="/api/reports/static/echarts.min.js"> 会命中此路由：
+    - 应用内 iframe（frontend 源）→ nginx 把 /api/ 反代到 backend → 命中
+    - 分享链接整页打开（backend 源）→ 同域直接命中
+    两种场景都不依赖 frontend 的 /echarts.min.js 或外网 CDN。
+    """
+    if not _ECHARTS_PATH.exists():
+        raise HTTPException(404, "echarts bundle not found (请重新部署后端)")
+    return FileResponse(str(_ECHARTS_PATH), media_type="application/javascript")
+
+
+@router.get("/{run_id}/share-view")
+async def share_view(
+    run_id: str,
+    db: AsyncSession = Depends(get_db_session),
+):
+    """
+    整页渲染报告 HTML（text/html），供分享链接在浏览器直接打开。
+
+    与 /{run_id}/html 的区别：后者返回 JSON 包裹（供前端 iframe 取 html 字段），
+    本路由直接返回裸 HTML，浏览器打开即整页渲染，图表也能正常显示。
+    """
     try:
-        from app.utils.storage import download_file
-        import tempfile
-        import os
+        run_uuid = uuid.UUID(run_id)
+    except ValueError:
+        raise HTTPException(400, f"Invalid run_id: {run_id}")
 
-        temp_path = os.path.join(tempfile.gettempdir(), f"report_{run_id}.html")
-        download_file(html_object_name, temp_path)
+    result = await db.execute(
+        select(TestReport).where(TestReport.test_run_id == run_uuid)
+    )
+    report = result.scalar_one_or_none()
 
-        with open(temp_path, "r", encoding="utf-8") as f:
-            html_content = f.read()
+    if report is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"报告尚未生成（run_id={run_id}）。请先点击「重新生成报告」按钮。",
+        )
 
-        return {"code": 0, "data": {"html": html_content}, "message": "success"}
-    except Exception as e:
-        logger.warning(f"Failed to download HTML from MinIO: {e}")
+    html_object_name = report.html_path
+    if not html_object_name:
+        raise HTTPException(404, "HTML report path not available (请重新生成报告)")
 
-        # 尝试从本地路径读取
-        try:
-            from app.config import settings
-            local_path = os.path.join(settings.REPORT_DIR, html_object_name.split("/")[-1])
-            with open(local_path, "r", encoding="utf-8") as f:
-                html_content = f.read()
-            return {"code": 0, "data": {"html": html_content}, "message": "success"}
-        except Exception as e2:
-            raise HTTPException(500, f"Failed to read HTML report: {e2}")
+    html_content = await _load_report_html(html_object_name)
+    if html_content is None:
+        raise HTTPException(500, "Failed to read HTML report")
+
+    return Response(content=html_content, media_type="text/html")
 
 
 @router.get("/{run_id}/pdf")
@@ -267,12 +307,15 @@ async def download_pdf_report(
 @router.get("/{run_id}/share")
 async def get_share_link(
     run_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db_session),
 ):
     """
     生成报告分享链接。
 
-    返回 presigned URL（7 天有效期）。
+    返回指向后端 /api/reports/{run_id}/share-view 的整页 URL（7 天有效，对象本身长期保留）。
+    不再返回 MinIO presigned URL —— 因为 MinIO 在 Docker 内网（minio:9000），
+    浏览器从外部打开会「代理服务器拒绝连接 / 无法连接到 minio:9000」。
     """
     try:
         run_uuid = uuid.UUID(run_id)
@@ -295,11 +338,8 @@ async def get_share_link(
         raise HTTPException(404, "HTML report path not available (请重新生成报告)")
 
     try:
-        from app.utils.storage import get_presigned_url
-
-        # 生成 7 天有效的 presigned URL
-        share_url = get_presigned_url(html_object_name, expires_hours=7 * 24)
-
+        base = _report_share_base(request)
+        share_url = f"{base}/api/reports/{run_id}/share-view"
         return {
             "code": 0,
             "data": {
@@ -368,6 +408,59 @@ async def generate_report(
 
 
 # ==================== 内部函数 ====================
+
+
+async def _load_report_html(html_object_name: str) -> str | None:
+    """
+    从 MinIO 或本地路径读取报告 HTML 内容，返回字符串；都失败返回 None。
+
+    MinIO / 本地双降级：MinIO 不可达（如分享链接场景下对象被清理）时回退本地。
+    """
+    import os
+    import tempfile
+
+    # 1. MinIO 优先
+    try:
+        from app.utils.storage import download_file
+
+        temp_path = os.path.join(tempfile.gettempdir(), f"report_dl_{os.getpid()}.html")
+        download_file(html_object_name, temp_path)
+        with open(temp_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception as e:
+        logger.warning(f"Failed to download HTML from MinIO: {e}")
+
+    # 2. 本地兜底
+    try:
+        from app.config import settings
+
+        local_path = os.path.join(settings.REPORT_DIR, html_object_name.split("/")[-1])
+        with open(local_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception as e2:
+        logger.error(f"Failed to read HTML report locally: {e2}")
+        return None
+
+
+def _report_share_base(request: Request) -> str:
+    """
+    推导分享链接对外可访问的基址。
+
+    优先级：
+    1) 环境变量 REPORT_PUBLIC_BASE_URL（最可靠，部署时显式配置，如 http://<公网IP>:3000）
+    2) 反向代理透传的 Host / X-Forwarded-Proto 头（nginx 已配置透传）
+       —— 注意不能直接用 request.base_url，那是 backend:8000 内网地址。
+    """
+    base = settings.REPORT_PUBLIC_BASE_URL
+    if base:
+        return base.rstrip("/")
+
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme or "http"
+    host = request.headers.get("host") or request.url.netloc
+    if host:
+        return f"{proto}://{host}"
+
+    return str(request.base_url).rstrip("/")
 
 
 async def _load_test_results(

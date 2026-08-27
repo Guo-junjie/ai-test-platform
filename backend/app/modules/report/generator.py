@@ -71,6 +71,21 @@ def _json_safe(obj: Any) -> Any:
     return str(obj)
 
 
+def _json_for_script(obj: Any) -> str:
+    """
+    序列化成可安全嵌入 <script> 的 JSON。
+
+    关键：把 '<' 转义成 \\u003c，防止 API 响应体里出现的 </script> 截断内联脚本
+    （这正是「图表一直显示加载中」的根因：脚本被截断 → 图表 init JS 永不执行，
+    而表格是纯 HTML 照常渲染，于是出现「表格有数据、图表全 loading」的现象）。
+    同时转义 U+2028 / U+2029（JSON 合法、但 JS 字符串非法的行/段分隔符，
+    json.dumps(ensure_ascii=False) 不会自动转义它们，会导致 JS 语法错误）。
+    """
+    s = json.dumps(obj, ensure_ascii=False, default=str)
+    s = s.replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
+    return s.replace("<", "\\u003c")
+
+
 class ReportGenerator:
     """
     报告生成器。
@@ -324,7 +339,7 @@ class ReportGenerator:
             test_results=report_data.get("test_results", {}),
             defects=report_data.get("defects", {}),
             charts=report_data.get("charts", {}),
-            report_data_json=json.dumps(report_data, ensure_ascii=False, default=str),
+            report_data_json=_json_for_script(report_data),
         )
 
     def _render_pdf(self, report_data: dict[str, Any]) -> bytes | None:
@@ -345,7 +360,7 @@ class ReportGenerator:
                 summary=report_data["summary"],
                 test_results=report_data.get("test_results", {}),
                 defects=report_data.get("defects", {}),
-                report_data_json=json.dumps(report_data, ensure_ascii=False, default=str),
+                report_data_json=_json_for_script(report_data),
             )
 
             # 写到临时 HTML 文件 → 用 filename 模式渲染（绕开 weasyprint v60 string= 路径的 PDF 初始化问题）

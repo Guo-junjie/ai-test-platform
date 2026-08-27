@@ -64,6 +64,11 @@ class Settings(BaseModel):
     WORKSPACE_DIR: str = os.getenv("WORKSPACE_DIR", "/app/data/repos")
     REPORT_DIR: str = os.getenv("REPORT_DIR", "/app/data/reports")
 
+    # 报告分享链接对外基址（留空则自动用反向代理的 Host / X-Forwarded 头推导）。
+    # 例如 http://<VM公网IP>:3000 或 https://report.example.com
+    # 配错会导致分享链接在浏览器打不开（指向内网地址）。
+    REPORT_PUBLIC_BASE_URL: str = os.getenv("REPORT_PUBLIC_BASE_URL", "")
+
     # SVN
     SVN_DEFAULT_TIMEOUT: int = int(os.getenv("SVN_DEFAULT_TIMEOUT", "120"))
 

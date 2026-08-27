@@ -5,11 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI 自动化测试报告</title>
     <style>{% include "styles.css" %}</style>
-    <!-- echarts 用 frontend/public/echarts.min.js（vite build 时 COPY 到 dist/，由 nginx 直接服务）。
-     历史背景：原本走 cdn.jsdelivr.net CDN，但 VM 内网代理 ns_error_proxy_connection_refused
-     （代理层直接拒绝 TCP 连接，不是 timeout），改用本地静态资源彻底脱离外网。
-     unpkg 是最后兜底，万一本地 nginx 也异常。 -->
-<script src="/echarts.min.js"
+    <!-- echarts 统一由后端 /api/reports/static/echarts.min.js 提供：
+     ① 在应用内 iframe（frontend 源）→ nginx 把 /api/ 反代到 backend → backend 直接吐文件；
+     ② 在分享链接整页打开（backend 源）→ 同域直接加载。
+     这样无论哪种打开方式图表都能渲染，彻底摆脱对 /echarts.min.js（仅 frontend 源可用）
+     以及外网 CDN 的依赖。unpkg 仍作为最后的兜底。 -->
+<script src="/api/reports/static/echarts.min.js"
             onerror="loadEchartsFallback(this)"></script>
     <script>
     function loadEchartsFallback(failedScript) {
