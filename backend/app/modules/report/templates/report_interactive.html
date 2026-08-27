@@ -5,10 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI 自动化测试报告</title>
     <style>{% include "styles.css" %}</style>
-    <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"
+    <!-- echarts 用 frontend/public/echarts.min.js（vite build 时 COPY 到 dist/，由 nginx 直接服务）。
+     历史背景：原本走 cdn.jsdelivr.net CDN，但 VM 内网代理 ns_error_proxy_connection_refused
+     （代理层直接拒绝 TCP 连接，不是 timeout），改用本地静态资源彻底脱离外网。
+     unpkg 是最后兜底，万一本地 nginx 也异常。 -->
+<script src="/echarts.min.js"
             onerror="loadEchartsFallback(this)"></script>
     <script>
-    // 双重 CDN fallback：jsdelivr 失败 → unpkg；两者都失败 → 显示「加载失败」占位
     function loadEchartsFallback(failedScript) {
         if (failedScript.dataset.fallbackTried) return;
         failedScript.dataset.fallbackTried = '1';
