@@ -92,7 +92,7 @@ def _persist_test_results(test_run_id: str, test_results: list[dict[str, Any]]) 
         from sqlalchemy import insert as sa_insert
 
         async with AsyncSessionLocal() as session:
-            # 1. 查出该 run 下所有 TestCase（按 case_type + case_name 映射 case 字典）
+            # 1. 查出该 run 下所有 TestCase（用于 case_id 反查 + 冗余写入 case_type/case_name）
             cases_rows = (
                 await session.execute(
                     sa_select(TestCase.id, TestCase.case_type, TestCase.case_name).where(
@@ -106,7 +106,11 @@ def _persist_test_results(test_run_id: str, test_results: list[dict[str, Any]]) 
                 )
                 return 0
 
-            # 构建 (case_type, case_name) -> case_id 映射
+            # 构建 case_id -> (case_type, case_name) 映射（反查用）
+            # 同时建 (case_type, case_name) -> case_id 映射
+            case_meta: dict[_uuid.UUID, tuple[str, str]] = {
+                row.id: (row.case_type, row.case_name) for row in cases_rows
+            }
             case_key_to_id: dict[tuple[str, str], _uuid.UUID] = {
                 (row.case_type, row.case_name): row.id for row in cases_rows
             }
@@ -140,6 +144,9 @@ def _persist_test_results(test_run_id: str, test_results: list[dict[str, Any]]) 
                         "id": _uuid.uuid4(),
                         "test_run_id": run_uuid,
                         "test_case_id": case_id,
+                        # 冗余字段：避免 _load_test_results 时 join TestCase
+                        "case_type": test_type,
+                        "case_name": case_name[:500] if case_name else None,
                         "is_passed": is_passed,
                         "status_code": result.get("status_code")
                             or result.get("actual_status_code")

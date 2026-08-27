@@ -304,8 +304,12 @@ class TestResult(Base):
     __tablename__ = "test_results"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    test_run_id = Column(UUID(as_uuid=True), ForeignKey("test_runs.id"), nullable=False)
+    test_run_id = Column(UUID(as_uuid=True), ForeignKey("test_runs.id"), nullable=False, index=True)
     test_case_id = Column(UUID(as_uuid=True), ForeignKey("test_cases.id"), nullable=False)
+
+    # 冗余字段：避免 _load_test_results 时 join TestCase（性能 + 简化数据流）
+    case_type = Column(String(50), nullable=False, default="api", index=True)  # api / performance / integration
+    case_name = Column(String(500), nullable=True)  # 冗余 TestCase.case_name（避免 join 拿展示名）
 
     # 执行结果
     is_passed = Column(Boolean, nullable=False)
@@ -1126,6 +1130,34 @@ async def init_db():
         logger.warning(f"Skip coverage_reports line_json column sync (connection error): {e}")
     else:
         logger.info("CoverageReport line_json column ensured")
+
+    # 报告补生成优化：补齐 test_results.case_type / case_name 冗余列（避免 _load_test_results 时 join TestCase）
+    # 同时建 (test_run_id, case_type) 联合索引，让 _load_test_results 按 run + 类型分桶 O(log n) 而不是全表扫
+    try:
+        async with async_engine.connect() as conn:
+            autocommit_conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
+            try:
+                await autocommit_conn.execute(
+                    text("ALTER TABLE test_results ADD COLUMN IF NOT EXISTS case_type VARCHAR(50) NOT NULL DEFAULT 'api'")
+                )
+                await autocommit_conn.execute(
+                    text("ALTER TABLE test_results ADD COLUMN IF NOT EXISTS case_name VARCHAR(500)")
+                )
+                await autocommit_conn.execute(
+                    text("CREATE INDEX IF NOT EXISTS ix_test_results_run_type ON test_results(test_run_id, case_type)")
+                )
+                await autocommit_conn.execute(
+                    text("CREATE INDEX IF NOT EXISTS ix_test_results_run_id ON test_results(test_run_id)")
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to add test_results.case_type/case_name/index: {e}. "
+                    f"请手动 ALTER 或执行 alembic 迁移。"
+                )
+    except Exception as e:
+        logger.warning(f"Skip test_results case_type sync (connection error): {e}")
+    else:
+        logger.info("TestResult case_type/case_name columns + (test_run_id,case_type) index ensured")
 
     # 能力12：best-effort 启用 pgvector 快路径（失败仅记日志，代码绝不依赖；
     # 检索使用 JSONB + Python 侧余弦相似度，不要求 pgvector 扩展）。

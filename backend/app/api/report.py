@@ -392,30 +392,18 @@ async def _load_test_results(
     perf_results: list[dict[str, Any]] = []
     integ_results: list[dict[str, Any]] = []
 
-    # 一次 join 拿到 TestCase 信息（避免 N+1）
-    from app.models.database import TestCase
-
-    case_ids = [r.test_case_id for r in rows if r.test_case_id]
-    case_map: dict[Any, Any] = {}
-    if case_ids:
-        case_rows = (
-            await db.execute(select(TestCase).where(TestCase.id.in_(case_ids)))
-        ).scalars().all()
-        case_map = {c.id: c for c in case_rows}
-
     for r in rows:
-        case = case_map.get(r.test_case_id)
-        case_name = case.case_name if case else "(未知用例)"
-        case_type = case.case_type if case else "api"  # 兜底默认 api
-        api_path = case.api_path if case else ""
-        http_method = case.http_method if case else ""
+        # 优化：case_type / case_name 已经在 TestResult 行上冗余写入
+        # 不必再 join TestCase 表。如果旧数据没写（NULL），按 'api' 兜底
+        case_type = getattr(r, "case_type", None) or "api"
+        case_name = getattr(r, "case_name", None) or "(未知用例)"
 
-        # 字段名按 HTML 模板约定（template: r.get('case_name' / 'actual_status_code' / 'actual_response')）
+        # 字段名按 HTML 模板约定
         item = {
             "case_name": case_name,
             "case_type": case_type,
-            "api_path": api_path,
-            "http_method": http_method,
+            "api_path": "",  # 老数据可能缺
+            "http_method": "",
             "actual_status_code": r.status_code,
             "actual_response": r.response_body,
             "response_time_ms": r.response_time_ms,
@@ -429,9 +417,8 @@ async def _load_test_results(
             "concurrent_users": r.concurrent_users,
         }
 
-        # 按 case_type 分桶到对应 results[]（性能/集成用对应模板字段）
+        # 按 case_type 分桶
         if case_type == "performance":
-            # 模板性能测试表读取 total_requests / total_errors / avg_response_time / p95 / p99 / tps / bottlenecks
             item.update({
                 "total_requests": None,
                 "total_errors": None,
@@ -442,7 +429,6 @@ async def _load_test_results(
             })
             perf_results.append(item)
         elif case_type == "integration":
-            # 模板集成测试表读取 total_steps / executed_steps / failure_step / failure_reason / step_results
             item.update({
                 "total_steps": None,
                 "executed_steps": None,
@@ -452,7 +438,6 @@ async def _load_test_results(
             })
             integ_results.append(item)
         else:
-            # 兜底算 api
             api_results.append(item)
 
     total_api = len(api_results)

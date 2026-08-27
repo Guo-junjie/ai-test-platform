@@ -5,7 +5,24 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI 自动化测试报告</title>
     <style>{% include "styles.css" %}</style>
-    <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"
+            onerror="loadEchartsFallback(this)"></script>
+    <script>
+    // 双重 CDN fallback：jsdelivr 失败 → unpkg；两者都失败 → 显示「加载失败」占位
+    function loadEchartsFallback(failedScript) {
+        if (failedScript.dataset.fallbackTried) return;
+        failedScript.dataset.fallbackTried = '1';
+        var s = document.createElement('script');
+        s.src = 'https://unpkg.com/echarts@5/dist/echarts.min.js';
+        s.onerror = showChartError;
+        document.head.appendChild(s);
+    }
+    function showChartError() {
+        document.querySelectorAll('.chart-container').forEach(function(el) {
+            el.innerHTML = '<div class="chart-error">📊 图表库加载失败<br/><small>请检查网络（CDN 不可达）</small></div>';
+        });
+    }
+    </script>
 </head>
 <body>
 <div class="report-container" style="max-width: 1200px; margin: 0 auto; padding: 20px;">
@@ -40,19 +57,19 @@
     <!-- 图表区域 -->
     <div class="chart-grid">
         <div class="chart-card">
-            <div id="chart-quality-gauge" class="chart-container"></div>
+            <div id="chart-quality-gauge" class="chart-container"><div class="chart-placeholder">📊 质量评分仪表盘加载中...</div></div>
         </div>
         <div class="chart-card">
-            <div id="chart-defect-severity" class="chart-container"></div>
+            <div id="chart-defect-severity" class="chart-container"><div class="chart-placeholder">📊 缺陷严重等级饼图加载中...</div></div>
         </div>
         <div class="chart-card">
-            <div id="chart-defect-category" class="chart-container"></div>
+            <div id="chart-defect-category" class="chart-container"><div class="chart-placeholder">📊 缺陷类别饼图加载中...</div></div>
         </div>
         <div class="chart-card">
-            <div id="chart-pass-rate" class="chart-container"></div>
+            <div id="chart-pass-rate" class="chart-container"><div class="chart-placeholder">📊 通过率柱状图加载中...</div></div>
         </div>
         <div class="chart-card full-width">
-            <div id="chart-performance" class="chart-container" style="height: 350px;"></div>
+            <div id="chart-performance" class="chart-container" style="height: 350px;"><div class="chart-placeholder">📊 性能趋势折线图加载中...</div></div>
         </div>
     </div>
 
@@ -235,24 +252,37 @@ var reportData = {{ report_data_json | safe }};
 document.addEventListener('DOMContentLoaded', function() {
     var charts = reportData.charts || {};
 
-    // 质量评分仪表盘
-    if (charts.quality_gauge) {
-        echarts.init(document.getElementById('chart-quality-gauge')).setOption(charts.quality_gauge);
+    // 如果echarts 库加载失败（CDN 全挂），showChartError 已经把占位换成「加载失败」提示
+    if (typeof echarts === 'undefined') {
+        return;
     }
+
+    // 工具：渲染前清掉占位，渲染失败时显示「无数据可显示」
+    function initChart(id, option) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        if (option) {
+            el.innerHTML = '';  // 清占位
+            echarts.init(el).setOption(option);
+        } else {
+            el.innerHTML = '<div class="chart-error">📊 暂无数据<br/><small>本报告无该图表数据</small></div>';
+        }
+    }
+
+    // 质量评分仪表盘
+    initChart('chart-quality-gauge', charts.quality_gauge);
 
     // 缺陷严重等级饼图
-    if (charts.defect_severity_pie) {
-        echarts.init(document.getElementById('chart-defect-severity')).setOption(charts.defect_severity_pie);
-    }
+    initChart('chart-defect-severity', charts.defect_severity_pie);
 
     // 缺陷类别饼图
-    if (charts.defect_category_pie) {
-        echarts.init(document.getElementById('chart-defect-category')).setOption(charts.defect_category_pie);
-    }
+    initChart('chart-defect-category', charts.defect_category_pie);
 
     // 通过率柱状图
     if (charts.pass_rate_bar) {
-        var passRateChart = echarts.init(document.getElementById('chart-pass-rate'));
+        var passEl = document.getElementById('chart-pass-rate');
+        passEl.innerHTML = '';
+        var passRateChart = echarts.init(passEl);
         // 修复 tooltip formatter
         if (charts.pass_rate_bar.tooltip) {
             charts.pass_rate_bar.tooltip.formatter = function(params) {
@@ -264,12 +294,12 @@ document.addEventListener('DOMContentLoaded', function() {
             };
         }
         passRateChart.setOption(charts.pass_rate_bar);
+    } else {
+        initChart('chart-pass-rate', null);
     }
 
     // 性能趋势折线图
-    if (charts.performance_line) {
-        echarts.init(document.getElementById('chart-performance')).setOption(charts.performance_line);
-    }
+    initChart('chart-performance', charts.performance_line);
 
     // 窗口 resize 时重绘图表
     window.addEventListener('resize', function() {

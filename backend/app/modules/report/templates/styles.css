@@ -123,6 +123,46 @@ body {
 .chart-container {
     width: 100%;
     height: 300px;
+    position: relative;
+}
+
+/* 图表占位 / 错误态（解决 echarts CDN 加载失败/无数据时的「空白 300px 块」） */
+.chart-placeholder,
+.chart-error {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: #909399;
+    font-size: 13px;
+    text-align: center;
+    padding: 20px;
+    box-sizing: border-box;
+}
+.chart-placeholder {
+    background: #fafbfc;
+    border-radius: 4px;
+    color: #c0c4cc;
+}
+.chart-placeholder::before {
+    content: "⏳";
+    font-size: 20px;
+    margin-bottom: 8px;
+    display: block;
+}
+.chart-error {
+    background: #fef0f0;
+    border-radius: 4px;
+    color: #f56c6c;
+    border: 1px dashed #fbc4c4;
+}
+.chart-error small {
+    color: #c0c4cc;
+    font-size: 11px;
+    margin-top: 4px;
+    display: block;
 }
 
 /* ==================== 数据表格 ==================== */
