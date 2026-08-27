@@ -275,8 +275,8 @@ async def download_pdf_report(
             status_code=503,
             detail=(
                 f"PDF 报告暂不可用：{pdf_error}。"
-                f" 请确认 weasyprint 系统依赖（libcairo/libpango/libffi）齐全，"
-                f"或重新生成报告。"
+                f" 请在报告页点击「重新生成报告」后再下载；"
+                f"若仍失败，请贴出后端 `docker compose logs backend | grep -i pdf` 的输出以便定位。"
             ),
         )
 

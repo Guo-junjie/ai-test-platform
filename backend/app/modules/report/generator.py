@@ -157,21 +157,16 @@ class ReportGenerator:
         # 5. 渲染 PDF (尝试 weasyprint)
         pdf_local_path: str | None = None
         pdf_error: str | None = None
-        try:
-            pdf_content = self._render_pdf(report_data)
-            if pdf_content:
-                pdf_filename = html_filename.replace(".html", ".pdf")
-                pdf_local_path = str(_REPORT_OUTPUT_DIR / pdf_filename)
-                with open(pdf_local_path, "wb") as f:
-                    f.write(pdf_content)
-                logger.info(f"PDF report saved: {pdf_local_path}")
-        except Exception as e:
-            logger.warning(f"PDF generation failed (weasyprint may not be installed): {e}")
-            pdf_error = str(e)[:200]
+        pdf_content, pdf_err = self._render_pdf(report_data)
+        if pdf_content:
+            pdf_filename = html_filename.replace(".html", ".pdf")
+            pdf_local_path = str(_REPORT_OUTPUT_DIR / pdf_filename)
+            with open(pdf_local_path, "wb") as f:
+                f.write(pdf_content)
+            logger.info(f"PDF report saved: {pdf_local_path}")
         else:
-            # _render_pdf 内部 swallow exception 后返回 None → 也算失败
-            if not pdf_local_path and not pdf_error:
-                pdf_error = "weasyprint 渲染返回空（可能缺系统字体/pango 等依赖）"
+            # _render_pdf 已返回人类可读的错误原因（含 weasyprint 日志），直接透传
+            pdf_error = pdf_err
 
         # 6. 上传到 MinIO
         html_object_name = f"reports/{test_run_id}/{html_filename}"
@@ -342,15 +337,28 @@ class ReportGenerator:
             report_data_json=_json_for_script(report_data),
         )
 
-    def _render_pdf(self, report_data: dict[str, Any]) -> bytes | None:
+    def _render_pdf(self, report_data: dict[str, Any]) -> tuple[bytes | None, str | None]:
         """渲染 PDF 报告（使用 weasyprint）。
 
-        历史坑：weasyprint 60.x 的 `HTML(string=html).write_pdf()` 在某些版本
-        内部调用 PDF 类签名变了（PDF.__init__() takes 1 positional argument but 3 were given）。
-        解法：把 HTML 写到临时文件后用 `HTML(filename=path).write_pdf()` —— 走文件
-        IO 路径，避开 string= 路径的 API 变化。
+        Returns:
+            (pdf_bytes, error_message)
+            - 成功: (bytes, None)
+            - 失败: (None, 人类可读错误原因)  —— 把 weasyprint 自身日志也带回来，避免误报
+
+        历史坑（全部已规避）：
+        1. weasyprint 60.x 的 `HTML(string=html).write_pdf()` 在某些版本内部
+           PDF 类签名变了（PDF.__init__() takes 1 positional argument but 3 were given）。
+           → 改用 HTML(filename=path) 文件模式绕开。
+        2. weasyprint 60.x 的 write_pdf() 在 target=None 时**部分小版本返回 None
+           而非 bytes**（取决于具体版本）。直接 `return pdf_bytes = write_pdf()` 会拿到
+           None → 被当成「渲染返回空」。
+           → 显式传 target=临时文件，再读回 bytes，跨所有 60.x 小版本稳健。
+        3. 字体/pango 缺失会在 HTML()/write_pdf() 阶段抛 OSError，这里捕获后把真实
+           错误返回（含 weasyprint 自身 WARNING 日志），不再误导成「缺系统字体」。
         """
         try:
+            import io
+            import logging
             import os
             import tempfile
             from weasyprint import HTML
@@ -363,24 +371,48 @@ class ReportGenerator:
                 report_data_json=_json_for_script(report_data),
             )
 
-            # 写到临时 HTML 文件 → 用 filename 模式渲染（绕开 weasyprint v60 string= 路径的 PDF 初始化问题）
-            fd, tmp_html = tempfile.mkstemp(suffix=".html", prefix="report_")
+            # 捕获 weasyprint 自身日志（字体/pango/样式告警），便于诊断空 PDF
+            wp_logger = logging.getLogger("weasyprint")
+            log_capture = io.StringIO()
+            log_handler = logging.StreamHandler(log_capture)
+            log_handler.setLevel(logging.WARNING)
+            wp_logger.addHandler(log_handler)
             try:
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    f.write(html_content)
-                pdf_bytes = HTML(filename=tmp_html).write_pdf()
-                return pdf_bytes
-            finally:
+                fd_html, tmp_html = tempfile.mkstemp(suffix=".html", prefix="report_")
+                # 预建 PDF 临时文件并关闭 fd，交给 weasyprint 写入
+                fd_pdf, tmp_pdf = tempfile.mkstemp(suffix=".pdf", prefix="report_")
+                os.close(fd_pdf)
                 try:
-                    os.unlink(tmp_html)
-                except Exception:  # noqa: BLE001
-                    pass
+                    with os.fdopen(fd_html, "w", encoding="utf-8") as f:
+                        f.write(html_content)
+                    # 走文件输出：跨 weasyprint 版本稳健（target=None 时部分版本返回 None）
+                    HTML(filename=tmp_html).write_pdf(tmp_pdf)
+                    with open(tmp_pdf, "rb") as f:
+                        pdf_bytes = f.read()
+                finally:
+                    for _p in (tmp_html, tmp_pdf):
+                        try:
+                            os.unlink(_p)
+                        except Exception:  # noqa: BLE001
+                            pass
+            finally:
+                wp_logger.removeHandler(log_handler)
+
+            if not pdf_bytes or not pdf_bytes.startswith(b"%PDF"):
+                wp_detail = log_capture.getvalue().strip()
+                msg = "weasyprint 生成的 PDF 为空或无效"
+                if wp_detail:
+                    msg += f"；weasyprint 日志：\n{wp_detail[:1500]}"
+                else:
+                    msg += "（未捕获到 weasyprint 日志，可能模板内容为空或样式导致 0 页）"
+                return None, msg
+            return pdf_bytes, None
         except ImportError:
             logger.warning("weasyprint not installed, skipping PDF generation")
-            return None
+            return None, "weasyprint 未安装（请 pip install weasyprint 并装好系统依赖 libpango）"
         except Exception as e:
             logger.warning(f"PDF rendering failed: {e}")
-            return None
+            return None, f"PDF 渲染异常：{e}"
 
     async def _save_to_db(
         self,
