@@ -363,6 +363,24 @@ class ReportGenerator:
             import tempfile
             from weasyprint import HTML
 
+            # 版本护栏：weasyprint 60.0 有致命 bug（PDF.__init__() takes 1
+            # positional argument but 3 were given），60.1+ 才修复。若镜像里
+            # 装的是 60.0，这里直接给出精确报错，避免被晦涩的 PDF.__init__ 误导。
+            try:
+                from weasyprint import __version__ as _wp_ver
+
+                _parts = _wp_ver.split(".")
+                _maj, _min = int(_parts[0]), int(_parts[1])
+                if (_maj, _min) < (60, 1):
+                    return (
+                        None,
+                        f"weasyprint 版本过旧（{_wp_ver}），存在 PDF.__init__ 已知 bug，"
+                        f"请升级到 >=60.1（推荐 60.2）。"
+                        f"镜像需重建/重装：pip install --force-reinstall weasyprint==60.2",
+                    )
+            except Exception:  # noqa: BLE001
+                pass
+
             template = self.env.get_template("report_pdf.html")
             html_content = template.render(
                 summary=report_data["summary"],
