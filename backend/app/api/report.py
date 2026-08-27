@@ -227,7 +227,18 @@ async def download_pdf_report(
 
     pdf_object_name = report.pdf_path
     if not pdf_object_name:
-        raise HTTPException(404, "PDF report not available (请重新生成报告)")
+        # 不再静默 404：把 gate_details.pdf_error 也带回去，方便前端展示根因
+        pdf_error = "（无详细原因）"
+        if isinstance(report.gate_details, dict):
+            pdf_error = report.gate_details.get("pdf_error") or pdf_error
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"PDF 报告暂不可用：{pdf_error}。"
+                f" 请确认 weasyprint 系统依赖（libcairo/libpango/libffi）齐全，"
+                f"或重新生成报告。"
+            ),
+        )
 
     # 从 MinIO 下载
     try:

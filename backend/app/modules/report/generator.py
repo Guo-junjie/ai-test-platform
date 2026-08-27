@@ -141,6 +141,7 @@ class ReportGenerator:
 
         # 5. 渲染 PDF (尝试 weasyprint)
         pdf_local_path: str | None = None
+        pdf_error: str | None = None
         try:
             pdf_content = self._render_pdf(report_data)
             if pdf_content:
@@ -151,6 +152,11 @@ class ReportGenerator:
                 logger.info(f"PDF report saved: {pdf_local_path}")
         except Exception as e:
             logger.warning(f"PDF generation failed (weasyprint may not be installed): {e}")
+            pdf_error = str(e)[:200]
+        else:
+            # _render_pdf 内部 swallow exception 后返回 None → 也算失败
+            if not pdf_local_path and not pdf_error:
+                pdf_error = "weasyprint 渲染返回空（可能缺系统字体/pango 等依赖）"
 
         # 6. 上传到 MinIO
         html_object_name = f"reports/{test_run_id}/{html_filename}"
@@ -176,6 +182,7 @@ class ReportGenerator:
             pdf_path=pdf_object_name,
             quality_score=summary["quality_score"],
             overall_pass=summary["overall_pass"],
+            pdf_error=pdf_error,
         )
 
         return {
@@ -368,6 +375,7 @@ class ReportGenerator:
         pdf_path: str | None,
         quality_score: int,
         overall_pass: bool,
+        pdf_error: str | None = None,
     ) -> None:
         """保存报告记录到 TestReport 表。"""
         try:
@@ -375,6 +383,15 @@ class ReportGenerator:
             # 统一切成字符串，避免 SQLAlchemy 写 JSONB 时 TypeError
             # 历史 bug：DefectAnalyzer 去重时偶尔注入 function 引用；报告里也有 datetime 字段
             safe_report_data = _json_safe(report_data)
+
+            # gate_details 记录 PDF 失败原因（如果有），便于端点 / 前端展示给用户
+            gate_details: dict[str, Any] = {
+                "quality_score": quality_score,
+                "overall_pass": overall_pass,
+                "pdf_available": pdf_path is not None,
+            }
+            if pdf_error:
+                gate_details["pdf_error"] = pdf_error
 
             async with AsyncSessionLocal() as session:
                 # 检查是否已有报告
@@ -392,10 +409,7 @@ class ReportGenerator:
                     existing.pdf_path = pdf_path
                     existing.quality_score = quality_score
                     existing.gate_passed = overall_pass
-                    existing.gate_details = {
-                        "quality_score": quality_score,
-                        "overall_pass": overall_pass,
-                    }
+                    existing.gate_details = gate_details
                 else:
                     # 创建新记录
                     report = TestReport(
@@ -407,10 +421,7 @@ class ReportGenerator:
                         share_token=uuid.uuid4().hex,
                         quality_score=quality_score,
                         gate_passed=overall_pass,
-                        gate_details={
-                            "quality_score": quality_score,
-                            "overall_pass": overall_pass,
-                        },
+                        gate_details=gate_details,
                     )
                     session.add(report)
 

@@ -174,18 +174,46 @@ async function viewReport(row: any) {
 }
 
 async function exportPdf(row: any) {
+  ElMessage.info('正在准备 PDF 下载...')
   try {
-    ElMessage.info('正在生成 PDF 下载...')
-    const url = `/api/reports/${row.test_run_id}/pdf`
+    const res = await fetch(`/api/reports/${row.test_run_id}/pdf`, {
+      headers: apiAuthHeaders(),
+    })
+    if (!res.ok) {
+      // 503 → 后端说 PDF 不可用，detail 里有 pdf_error 根因
+      // 404 → 报告还没生成
+      let detail = ''
+      try {
+        const body = await res.json()
+        detail = body?.detail || body?.message || ''
+      } catch { /* not JSON */ }
+      const msg = res.status === 503
+        ? `PDF 不可用：${detail}`
+        : res.status === 404
+          ? '报告尚未生成，请先点击「重新生成报告」'
+          : `PDF 下载失败（${res.status}）：${detail}`
+      ElMessage.error(msg)
+      return
+    }
+    // 拿到 bytes → 触发下载
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
     link.download = `test_report_${row.test_run_id?.substring(0, 8)}.pdf`
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
-  } catch {
-    ElMessage.error('PDF 下载失败')
+    URL.revokeObjectURL(url)
+    ElMessage.success('PDF 下载完成')
+  } catch (e: any) {
+    ElMessage.error(`PDF 下载异常：${e?.message || e}`)
   }
+}
+
+function apiAuthHeaders(): Record<string, string> {
+  const token = localStorage.getItem('token') || ''
+  return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
 async function shareReport(row: any) {
