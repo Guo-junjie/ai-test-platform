@@ -47,9 +47,21 @@
         <el-tab-pane label="异常" name="exception" />
       </el-tabs>
 
-      <!-- 来源过滤（v1.4 新增） -->
+      <!-- 搜索 + 来源过滤 -->
       <div class="source-filter">
-        <span class="filter-label">来源：</span>
+        <el-input
+          v-model="searchKeyword"
+          placeholder="搜索用例标题..."
+          clearable
+          style="width: 220px; margin-right: 12px"
+          @keyup.enter="loadCases"
+          @clear="loadCases"
+        >
+          <template #append>
+            <el-button icon="Search" @click="loadCases" />
+          </template>
+        </el-input>
+        <span class="filter-label" style="margin-left: 8px">来源：</span>
         <el-radio-group v-model="activeSource" size="small" @change="loadCases">
           <el-radio-button value="">全部</el-radio-button>
           <el-radio-button value="requirement">📄 需求生成（{{ sourceCount.requirement }}）</el-radio-button>
@@ -87,11 +99,12 @@
             <el-tag size="small" :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="210" fixed="right">
+        <el-table-column label="操作" width="260" fixed="right">
           <template #default="{ row }">
             <el-button size="small" type="success" plain :disabled="row.status === 'adopted'" @click="adopt(row)">采纳</el-button>
             <el-button size="small" type="warning" plain :disabled="row.status === 'deprecated'" @click="deprecate(row)">废弃</el-button>
             <el-button size="small" plain @click="openEdit(row)">编辑</el-button>
+            <el-button size="small" type="danger" plain @click="deleteCase(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -146,6 +159,7 @@ const batchAdopting = ref(false)
 const cases = ref<any[]>([])
 const activeType = ref<string>('all')
 const activeSource = ref<string>('')  // v1.4：来源过滤（''=全部 / requirement / ai_generated / manual）
+const searchKeyword = ref<string>('')  // 搜索关键字
 const selectedRows = ref<any[]>([])
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -268,6 +282,7 @@ async function loadCases() {
       page: 1,
       page_size: 200,
       source: activeSource.value || undefined,  // ''→不过滤；非空→传后端
+      keyword: searchKeyword.value || undefined,  // 搜索关键字
     })
     cases.value = res?.data?.items || []
   } catch {
@@ -344,6 +359,25 @@ async function deprecate(row: any) {
   try {
     await caseApi.deprecate(row.id)
     ElMessage.success('已废弃')
+    await loadCases()
+  } catch {
+    /* ignore */
+  }
+}
+
+async function deleteCase(row: any) {
+  try {
+    await ElMessageBox.confirm(`确认删除用例「${row.title}」？此操作不可恢复！`, '删除确认', {
+      type: 'error',
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+    })
+  } catch {
+    return
+  }
+  try {
+    await caseApi.remove(row.id)
+    ElMessage.success('已删除')
     await loadCases()
   } catch {
     /* ignore */

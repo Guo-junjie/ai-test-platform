@@ -335,7 +335,7 @@ async def adopt_scenario(
     current_user: User = Depends(get_current_user),
     db=Depends(get_db_session),
 ):
-    """接纳场景（status -> ADOPTED）。"""
+    """接纳场景（status -> ADOPTED），并将场景步骤转为用例写入用例库。"""
     try:
         sid = uuid.UUID(scenario_id)
     except ValueError:
@@ -346,12 +346,57 @@ async def adopt_scenario(
     if scenario is None:
         raise HTTPException(404, "scenario not found")
 
+    # 将场景步骤转换为用例写入用例库
+    adopted_count = 0
+    if scenario.steps and isinstance(scenario.steps, list):
+        from app.models.database import TestCaseAsset, CaseAssetStatus, CaseSource
+        from app.schemas.case_library import CaseAssetCreate
+
+        for step in scenario.steps:
+            # 每个步骤生成一个用例
+            step_order = step.get("step_order", 0)
+            method = step.get("method", "GET")
+            url = step.get("url", "")
+            action_desc = step.get("action_desc", "")
+            request_data = step.get("request", {})
+
+            # 构建用例数据
+            case_data = {
+                "project_id": str(scenario.project_id),
+                "endpoint_id": step.get("endpoint_id"),  # 可能为 None
+                "case_type": "positive",  # 默认 positive，可根据需要调整
+                "title": f"{scenario.name} - 步骤{step_order + 1}: {action_desc or url}",
+                "description": action_desc or f"场景「{scenario.name}」第{step_order + 1}步",
+                "request_data": {
+                    "method": method,
+                    "url": url,
+                    "headers": request_data.get("headers", {}),
+                    "body": request_data.get("body"),
+                    "params": request_data.get("params", {}),
+                },
+                "expected_result": {"status_code": 200},  # 默认期望
+                "priority": "P2",
+                "status": CaseAssetStatus.ADOPTED.value,
+                "source": CaseSource.AI_GENERATED.value,
+                "created_by": current_user.id,
+            }
+
+            # 写入用例库
+            new_case = TestCaseAsset(**case_data)
+            db.add(new_case)
+            adopted_count += 1
+
+        await db.flush()
+
     scenario.status = ScenarioStatus.ADOPTED
     await db.flush()
     await db.refresh(scenario)
 
     return {
         "code": 0,
-        "data": _scenario_to_dict(scenario),
-        "message": "adopted",
+        "data": {
+            "scenario": _scenario_to_dict(scenario),
+            "adopted_cases_count": adopted_count,
+        },
+        "message": f"adopted, {adopted_count} cases imported to library",
     }

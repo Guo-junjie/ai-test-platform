@@ -826,6 +826,16 @@ async def delete_doc(
         ep.doc_id = None
     await db.flush()
 
+    # 关联的 doc_reviews 记录也要处理外键引用，否则删除会 ForeignKeyViolation
+    from app.models.database import DocReview
+
+    doc_reviews = (
+        await db.execute(select(DocReview).where(DocReview.doc_id == did))
+    ).scalars().all()
+    for review in doc_reviews:
+        review.doc_id = None  # 保留评审记录，只解绑文档引用
+    await db.flush()
+
     # 删除本地文件
     try:
         if doc.storage_key and os.path.exists(doc.storage_key):
