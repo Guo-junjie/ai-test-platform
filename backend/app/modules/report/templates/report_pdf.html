@@ -4,68 +4,138 @@
     <meta charset="UTF-8">
     <title>AI 自动化测试报告 (PDF)</title>
     <style>
-        /* 内联样式（PDF 不加载外部 CSS） */
+        /* ============================================================
+           PDF 专用样式（内联，PDF 不加载外部 CSS）
+
+           ⚠️ weasyprint 布局限制（踩过的坑，勿改回）：
+           - **不支持 flexbox / grid**：用 display:flex/grid 布局会整体错位，
+             必须用 table / table-cell 或 float 替代。
+           - 不支持 rgba() 透明度：一律用十六进制实色。
+           - 不执行 JavaScript：ECharts 图表无法渲染，改用服务端
+             matplotlib 生成的静态 PNG（见 static_charts.py）内嵌。
+           ============================================================ */
+
         * { margin: 0; padding: 0; box-sizing: border-box; }
+
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
-            color: #303133; line-height: 1.6; font-size: 12px;
+            /* 必须把中文字体放在前面，否则中文渲染成方块（tofu/乱码）。
+               容器内已安装 fonts-wqy-zenhei（见 Dockerfile）。 */
+            font-family: "WenQuanYi Zen Hei", "Noto Sans CJK SC", "DejaVu Sans", Arial, sans-serif;
+            color: #303133;
+            line-height: 1.6;
+            font-size: 12px;
         }
-        @page { size: A4; margin: 2cm; }
+
+        @page { size: A4; margin: 1.6cm; }
         .page-break { page-break-before: always; }
 
+        /* —— 报告头部 —— */
         .report-header {
-            background: #1a1a2e; color: #fff; padding: 30px 25px;
-            border-radius: 4px; margin-bottom: 20px;
+            background: #1a1a2e;
+            color: #ffffff;
+            padding: 22px 20px;
+            margin-bottom: 18px;
         }
-        .report-header h1 { font-size: 22px; margin-bottom: 6px; }
-        .report-header .meta { font-size: 11px; color: rgba(255,255,255,0.8); margin-top: 8px; }
+        .report-header h1 { font-size: 20px; margin-bottom: 6px; }
+        .report-header .meta { font-size: 10px; color: #c8c8d0; margin-top: 6px; }
 
+        /* —— 质量评分（table 布局，weasyprint 不支持 flex） —— */
         .score-card {
-            display: flex; justify-content: space-between; align-items: center;
-            background: #fff; border: 1px solid #ebeef5; border-radius: 4px;
-            padding: 20px 25px; margin-bottom: 20px;
+            width: 100%;
+            border: 1px solid #ebeef5;
+            border-collapse: collapse;
+            margin-bottom: 18px;
         }
-        .score-value { font-size: 36px; font-weight: bold; }
-        .score-label { font-size: 12px; color: #909399; }
-        .pass-badge { padding: 6px 16px; border-radius: 16px; font-size: 14px; font-weight: bold; color: #fff; }
+        .score-card td { padding: 16px 20px; border: none; vertical-align: middle; }
+        .score-card td.right { text-align: right; }
+        .score-value { font-size: 34px; font-weight: bold; line-height: 1.1; }
+        .score-label { font-size: 11px; color: #909399; }
+        .pass-badge {
+            padding: 6px 14px;
+            border-radius: 14px;
+            font-size: 13px;
+            font-weight: bold;
+            color: #ffffff;
+        }
         .pass-badge.pass { background: #67c23a; }
         .pass-badge.fail { background: #f56c6c; }
 
+        /* —— 区块标题 —— */
         .section-title {
-            font-size: 15px; font-weight: bold; margin: 20px 0 10px 0;
-            padding-left: 10px; border-left: 3px solid #409eff;
+            font-size: 14px;
+            font-weight: bold;
+            margin: 18px 0 10px 0;
+            padding-left: 9px;
+            border-left: 3px solid #409eff;
         }
 
+        /* —— 摘要三宫格（table 布局，weasyprint 不支持 grid） —— */
         .summary-grid {
-            display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 20px;
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 8px 0;
+            margin-bottom: 16px;
+            table-layout: fixed;
         }
-        .summary-card {
-            background: #fff; border: 1px solid #ebeef5; border-radius: 4px; padding: 15px;
+        .summary-grid td {
+            border: 1px solid #ebeef5;
+            padding: 12px 8px;
             text-align: center;
+            vertical-align: middle;
         }
-        .summary-card .num { font-size: 24px; font-weight: bold; }
-        .summary-card .label { font-size: 11px; color: #909399; margin-top: 4px; }
+        .summary-grid .num { font-size: 22px; font-weight: bold; line-height: 1.2; }
+        .summary-grid .label { font-size: 10px; color: #909399; margin-top: 3px; }
 
-        table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 11px; }
-        th { background: #f8f9fb; padding: 8px 10px; text-align: left; border-bottom: 2px solid #ebeef5; font-weight: 600; }
-        td { padding: 6px 10px; border-bottom: 1px solid #ebeef5; }
+        /* —— 图表（matplotlib 静态 PNG） —— */
+        .chart-table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
+        .chart-table td { border: none; padding: 4px; text-align: center; vertical-align: top; }
+        .chart-table img { max-width: 100%; }
+        .chart-empty {
+            border: 1px dashed #dcdfe6;
+            padding: 14px;
+            text-align: center;
+            color: #909399;
+            font-size: 10px;
+            margin-bottom: 14px;
+        }
 
-        .tag { display: inline-block; padding: 1px 8px; border-radius: 8px; font-size: 10px; }
+        /* —— 表格 —— */
+        table.data { width: 100%; border-collapse: collapse; margin-bottom: 16px; font-size: 10px; }
+        table.data th {
+            background: #f5f7fa;
+            padding: 7px 8px;
+            text-align: left;
+            border-bottom: 2px solid #dcdfe6;
+            font-weight: bold;
+        }
+        table.data td { padding: 5px 8px; border-bottom: 1px solid #ebeef5; }
+        table.data tr { page-break-inside: avoid; }
+
+        .tag { padding: 1px 7px; border-radius: 8px; font-size: 9px; }
         .tag-pass { background: #f0f9eb; color: #67c23a; }
         .tag-fail { background: #fef0f0; color: #f56c6c; }
 
+        /* —— 缺陷条目 —— */
         .defect-item {
-            background: #fff; border: 1px solid #ebeef5; border-radius: 4px;
-            padding: 12px 15px; margin-bottom: 10px; border-left: 3px solid #909399;
+            border: 1px solid #ebeef5;
+            padding: 10px 12px;
+            margin-bottom: 8px;
+            border-left: 3px solid #909399;
+            page-break-inside: avoid;
         }
         .defect-item.p0 { border-left-color: #f56c6c; }
         .defect-item.p1 { border-left-color: #e6a23c; }
         .defect-item.p2 { border-left-color: #409eff; }
-        .defect-item .d-title { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
-        .defect-item .d-detail { font-size: 11px; color: #606266; }
+        .defect-item .d-title { font-size: 12px; font-weight: bold; margin-bottom: 3px; }
+        .defect-item .d-detail { font-size: 10px; color: #606266; }
         .defect-item .d-detail strong { color: #303133; }
 
-        .footer { text-align: center; margin-top: 30px; color: #909399; font-size: 10px; }
+        .footer {
+            text-align: center;
+            margin-top: 26px;
+            color: #909399;
+            font-size: 9px;
+        }
     </style>
 </head>
 <body>
@@ -80,42 +150,46 @@
 </div>
 
 <!-- 质量评分 -->
-<div class="score-card">
-    <div>
-        <div class="score-value" style="color: {% if summary.quality_score >= 80 %}#67c23a{% elif summary.quality_score >= 60 %}#e6a23c{% else %}#f56c6c{% endif %};">
-            {{ summary.quality_score }}
-        </div>
-        <div class="score-label">质量评分 (满分100)</div>
-    </div>
-    <div>
-        {% if summary.overall_pass %}
-        <span class="pass-badge pass">质量门禁通过</span>
-        {% else %}
-        <span class="pass-badge fail">质量门禁未通过</span>
-        {% endif %}
-    </div>
-</div>
+<table class="score-card">
+    <tr>
+        <td>
+            <div class="score-value" style="color: {% if summary.quality_score >= 80 %}#67c23a{% elif summary.quality_score >= 60 %}#e6a23c{% else %}#f56c6c{% endif %};">
+                {{ summary.quality_score }}
+            </div>
+            <div class="score-label">质量评分 (满分100)</div>
+        </td>
+        <td class="right">
+            {% if summary.overall_pass %}
+            <span class="pass-badge pass">质量门禁通过</span>
+            {% else %}
+            <span class="pass-badge fail">质量门禁未通过</span>
+            {% endif %}
+        </td>
+    </tr>
+</table>
 
 <!-- 测试摘要 -->
 <div class="section-title">测试摘要</div>
-<div class="summary-grid">
-    <div class="summary-card">
-        <div class="num" style="color: #409eff;">{{ summary.api_summary.total }}</div>
-        <div class="label">接口测试 (通过 {{ summary.api_summary.passed }})</div>
-    </div>
-    <div class="summary-card">
-        <div class="num" style="color: #e6a23c;">{{ summary.performance_summary.total }}</div>
-        <div class="label">性能测试 (通过 {{ summary.performance_summary.passed }})</div>
-    </div>
-    <div class="summary-card">
-        <div class="num" style="color: #67c23a;">{{ summary.integration_summary.total }}</div>
-        <div class="label">集成测试 (通过 {{ summary.integration_summary.passed }})</div>
-    </div>
-</div>
+<table class="summary-grid">
+    <tr>
+        <td>
+            <div class="num" style="color: #409eff;">{{ summary.api_summary.total }}</div>
+            <div class="label">接口测试 (通过 {{ summary.api_summary.passed }})</div>
+        </td>
+        <td>
+            <div class="num" style="color: #e6a23c;">{{ summary.performance_summary.total }}</div>
+            <div class="label">性能测试 (通过 {{ summary.performance_summary.passed }})</div>
+        </td>
+        <td>
+            <div class="num" style="color: #67c23a;">{{ summary.integration_summary.total }}</div>
+            <div class="label">集成测试 (通过 {{ summary.integration_summary.passed }})</div>
+        </td>
+    </tr>
+</table>
 
 <!-- 缺陷统计 -->
 <div class="section-title">缺陷统计 (共 {{ defects.get('summary', {}).get('total', 0) }} 个)</div>
-<table>
+<table class="data">
     <thead>
         <tr>
             <th>严重等级</th>
@@ -132,12 +206,41 @@
     </tbody>
 </table>
 
+<!-- ===== 图表区（matplotlib 静态 PNG；PDF 不执行 JS，ECharts 无法渲染） ===== -->
+<div class="section-title">可视化图表</div>
+{% if static_charts %}
+    {% if static_charts.get('pass_rate_bar') %}
+    <table class="chart-table">
+        <tr><td><img src="{{ static_charts.get('pass_rate_bar') | safe }}" alt="测试通过率对比"></td></tr>
+    </table>
+    {% endif %}
+    {% if static_charts.get('severity_pie') or static_charts.get('category_pie') %}
+    <table class="chart-table">
+        <tr>
+            {% if static_charts.get('severity_pie') %}
+            <td style="width: 50%;"><img src="{{ static_charts.get('severity_pie') | safe }}" alt="缺陷严重等级分布"></td>
+            {% endif %}
+            {% if static_charts.get('category_pie') %}
+            <td style="width: 50%;"><img src="{{ static_charts.get('category_pie') | safe }}" alt="缺陷类别分布"></td>
+            {% endif %}
+        </tr>
+    </table>
+    {% endif %}
+    {% if static_charts.get('performance_line') %}
+    <table class="chart-table">
+        <tr><td><img src="{{ static_charts.get('performance_line') | safe }}" alt="性能指标趋势"></td></tr>
+    </table>
+    {% endif %}
+{% else %}
+    <div class="chart-empty">本次运行无可展示的图表数据</div>
+{% endif %}
+
 <!-- 页面分隔 -->
 <div class="page-break"></div>
 
 <!-- 接口测试详情 -->
 <div class="section-title">接口测试详情</div>
-<table>
+<table class="data">
     <thead>
         <tr>
             <th>用例名称</th>
@@ -163,7 +266,7 @@
 
 <!-- 性能测试详情 -->
 <div class="section-title">性能测试详情</div>
-<table>
+<table class="data">
     <thead>
         <tr>
             <th>场景名称</th>

@@ -388,12 +388,22 @@ class ReportGenerator:
             except Exception:  # noqa: BLE001
                 pass
 
+            # PDF 不执行 JavaScript，ECharts 图表在 PDF 里必然是空白。
+            # → 用 matplotlib 在服务端把图画成静态 PNG 内嵌（降级：失败则为空，模板显示占位文案）
+            try:
+                from app.modules.report.static_charts import build_static_charts
+
+                static_charts = build_static_charts(report_data)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"Static charts unavailable for PDF: {e}")
+                static_charts = {}
+
             template = self.env.get_template("report_pdf.html")
             html_content = template.render(
                 summary=report_data["summary"],
                 test_results=report_data.get("test_results", {}),
                 defects=report_data.get("defects", {}),
-                report_data_json=_json_for_script(report_data),
+                static_charts=static_charts,
             )
 
             # 捕获 weasyprint 自身日志（字体/pango/样式告警），便于诊断空 PDF
