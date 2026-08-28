@@ -363,12 +363,19 @@ class ReportGenerator:
             import tempfile
             from weasyprint import HTML
 
+            # 收集版本信息，便于报错时一键定位 weasyprint / pydyf 不匹配
+            _wp_ver = getattr(__import__("weasyprint"), "__version__", "未知")
+            try:
+                import pydyf
+
+                _pydyf_ver = getattr(pydyf, "__version__", "未知")
+            except Exception:  # noqa: BLE001
+                _pydyf_ver = "未安装"
+
             # 版本护栏：weasyprint 60.0 有致命 bug（PDF.__init__() takes 1
             # positional argument but 3 were given），60.1+ 才修复。若镜像里
             # 装的是 60.0，这里直接给出精确报错，避免被晦涩的 PDF.__init__ 误导。
             try:
-                from weasyprint import __version__ as _wp_ver
-
                 _parts = _wp_ver.split(".")
                 _maj, _min = int(_parts[0]), int(_parts[1])
                 if (_maj, _min) < (60, 1):
@@ -430,7 +437,11 @@ class ReportGenerator:
             return None, "weasyprint 未安装（请 pip install weasyprint 并装好系统依赖 libpango）"
         except Exception as e:
             logger.warning(f"PDF rendering failed: {e}")
-            return None, f"PDF 渲染异常：{e}"
+            return None, (
+                f"PDF 渲染异常：{e}"
+                f"（weasyprint={_wp_ver}, pydyf={_pydyf_ver}；"
+                f"若 pydyf 非 0.8.x 请锁定 pydyf==0.8.0）"
+            )
 
     async def _save_to_db(
         self,

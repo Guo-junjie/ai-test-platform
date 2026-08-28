@@ -38,6 +38,9 @@ jsonschema==4.20.0
 # 报告生成
 jinja2==3.1.2
 weasyprint==60.2
+# weasyprint 60.x 的 PDF 后端库；必须锁 0.8.x。
+# 装成不兼容的新版(>=0.9 某些)会触发 `PDF.__init__() takes 1 positional argument but 3 were given`
+pydyf==0.8.0
 matplotlib==3.8.2
 
 # 容器管理
