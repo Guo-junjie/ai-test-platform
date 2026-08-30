@@ -67,7 +67,10 @@ class EnvironmentAdapter(ABC):
             run_kwargs: dict[str, Any] = {
                 "ports": {f"{port}/tcp": port},
                 "detach": True,
-                "auto_remove": True,
+                # auto_remove=False：覆盖率采集需要从「已停止的容器」拷出 XML
+                # （SIGINT 优雅退出后 coverage.xml 在容器内生成）。collect_and_store
+                # 拷完后显式 remove；无覆盖率路径的容器由 collect 兜底清理
+                "auto_remove": False,
             }
             command = None
             if coverage:
