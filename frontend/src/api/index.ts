@@ -478,4 +478,23 @@ export const knowledgeApi = {
   listFeedback: (params?: any) => api.get('/knowledge/feedback', { params }),
 }
 
+// ============ 项目配置（覆盖率开关 / CI/CD 集成） ============
+export const projectConfigApi = {
+  /** 项目级自动覆盖率开关（manager 及以上） */
+  setCoverageConfig: (projectId: string, autoCoverage: boolean) =>
+    api.put(`/projects/${projectId}/coverage-config`, { auto_coverage: autoCoverage }),
+  /** 查看 CI 配置（token 脱敏） */
+  getCIConfig: (projectId: string) => api.get(`/projects/${projectId}/ci-config`),
+  /** 更新 CI 配置（admin）：回调地址 + push 自动触发规则 */
+  updateCIConfig: (
+    projectId: string,
+    data: { callback_url?: string; auto_trigger_enabled?: boolean; auto_trigger_branches?: string[] }
+  ) => api.put(`/projects/${projectId}/ci-config`, data),
+  /** 生成/轮换 CI Token（admin），明文仅本次返回 */
+  rotateCIToken: (projectId: string) =>
+    api.post(`/projects/${projectId}/ci-token`, {}, { timeout: 15000 }),
+  /** 质量徽章（SVG，公开） */
+  badgeUrl: (projectId: string) => `/api/webhook/badge/${projectId}.svg`,
+}
+
 export default api

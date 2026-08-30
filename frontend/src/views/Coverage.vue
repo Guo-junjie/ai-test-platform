@@ -36,6 +36,17 @@
             />
           </el-select>
         </div>
+        <el-tooltip content="开启后流水线测试会自动采集本项目覆盖率（平台总开关需为开启）" placement="top">
+          <div class="cov-switch">
+            <span class="cov-switch-label">自动采集</span>
+            <el-switch
+              v-model="autoCoverage"
+              :loading="covSwitchLoading"
+              :disabled="!projectId || !canManage"
+              @change="onAutoCoverageChange"
+            />
+          </div>
+        </el-tooltip>
         <el-button :disabled="!projectId" @click="refreshAll">刷新</el-button>
         <el-button type="primary" :icon="UploadFilled" :disabled="!projectId" @click="openUploadDialog">上传报告</el-button>
       </div>
@@ -333,12 +344,47 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { UploadFilled } from '@element-plus/icons-vue'
-import { coverageApi, projectApi } from '@/api'
+import { coverageApi, projectApi, projectConfigApi } from '@/api'
+import { useAuthStore } from '@/stores'
 import TrendChart from '@/components/TrendChart.vue'
 
 // ====== 状态 ======
 const projects = ref<any[]>([])
 const projectId = ref<string>('')
+const authStore = useAuthStore()
+const canManage = computed(() =>
+  ['super_admin', 'admin', 'test_manager'].includes(authStore.role)
+)
+const autoCoverage = ref<boolean>(true)
+watch(projectId, () => void loadCoverageSwitch())
+const covSwitchLoading = ref<boolean>(false)
+
+async function loadCoverageSwitch(): Promise<void> {
+  if (!projectId.value) return
+  try {
+    const res: any = await projectConfigApi.getCIConfig(projectId.value)
+    if (res?.code === 0 && res?.data) {
+      autoCoverage.value = res.data.auto_coverage !== false
+    }
+  } catch { /* 忽略，保持默认 */ }
+}
+
+async function onAutoCoverageChange(val: boolean): Promise<void> {
+  try {
+    covSwitchLoading.value = true
+    const res: any = await projectConfigApi.setCoverageConfig(projectId.value, val)
+    if (res?.code === 0) {
+      ElMessage.success(val ? '已开启本项目自动覆盖率采集' : '已关闭本项目自动覆盖率采集')
+    } else {
+      autoCoverage.value = !val
+      ElMessage.error(res?.message || '设置失败')
+    }
+  } catch {
+    autoCoverage.value = !val
+  } finally {
+    covSwitchLoading.value = false
+  }
+}
 const reports = ref<any[]>([])
 const selectedReportId = ref<string>('')
 const latestReportId = ref<string>('')  // 看板数据绑定的报告（默认最新一份）
@@ -807,5 +853,14 @@ onMounted(() => {
   color: #909399;
   font-size: 12px;
   margin-top: 8px;
+}
+.cov-switch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.cov-switch-label {
+  font-size: 13px;
+  color: #606266;
 }
 </style>

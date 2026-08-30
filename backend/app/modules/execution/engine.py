@@ -308,15 +308,44 @@ def prepare_environment(
         EnvironmentAdapterFactory,
     )
 
+    # 项目级开关：平台 AUTO_COVERAGE=1 且本项目未显式关闭时才注入探针
+    # （项目配置存 projects.quality_gate_config.auto_coverage，未设置默认采集）
+    coverage_enabled = AUTO_COVERAGE
+    try:
+        from sqlalchemy import select as _select
+
+        from app.models.database import Project as _Project
+        from app.utils.database import AsyncSessionLocal as _S
+
+        async def _proj_cov() -> bool:
+            async with _S() as s:
+                pid_row = (
+                    await s.execute(
+                        _select(TestRun.project_id).where(TestRun.id == test_run_id)
+                    )
+                ).scalar_one_or_none()
+                if not pid_row:
+                    return True
+                proj = (
+                    await s.execute(_select(_Project).where(_Project.id == pid_row))
+                ).scalar_one_or_none()
+                cfg = (proj.quality_gate_config or {}) if proj else {}
+                return bool(cfg.get("auto_coverage", True))
+
+        import asyncio as _aio
+        coverage_enabled = AUTO_COVERAGE and _aio.run(_proj_cov())
+    except Exception as e:  # noqa: BLE001 - 配置读取失败按默认采集，不阻塞
+        logger.warning(f"[{test_run_id}] resolve project auto_coverage failed: {e}")
+
     adapter = EnvironmentAdapterFactory.get_adapter(stack_name)
-    # 能力11：AUTO_COVERAGE=1 时启动带覆盖率探针的 SUT；否则普通启动
-    service_url = adapter.start_service(repo_path, coverage=AUTO_COVERAGE)
+    # 能力11：coverage_enabled 时启动带覆盖率探针的 SUT；否则普通启动
+    service_url = adapter.start_service(repo_path, coverage=coverage_enabled)
 
     # 等待服务就绪
     ready = adapter.wait_for_ready(service_url, timeout=120)
 
     # 暂存覆盖率采集元数据（供 aggregate 阶段自动采集；未启用则无副作用）
-    if AUTO_COVERAGE and getattr(adapter, "_coverage_meta", None):
+    if coverage_enabled and getattr(adapter, "_coverage_meta", None):
         meta = dict(adapter._coverage_meta)
         meta["test_run_id"] = test_run_id
         # 解析 project_id 一并暂存
@@ -632,5 +661,45 @@ def aggregate_results(
                     )
     except Exception as e:  # noqa: BLE001
         logger.warning(f"[coverage] aggregate auto-collect error: {e}")
+
+    # CI/CD 集成：项目配置了回调地址时推送结果摘要（best-effort，不阻塞、不重试）
+    try:
+        import asyncio as _aio
+
+        from app.utils.database import AsyncSessionLocal as _S
+        from sqlalchemy import select as _sel
+
+        from app.models.database import Project as _P
+
+        async def _callback():
+            async with _S() as s:
+                pid = (
+                    await s.execute(
+                        _sel(TestRun.project_id).where(TestRun.id == _uuid.UUID(test_run_id))
+                    )
+                ).scalar_one_or_none()
+                if not pid:
+                    return
+                proj = (await s.execute(_sel(_P).where(_P.id == pid))).scalar_one_or_none()
+                url = ((proj.source_config or {}).get("ci_callback_url") or "") if proj else ""
+                if not url:
+                    return
+            payload = {
+                "test_run_id": test_run_id,
+                "status": "completed",
+                "total": summary.get("total_tests", 0),
+                "passed": summary.get("total_passed", 0),
+                "failed": summary.get("total_failed", 0),
+                "ci_result_url": f"/api/webhook/ci-result/{test_run_id}",
+            }
+            import httpx as _hx
+
+            async with _hx.AsyncClient(timeout=5.0) as client:
+                await client.post(url, json=payload)
+            logger.info(f"[{test_run_id}] CI callback sent to {url}")
+
+        _aio.run(_callback())
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[{test_run_id}] CI callback failed (non-fatal): {e}")
 
     return summary
