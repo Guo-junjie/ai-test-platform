@@ -3,6 +3,7 @@ AI 自动化测试平台 — Celery 配置
 """
 
 from celery import Celery
+from celery.schedules import crontab
 from celery.signals import worker_process_init
 from loguru import logger
 
@@ -61,6 +62,12 @@ celery_app.conf.beat_schedule = {
     "scheduled-tick-every-30s": {
         "task": "app.modules.scheduler.tasks.scheduled_tick",
         "schedule": 30.0,
+    },
+    # 知识自动同步（能力12 P1）：每日 03:00 增量重建 defect/case/doc/term 切片，
+    # 新缺陷/新用例无需管理员手动重建即入知识库。文档类切片上传时即时索引，不在此列。
+    "kb-auto-sync-daily-3am": {
+        "task": "app.modules.knowledge.tasks.auto_sync_knowledge",
+        "schedule": crontab(hour=3, minute=0),
     },
 }
 

@@ -65,12 +65,15 @@ class DefectAnalyzer:
     def __init__(self, model_router: ModelRouter | None = None) -> None:
         self.router = model_router or get_model_router()
 
-    async def analyze(self, test_results: dict[str, Any]) -> dict[str, Any]:
+    async def analyze(
+        self, test_results: dict[str, Any], project_id: str | None = None
+    ) -> dict[str, Any]:
         """
         主方法 — 分析全部测试结果，输出缺陷列表和统计摘要。
 
         Args:
             test_results: 测试执行结果，包含 api_results / performance_results / integration_results。
+            project_id: 项目 ID（知识库按项目过滤注入；None 走全局回退）。
 
         Returns:
             {
@@ -92,7 +95,7 @@ class DefectAnalyzer:
 
         async def analyze_api(failure: dict[str, Any]) -> dict[str, Any] | None:
             async with semaphore:
-                return await self._analyze_api_failure(failure)
+                return await self._analyze_api_failure(failure, project_id=project_id)
 
         api_tasks = [analyze_api(f) for f in api_failures]
         api_defects = await asyncio.gather(*api_tasks)
@@ -109,7 +112,7 @@ class DefectAnalyzer:
 
         async def analyze_perf(issue: dict[str, Any]) -> dict[str, Any] | None:
             async with semaphore:
-                return await self._analyze_performance(issue)
+                return await self._analyze_performance(issue, project_id=project_id)
 
         perf_tasks = [analyze_perf(i) for i in perf_issues]
         perf_defects = await asyncio.gather(*perf_tasks)
@@ -126,7 +129,7 @@ class DefectAnalyzer:
 
         async def analyze_integ(failure: dict[str, Any]) -> dict[str, Any] | None:
             async with semaphore:
-                return await self._analyze_integration_failure(failure)
+                return await self._analyze_integration_failure(failure, project_id=project_id)
 
         integ_tasks = [analyze_integ(f) for f in integ_failures]
         integ_defects = await asyncio.gather(*integ_tasks)
@@ -153,7 +156,9 @@ class DefectAnalyzer:
 
         return {"defects": all_defects, "summary": summary}
 
-    async def _analyze_api_failure(self, result: dict[str, Any]) -> dict[str, Any]:
+    async def _analyze_api_failure(
+        self, result: dict[str, Any], project_id: str | None = None
+    ) -> dict[str, Any]:
         """
         AI 分析接口测试失败。
 
@@ -175,7 +180,7 @@ class DefectAnalyzer:
         error_summary = f"{case_name} {case_type} {actual_status} {error_message}"
         kb = ""
         try:
-            kb = await retrieve_and_inject(None, error_summary, "defect", top_k=5)
+            kb = await retrieve_and_inject(None, error_summary, "defect", top_k=5, project_id=project_id)
         except Exception:
             kb = ""
         prompt = (kb + "\n\n" if kb else "") + f"""分析以下 API 测试失败，判断缺陷类型和根因。
@@ -233,7 +238,9 @@ class DefectAnalyzer:
         # Fallback: 基于规则分类
         return self._fallback_api_defect(result)
 
-    async def _analyze_performance(self, result: dict[str, Any]) -> dict[str, Any]:
+    async def _analyze_performance(
+        self, result: dict[str, Any], project_id: str | None = None
+    ) -> dict[str, Any]:
         """
         AI 分析性能问题。
 
@@ -256,7 +263,7 @@ class DefectAnalyzer:
         error_summary = f"{case_name} 性能 avg_rt={avg_rt}ms p95={p95}ms 错误率={error_rate}%"
         kb = ""
         try:
-            kb = await retrieve_and_inject(None, error_summary, "defect", top_k=5)
+            kb = await retrieve_and_inject(None, error_summary, "defect", top_k=5, project_id=project_id)
         except Exception:
             kb = ""
         prompt = (kb + "\n\n" if kb else "") + f"""分析以下性能测试结果，判断性能瓶颈根因。
@@ -305,7 +312,9 @@ class DefectAnalyzer:
 
         return self._fallback_performance_defect(result)
 
-    async def _analyze_integration_failure(self, result: dict[str, Any]) -> dict[str, Any]:
+    async def _analyze_integration_failure(
+        self, result: dict[str, Any], project_id: str | None = None
+    ) -> dict[str, Any]:
         """
         AI 分析集成测试失败。
 
@@ -326,7 +335,7 @@ class DefectAnalyzer:
         error_summary = f"{case_name} 第{failure_step}步 {failure_reason}"
         kb = ""
         try:
-            kb = await retrieve_and_inject(None, error_summary, "defect", top_k=5)
+            kb = await retrieve_and_inject(None, error_summary, "defect", top_k=5, project_id=project_id)
         except Exception:
             kb = ""
         prompt = (kb + "\n\n" if kb else "") + f"""分析以下集成测试失败，判断缺陷根因。

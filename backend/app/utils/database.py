@@ -177,6 +177,34 @@ def reset_async_engine() -> None:
 
 # ==================== FastAPI 依赖注入 ====================
 
+
+async def get_test_run_project_id(test_run_id: str) -> str | None:
+    """解析 test_run 归属的 project_id（知识库注入点按项目过滤用）。
+
+    任何异常/找不到都返回 None（检索侧对 None 走全局回退，不阻塞主流程）。
+    """
+    import uuid as _uuid
+
+    from sqlalchemy import select
+
+    from app.models.database import TestRun
+
+    try:
+        rid = _uuid.UUID(str(test_run_id))
+    except (ValueError, TypeError):
+        return None
+    try:
+        async with AsyncSessionLocal() as session:
+            pid = (
+                await session.execute(
+                    select(TestRun.project_id).where(TestRun.id == rid)
+                )
+            ).scalar_one_or_none()
+            return str(pid) if pid else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
     """
     FastAPI 依赖注入 — 提供异步数据库会话。

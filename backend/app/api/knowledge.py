@@ -23,6 +23,7 @@ from app.config import settings
 from app.models.database import (
     KnowledgeChunk,
     KnowledgeDocument,
+    KnowledgeFeedback,
     KnowledgeTerm,
     KBChunkType,
     User,
@@ -120,6 +121,24 @@ class ConfigUpdate(BaseModel):
     """运行时配置更新（前端开关切换）。"""
 
     kb_rag_enabled: bool
+
+
+class AskRequest(BaseModel):
+    """知识问答请求。"""
+
+    question: str
+    project_id: str | None = None  # 提供时按项目过滤（文档类切片）
+    top_k: int = Field(default=5, ge=1, le=10)
+
+
+class FeedbackCreate(BaseModel):
+    """知识问答反馈提交。"""
+
+    question: str
+    answer: str | None = None
+    rating: str  # up / down
+    comment: str | None = None
+    retrieved: list[dict] = Field(default_factory=list)  # 当次召回明细
 
 
 # ==================== 内部工具 ====================
@@ -796,3 +815,108 @@ async def reindex_document(
         await db.commit()
         return {"code": 1, "data": _doc_to_dict(doc), "message": doc.error}
     return {"code": 0, "data": _doc_to_dict(doc), "message": "已派发重新索引任务"}
+
+
+# ==================== 知识问答（RAG Chat）与反馈 ====================
+
+
+@router.post("/ask")
+async def ask_knowledge_qa(
+    req: AskRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """知识问答：多类型检索 → 编号引用上下文 → LLM 带来源回答。
+
+    零命中直接礼貌拒答（不调 LLM）；命中但未配置对话模型时抛 409 引导配置。
+    """
+    from app.modules.knowledge.qa import ask_knowledge
+
+    result = await ask_knowledge(
+        db, req.question, project_id=req.project_id, top_k=req.top_k
+    )
+    return {"code": 0, "data": result, "message": "success"}
+
+
+@router.post("/feedback")
+async def submit_knowledge_feedback(
+    req: FeedbackCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """提交问答反馈（点赞/点踩 + 可选评论），记录当次召回明细供质量分析。"""
+    if req.rating not in ("up", "down"):
+        return {"code": 1, "data": None, "message": "rating 仅支持 up / down"}
+    fb = KnowledgeFeedback(
+        id=uuid.uuid4(),
+        user_id=current_user.id,
+        question=req.question,
+        answer=req.answer,
+        rating=req.rating,
+        comment=(req.comment or "").strip() or None,
+        retrieved=req.retrieved,
+    )
+    db.add(fb)
+    await db.commit()
+    return {"code": 0, "data": {"id": str(fb.id)}, "message": "感谢反馈"}
+
+
+@router.get("/feedback")
+async def list_knowledge_feedback(
+    rating: str | None = Query(None),
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+    current_user: User = Depends(require_kb_term_admin),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """反馈列表与统计（仅 super_admin/admin/test_manager），用于检索质量分析。"""
+    stmt = select(KnowledgeFeedback)
+    count_stmt = select(func.count()).select_from(KnowledgeFeedback)
+    if rating in ("up", "down"):
+        stmt = stmt.where(KnowledgeFeedback.rating == rating)
+        count_stmt = count_stmt.where(KnowledgeFeedback.rating == rating)
+
+    total = (await db.execute(count_stmt)).scalar() or 0
+    up_count = (
+        await db.execute(
+            select(func.count())
+            .select_from(KnowledgeFeedback)
+            .where(KnowledgeFeedback.rating == "up")
+        )
+    ).scalar() or 0
+    down_count = (
+        await db.execute(
+            select(func.count())
+            .select_from(KnowledgeFeedback)
+            .where(KnowledgeFeedback.rating == "down")
+        )
+    ).scalar() or 0
+
+    result = await db.execute(
+        stmt.order_by(KnowledgeFeedback.created_at.desc())
+        .offset((page - 1) * size)
+        .limit(size)
+    )
+    items = result.scalars().all()
+    return {
+        "code": 0,
+        "data": {
+            "list": [
+                {
+                    "id": str(f.id),
+                    "user_id": str(f.user_id) if f.user_id else None,
+                    "question": f.question,
+                    "answer": (f.answer or "")[:200],
+                    "rating": f.rating,
+                    "comment": f.comment,
+                    "retrieved": f.retrieved or [],
+                    "created_at": f.created_at.isoformat() if f.created_at else None,
+                }
+                for f in items
+            ],
+            "total": total,
+            "up_count": up_count,
+            "down_count": down_count,
+        },
+        "message": "success",
+    }

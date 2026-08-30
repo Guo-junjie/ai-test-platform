@@ -18,14 +18,14 @@ def execute_scheduled_task(task_id: str) -> dict:
     """
     执行定时任务。
 
-    被 django-celery-beat DatabaseScheduler 按 cron 调度调用。
-    从数据库读取 ScheduledTask，触发对应的测试任务或场景执行。
+    被 scheduled_tick 按 cron 调度调用：创建独立 TestRun → 真实执行目标
+    （用例集合经 APITester / 场景经 IntegrationTester）→ 结果落库 → 关联执行历史。
 
     Args:
         task_id: ScheduledTask 的 ID
 
     Returns:
-        {"status": str, "run_id": str | None}
+        {"status": str, "run_id": str | None, "test_run_id": str | None, ...}
     """
     import asyncio
 
@@ -39,13 +39,13 @@ async def _execute_async(task_id: str) -> dict:
         ScheduledTask,
         ScheduledTaskRun,
         ScheduledTaskStatus,
-        ScheduledTaskTargetType,
     )
+    from app.modules.scheduler.executor import execute_scheduled_chain
+
     import uuid
 
     async with AsyncSessionLocal() as session:
         try:
-            # 加载任务定义
             result = await session.execute(
                 select(ScheduledTask).where(ScheduledTask.id == uuid.UUID(task_id))
             )
@@ -59,50 +59,54 @@ async def _execute_async(task_id: str) -> dict:
                 logger.info(f"ScheduledTask {task_id} is {task.status}, skipping")
                 return {"status": "skipped", "run_id": None}
 
-            # 创建执行记录
+            task_name = task.name
+        except Exception as e:
+            logger.exception(f"Failed to load ScheduledTask {task_id}: {e}")
+            return {"status": "error", "run_id": None, "error": str(e)}
+
+    # 真实执行链（独立 session 在 executor 内部管理）
+    outcome = await execute_scheduled_chain(task_id)
+
+    # 记录执行历史并关联 TestRun
+    status = outcome.get("status", "failed")
+    history_status = "success" if status == "success" else "failed"
+    async with AsyncSessionLocal() as session:
+        try:
             run = ScheduledTaskRun(
                 id=uuid.uuid4(),
                 task_id=uuid.UUID(task_id),
-                status="running",
+                status=history_status,
+                test_run_id=uuid.UUID(outcome["test_run_id"]) if outcome.get("test_run_id") else None,
                 started_at=datetime.utcnow(),
+                finished_at=datetime.utcnow(),
+                error_message=outcome.get("error"),
             )
             session.add(run)
-            await session.flush()
 
-            # 触发实际执行
-            # 注：真实的测试执行链（TestExecutionEngine / ScenarioOrchestrator）
-            # 需要 analysis_result / test_cases / candidate_endpoints 等完整上下文，
-            # 当前调度上下文仅有 target_id，不足以直接拉起一次完整执行。
-            # 此处先记录调度触发，待接入真实执行链（TODO）。
-            if task.target_type in (
-                ScheduledTaskTargetType.SCENARIO,
-                ScheduledTaskTargetType.CASE_COLLECTION,
-            ):
-                logger.info(
-                    f"Scheduled task {task_id} triggered "
-                    f"(target_type={task.target_type.value}, target_id={task.target_id}); "
-                    f"真实执行链待接入"
+            task_row = (
+                await session.execute(
+                    select(ScheduledTask).where(ScheduledTask.id == uuid.UUID(task_id))
                 )
-                run.status = "success"
-            else:
-                run.status = "failed"
-                run.error_message = f"Unknown target_type: {task.target_type}"
-
-            run.finished_at = datetime.utcnow()
-            task.last_run_at = datetime.utcnow()
-            task.last_run_status = run.status
-            # tick 之外独立调用的入口（如手动触发）必须自己提交；
-            # flush 只写了缓冲，不 commit 的话执行历史在事务结束即丢失。
+            ).scalar_one_or_none()
+            if task_row:
+                task_row.last_run_at = datetime.utcnow()
+                task_row.last_run_status = history_status
             await session.commit()
+        except Exception as e:  # noqa: BLE001 - 历史记录失败不影响执行结果返回
+            logger.exception(f"Failed to record run history for {task_id}: {e}")
 
-            logger.info(
-                f"ScheduledTask {task_id} ({task.name}) executed: {run.status}"
-            )
-            return {"status": run.status, "run_id": str(run.id)}
-
-        except Exception as e:
-            logger.exception(f"Failed to execute ScheduledTask {task_id}: {e}")
-            return {"status": "error", "run_id": None, "error": str(e)}
+    logger.info(
+        f"ScheduledTask {task_id} ({task_name}) executed: {history_status}, "
+        f"total={outcome.get('total')} passed={outcome.get('passed')}"
+    )
+    return {
+        "status": history_status,
+        "run_id": None,
+        "test_run_id": outcome.get("test_run_id"),
+        "total": outcome.get("total"),
+        "passed": outcome.get("passed"),
+        "error": outcome.get("error"),
+    }
 
 
 @celery_app.task(name="app.modules.scheduler.tasks.scheduled_tick")

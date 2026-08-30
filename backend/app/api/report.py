@@ -589,9 +589,13 @@ async def _generate_report_async(
 
         # 1. 缺陷分析
         from app.modules.defect_analyzer import DefectAnalyzer
+        from app.utils.database import get_test_run_project_id
+
+        # 能力12 P1：解析项目 ID，让知识库注入按项目过滤（解析失败走全局回退）
+        project_id = await get_test_run_project_id(test_run_id)
 
         analyzer = DefectAnalyzer()
-        defects = await analyzer.analyze(test_results)
+        defects = await analyzer.analyze(test_results, project_id=project_id)
 
         logger.info(f"[{test_run_id}] Defect analysis completed: {defects['summary']['total']} defects")
 

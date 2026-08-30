@@ -172,7 +172,16 @@ async def create_test_run(
     # 4. 派发到 Celery worker 执行完整流程（API 进程立即返回，不阻塞事件循环）
     from app.modules.pipeline import run_test_pipeline
 
-    run_test_pipeline.delay(test_run_id, req.model_dump())
+    async_result = run_test_pipeline.delay(test_run_id, req.model_dump())
+
+    # 记录根任务 ID（取消时 revoke 用）；7 天过期与任务状态键一致
+    from app.utils.redis_client import get_async_redis
+
+    try:
+        redis = await get_async_redis()
+        await redis.set(f"task:celery:{test_run_id}", async_result.id, ex=7 * 24 * 3600)
+    except Exception as exc:  # noqa: BLE001 - Redis 异常不影响创建
+        logger.warning(f"Failed to store celery task id: {exc}")
 
     return {
         "code": 0,
@@ -263,9 +272,14 @@ async def get_progress(test_run_id: str):
 @router.post("/{test_run_id}/cancel")
 async def cancel_test_run(
     test_run_id: str,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ):
-    """取消测试任务。"""
+    """取消测试任务：DB 状态 + Redis 取消标志 + revoke 未开始的根任务。
+
+    worker 在流水线各阶段检查点轮询取消标志，执行中的任务会在下一阶段边界中止；
+    仅改 DB 状态不 interrupt 执行是历史 bug（任务跑完会把状态覆盖回 COMPLETED）。
+    """
     try:
         run_id = uuid.UUID(test_run_id)
     except ValueError:
@@ -280,11 +294,29 @@ async def cancel_test_run(
     if run.status in (TestStatus.COMPLETED, TestStatus.FAILED, TestStatus.CANCELLED):
         raise HTTPException(400, f"Cannot cancel test run in status: {run.status.value}")
 
+    # 1) DB 标记（幂等兜底：即使 worker 漏检，completed 覆盖前也以取消时间为准）
     run.status = TestStatus.CANCELLED
     run.completed_at = datetime.utcnow()
     run.error_message = "Cancelled by user"
 
-    logger.info(f"Test run cancelled: {test_run_id}")
+    # 2) Redis 取消标志（worker 检查点轮询）+ revoke 根任务（未开始时直接终止）
+    from app.celery_app import celery_app as celery
+    from app.utils.redis_client import get_async_redis
+
+    redis = await get_async_redis()
+    try:
+        await redis.set(f"task:cancel:{test_run_id}", "1", ex=7 * 24 * 3600)
+        root_task_id = await redis.get(f"task:celery:{test_run_id}")
+        if root_task_id:
+            root_task_id = root_task_id.decode() if isinstance(root_task_id, bytes) else root_task_id
+            celery.control.revoke(root_task_id, terminate=True, signal="SIGTERM")
+            logger.info(
+                f"Test run cancelled: {test_run_id} (root celery task {root_task_id} revoked)"
+            )
+        else:
+            logger.info(f"Test run cancelled: {test_run_id} (no root task id recorded)")
+    except Exception as exc:  # noqa: BLE001 - Redis/MQ 异常时 DB 状态已改，仅告警
+        logger.warning(f"Cancel flag/revoke failed (DB status already set): {exc}")
 
     return {
         "code": 0,

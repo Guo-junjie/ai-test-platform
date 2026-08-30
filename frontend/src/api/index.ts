@@ -462,6 +462,20 @@ export const knowledgeApi = {
   removeDocument: (id: string) => api.delete(`/knowledge/documents/${id}`),
   /** 重新索引（更换嵌入模型后） */
   reindexDocument: (id: string) => api.post(`/knowledge/documents/${id}/reindex`),
+  // ============ 知识问答（RAG Chat）与反馈 ============
+  /** 提问：多类型检索 → LLM 带引用回答。data { question, project_id?, top_k? } */
+  ask: (data: { question: string; project_id?: string; top_k?: number }) =>
+    api.post('/knowledge/ask', data, { timeout: 300000 }),
+  /** 提交反馈（点赞/点踩）。data { question, answer?, rating: 'up'|'down', comment?, retrieved? } */
+  submitFeedback: (data: {
+    question: string
+    answer?: string
+    rating: 'up' | 'down'
+    comment?: string
+    retrieved?: Array<Record<string, unknown>>
+  }) => api.post('/knowledge/feedback', data),
+  /** 反馈列表与统计（admin/manager）。params { rating?, page, size } */
+  listFeedback: (params?: any) => api.get('/knowledge/feedback', { params }),
 }
 
 export default api

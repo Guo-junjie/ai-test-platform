@@ -25,6 +25,27 @@ logger = get_logger(__name__)
 _sync_redis = None
 
 
+class RunCancelled(Exception):
+    """测试任务被用户取消 — 各阶段检查点抛出，上层据此标记 CANCELLED 而非 FAILED。"""
+
+
+def _is_cancelled(test_run_id: str) -> bool:
+    """检查取消标志（cancel API 写入 Redis；7 天过期与任务状态键一致）。"""
+    try:
+        return bool(_get_sync_redis().get(f"task:cancel:{test_run_id}"))
+    except Exception:  # noqa: BLE001 - Redis 异常时按未取消处理，不阻塞执行
+        return False
+
+
+def _check_cancelled(test_run_id: str) -> None:
+    """阶段检查点：已取消则抛 RunCancelled（Celery 任务随即终止）。"""
+    if _is_cancelled(test_run_id):
+        _set_task_status_sync(test_run_id, "cancelled", {"step": "cancelled_by_user"})
+        _set_task_progress_sync(test_run_id, 0, "已取消")
+        logger.info(f"[{test_run_id}] cancellation flag detected, aborting stage")
+        raise RunCancelled(test_run_id)
+
+
 def _get_sync_redis():
     """获取同步 Redis 客户端（惰性初始化）。"""
     global _sync_redis
@@ -57,6 +78,18 @@ def _set_task_progress_sync(task_id: str, progress: int, step: str = "") -> None
 
 
 def _persist_test_results(test_run_id: str, test_results: list[dict[str, Any]]) -> int:
+    """同步包装（Celery 同步任务用）；async 上下文请直接 await _persist_test_results_async。"""
+    try:
+        count = asyncio.run(_persist_test_results_async(test_run_id, test_results))
+        if count:
+            logger.info(f"[{test_run_id}] Persisted {count} TestResult rows to DB")
+        return count
+    except Exception as db_err:  # pragma: no cover - 兜底，不阻塞汇总
+        logger.warning(f"[{test_run_id}] persist_test_results failed (non-fatal): {db_err}")
+        return 0
+
+
+async def _persist_test_results_async(test_run_id: str, test_results: list[dict[str, Any]]) -> int:
     """
     把 aggregate 阶段汇聚到的「逐条用例执行结果」入库到 test_results 表。
 
@@ -87,10 +120,10 @@ def _persist_test_results(test_run_id: str, test_results: list[dict[str, Any]]) 
         logger.warning(f"[{test_run_id}] invalid uuid, skip persist_test_results")
         return 0
 
-    async def _do_persist() -> int:
-        from sqlalchemy import select as sa_select
-        from sqlalchemy import insert as sa_insert
+    from sqlalchemy import select as sa_select
+    from sqlalchemy import insert as sa_insert
 
+    async def _do_persist() -> int:
         async with AsyncSessionLocal() as session:
             # 1. 查出该 run 下所有 TestCase（用于 case_id 反查 + 冗余写入 case_type/case_name）
             cases_rows = (
@@ -169,14 +202,11 @@ def _persist_test_results(test_run_id: str, test_results: list[dict[str, Any]]) 
             await session.commit()
             return len(rows)
 
-    try:
-        count = asyncio.run(_do_persist())
-        if count:
-            logger.info(f"[{test_run_id}] Persisted {count} TestResult rows to DB")
-        return count
-    except Exception as db_err:  # pragma: no cover - 兜底，不阻塞汇总
-        logger.warning(f"[{test_run_id}] persist_test_results failed (non-fatal): {db_err}")
-        return 0
+    count = await _do_persist()
+    if count:
+        logger.info(f"[{test_run_id}] Persisted {count} TestResult rows to DB")
+    return count
+
 
 
 # 避免 top-level 导入 datetime 与 db 模型耦合（worker 进程冷启动更快）
@@ -261,6 +291,10 @@ def prepare_environment(
         包含 service_url 和 analysis_result 的字典。
     """
     logger.info(f"[{test_run_id}] Preparing test environment...")
+    try:
+        _check_cancelled(test_run_id)
+    except RunCancelled:
+        return {"service_url": "", "analysis_result": analysis_result, "cancelled": True}
 
     _set_task_status_sync(test_run_id, "executing", {"step": "preparing_environment"})
     _set_task_progress_sync(test_run_id, 55, "启动被测服务")
@@ -343,6 +377,10 @@ def run_api_tests(
     Returns:
         接口测试结果。
     """
+    try:
+        _check_cancelled(test_run_id)
+    except RunCancelled:
+        return {"test_type": "api", "total": 0, "passed": 0, "failed": 0, "results": [], "cancelled": True}
     service_url = env_result.get("service_url", "http://localhost:8000")
     logger.info(f"[{test_run_id}] Running API tests: {len(api_cases)} cases")
 
@@ -394,6 +432,10 @@ def run_performance_tests(
     Returns:
         性能测试结果。
     """
+    try:
+        _check_cancelled(test_run_id)
+    except RunCancelled:
+        return {"test_type": "performance", "total": 0, "passed": 0, "failed": 0, "results": [], "cancelled": True}
     service_url = env_result.get("service_url", "http://localhost:8000")
     logger.info(f"[{test_run_id}] Running performance tests: {len(perf_cases)} scenarios")
 
@@ -450,6 +492,10 @@ def run_integration_tests(
     Returns:
         集成测试结果。
     """
+    try:
+        _check_cancelled(test_run_id)
+    except RunCancelled:
+        return {"test_type": "integration", "total": 0, "passed": 0, "failed": 0, "results": [], "cancelled": True}
     service_url = env_result.get("service_url", "http://localhost:8000")
     logger.info(f"[{test_run_id}] Running integration tests: {len(integration_cases)} scenarios")
 
@@ -502,8 +548,11 @@ def aggregate_results(
         汇总结果。
     """
     logger.info(f"[{test_run_id}] Aggregating test results...")
-
-    _set_task_status_sync(test_run_id, "executing", {"step": "aggregating_results"})
+    try:
+        _check_cancelled(test_run_id)
+    except RunCancelled:
+        logger.info(f"[{test_run_id}] aggregate aborted: run cancelled")
+        return {"cancelled": True}
     _set_task_progress_sync(test_run_id, 95, "汇总测试结果")
 
     # test_results 是 group 的结果列表

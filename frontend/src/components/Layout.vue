@@ -53,6 +53,7 @@
           <el-menu-item index="/quality-trend">质量趋势</el-menu-item>
           <el-menu-item index="/sources">数据源管理</el-menu-item>
           <el-menu-item index="/knowledge">知识库RAG</el-menu-item>
+          <el-menu-item index="/knowledge-qa">知识问答</el-menu-item>
         </el-sub-menu>
 
         <!-- 系统 -->

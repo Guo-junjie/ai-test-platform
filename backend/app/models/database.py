@@ -948,6 +948,28 @@ class KnowledgeDocument(Base):
     )
 
 
+class KnowledgeFeedback(Base):
+    """知识问答反馈 — 对 AI 回答/召回质量点赞点踩（质量优化闭环）。
+
+    retrieved 记录当次召回的切片摘要（类型/来源/分数），点踩多的召回模式
+    可用于后续检索质量分析与排序优化。
+    """
+    __tablename__ = "knowledge_feedback"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    question = Column(Text, nullable=False)
+    answer = Column(Text, nullable=True)
+    rating = Column(String(10), nullable=False)  # up / down
+    comment = Column(Text, nullable=True)
+    retrieved = Column(JSONB, default=[])        # [{index, kb_type, source_ref, source, score}]
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        Index("idx_knowledge_feedback_rating_created", "rating", "created_at"),
+    )
+
+
 # ==================== 数据库初始化 ====================
 
 async def init_db():

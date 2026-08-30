@@ -90,7 +90,10 @@
           </el-select>
         </el-form-item>
         <el-form-item label="目标 ID">
-          <el-input v-model="form.target_id" placeholder="场景 ID 或用例集合 ID" />
+          <el-input v-model="form.target_id" placeholder="场景 ID（用例集合留空 = 全部已采纳用例）" />
+        </el-form-item>
+        <el-form-item label="被测服务">
+          <el-input v-model="form.service_url" placeholder="被测服务地址，如 http://host:8000（必填，定时执行不负责启动服务）" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -155,6 +158,7 @@ const form = reactive({
   cron_expression: '',
   target_type: 'scenario',
   target_id: '',
+  service_url: '',
 })
 
 const formRules: FormRules = {
@@ -208,7 +212,7 @@ function openCreateDialog(): void {
   cronPreview.value = null
   Object.assign(form, {
     name: '', description: '', nl_schedule: '', cron_expression: '',
-    target_type: 'scenario', target_id: '',
+    target_type: 'scenario', target_id: '', service_url: '',
   })
   dialogVisible.value = true
 }
@@ -224,6 +228,7 @@ function openEditDialog(row: any): void {
     cron_expression: row.cron_expression || '',
     target_type: row.target_type || 'scenario',
     target_id: row.target_id || '',
+    service_url: (row.env_config && row.env_config.service_url) || '',
   })
   dialogVisible.value = true
 }
@@ -258,6 +263,7 @@ async function submitForm(): Promise<void> {
       cron_expression: form.cron_expression,
       target_type: form.target_type,
       target_id: form.target_id || null,
+      env_config: form.service_url.trim() ? { service_url: form.service_url.trim() } : {},
     }
     if (isEdit.value) {
       await scheduledTaskApi.updateTask(currentId.value, payload)
