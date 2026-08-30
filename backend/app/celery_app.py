@@ -18,6 +18,7 @@ celery_app = Celery(
         "app.modules.pipeline",
         "app.modules.scheduler.tasks",
         "app.modules.knowledge.tasks",
+        "app.modules.report.tasks",
     ],
 )
 
@@ -112,3 +113,11 @@ def _init_celery_worker(**_kwargs) -> None:
     except Exception as exc:  # noqa: BLE001
         # 任何意外不影响 worker 启动；engine 仍可下次访问时惰性重建
         logger.warning(f"worker_process_init reset failed (non-fatal): {exc}")
+
+    # redis 同理：async 池跨任务 loop 复用会炸 "Event loop is closed"，
+    # worker 模式下 redis async helper 委托同步客户端（无 loop 绑定）
+    try:
+        from app.utils.redis_client import set_worker_redis_mode
+        set_worker_redis_mode()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"worker redis mode set failed (non-fatal): {exc}")

@@ -109,6 +109,7 @@ class ReportGenerator:
         test_run_id: str,
         test_results: dict[str, Any],
         defects: dict[str, Any],
+        context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """
         主方法 — 生成完整测试报告。
@@ -117,6 +118,8 @@ class ReportGenerator:
             test_run_id: 测试任务 ID。
             test_results: 测试执行结果。
             defects: 缺陷分析结果。
+            context: 项目上下文（project_name/branch/commit_sha/source_ref），
+                渲染到报告头部让报告自带归属信息。
 
         Returns:
             {
@@ -141,6 +144,15 @@ class ReportGenerator:
             "test_results": test_results,
             "defects": defects,
         }
+
+        # 项目上下文 → basic_info（报告头部展示归属：项目/分支/commit）
+        ctx = context or {}
+        basic = summary.setdefault("basic_info", {})
+        basic["project_name"] = ctx.get("project_name") or ""
+        basic["branch"] = ctx.get("branch") or ""
+        basic["commit_sha"] = ctx.get("commit_sha") or ""
+        basic["source_ref"] = ctx.get("source_ref") or ""
+        report_data["context"] = ctx
 
         # 3. 构建图表数据
         charts = ChartBuilder.build_all_charts(report_data)

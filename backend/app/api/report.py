@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import Project, TestReport, TestResult, TestRun, User, UserRole
 from app.modules.auth.dependencies import require_role
-from app.utils.database import get_db_session
+from app.utils.database import get_db_session, AsyncSessionLocal
 from app.utils.logger import get_logger
 from app.config import settings
 
@@ -473,12 +473,10 @@ async def generate_report(
             ),
         )
 
-    # 异步执行报告生成
+    # 异步执行报告生成（项目归属上下文在 _generate_report_async 内统一构造）
     import asyncio
 
-    asyncio.create_task(
-        _generate_report_async(run_id, test_results)
-    )
+    asyncio.create_task(_generate_report_async(run_id, test_results))
 
     source = test_results.get("summary", {}).get("source", "redis")
     return {
@@ -665,9 +663,45 @@ async def _load_test_results(
 async def _generate_report_async(
     test_run_id: str,
     test_results: dict[str, Any],
+    context: dict[str, Any] | None = None,
 ) -> None:
-    """异步执行报告生成流程。"""
+    """异步执行报告生成流程。context 为项目归属信息（project_name/branch/commit_sha）。"""
     from app.utils.redis_client import set_task_status, set_task_progress
+
+    # worker（自动生成路径）的 model_router 不经 FastAPI lifespan 加载，且 client
+    # 缓存绑定旧事件循环——任务开始时强制重载（API 进程下此调用无害，一次 DB 读）
+    try:
+        from app.modules.ai.model_router import refresh_model_router_for_worker
+        from app.utils.database import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as session:
+            await refresh_model_router_for_worker(session)
+    except Exception as e:  # noqa: BLE001 - 刷新失败交给后续模型调用自然报错
+        logger.warning(f"[{test_run_id}] model router refresh failed: {e}")
+
+    # 项目归属上下文（报告头部展示：项目/分支/commit/来源）
+    context: dict[str, Any] = {}
+    try:
+        from app.models.database import Project as _P
+
+        async with AsyncSessionLocal() as session:
+            run_row = (
+                await session.execute(
+                    select(TestRun, _P.name)
+                    .outerjoin(_P, _P.id == TestRun.project_id)
+                    .where(TestRun.id == uuid.UUID(test_run_id))
+                )
+            ).first()
+            if run_row:
+                run_obj, pname = run_row
+                context = {
+                    "project_name": pname or "",
+                    "branch": run_obj.branch or "",
+                    "commit_sha": run_obj.commit_sha or "",
+                    "source_ref": run_obj.source_ref or "",
+                }
+    except Exception as e:  # noqa: BLE001 - 上下文缺失只影响展示
+        logger.warning(f"[{test_run_id}] build report context failed: {e}")
 
     try:
         await set_task_status(test_run_id, "analyzing_defects", {"step": "defect_analysis"})
@@ -692,7 +726,9 @@ async def _generate_report_async(
         from app.modules.report import ReportGenerator
 
         generator = ReportGenerator()
-        report_result = await generator.generate(test_run_id, test_results, defects)
+        report_result = await generator.generate(
+            test_run_id, test_results, defects, context=context
+        )
 
         logger.info(
             f"[{test_run_id}] Report generated: score={report_result['quality_score']}, "

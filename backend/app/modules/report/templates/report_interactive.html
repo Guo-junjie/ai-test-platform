@@ -38,6 +38,8 @@
             <span>📅 {{ summary.basic_info.generated_at[:19].replace('T', ' ') }}</span>
             <span>🖥️ {{ summary.basic_info.platform }} v{{ summary.basic_info.version }}</span>
             <span>🆔 {{ summary.basic_info.test_run_id | default('N/A') }}</span>
+            {% if summary.basic_info.project_name %}<span>📁 {{ summary.basic_info.project_name }}</span>{% endif %}
+            {% if summary.basic_info.branch %}<span>🌿 {{ summary.basic_info.branch }}{% if summary.basic_info.commit_sha %} @ {{ summary.basic_info.commit_sha[:8] }}{% endif %}</span>{% endif %}
         </div>
     </div>
 

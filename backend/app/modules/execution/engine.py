@@ -662,6 +662,16 @@ def aggregate_results(
     except Exception as e:  # noqa: BLE001
         logger.warning(f"[coverage] aggregate auto-collect error: {e}")
 
+    # 自动生成测试报告（有结果才生成；异步任务，不阻塞本阶段）
+    if summary.get("total_tests", 0) > 0:
+        try:
+            from app.modules.report.tasks import auto_generate_report
+
+            auto_generate_report.delay(test_run_id)
+            logger.info(f"[{test_run_id}] auto report generation dispatched")
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[{test_run_id}] auto report dispatch failed (non-fatal): {e}")
+
     # CI/CD 集成：项目配置了回调地址时推送结果摘要（best-effort，不阻塞、不重试）
     try:
         import asyncio as _aio

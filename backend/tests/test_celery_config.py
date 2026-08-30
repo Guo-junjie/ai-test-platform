@@ -13,6 +13,7 @@ for _mod in (
     "app.modules.execution.engine",
     "app.modules.scheduler.tasks",
     "app.modules.knowledge.tasks",
+    "app.modules.report.tasks",
 ):
     importlib.import_module(_mod)
 
@@ -64,6 +65,9 @@ class TestTaskRegistration:
             "app.modules.scheduler.tasks.execute_scheduled_task",
         ):
             assert name in celery_app.tasks, f"missing task: {name}"
+
+    def test_report_tasks_registered(self):
+        assert "app.modules.report.tasks.auto_generate_report" in celery_app.tasks
 
     def test_knowledge_tasks_registered(self):
         for name in (
