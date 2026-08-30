@@ -318,10 +318,13 @@ def prepare_environment(
         from app.utils.database import AsyncSessionLocal as _S
 
         async def _proj_cov() -> bool:
+            from app.models.database import TestRun as _TR  # 局部导入：避免与同函数
+            # 链内其他嵌套函数的同名局部导入形成自由变量歧义（实测解析报错）
+
             async with _S() as s:
                 pid_row = (
                     await s.execute(
-                        _select(TestRun.project_id).where(TestRun.id == test_run_id)
+                        _select(_TR.project_id).where(_TR.id == test_run_id)
                     )
                 ).scalar_one_or_none()
                 if not pid_row:
@@ -682,10 +685,12 @@ def aggregate_results(
         from app.models.database import Project as _P
 
         async def _callback():
+            from app.models.database import TestRun as _TR  # 局部导入避免自由变量歧义
+
             async with _S() as s:
                 pid = (
                     await s.execute(
-                        _sel(TestRun.project_id).where(TestRun.id == _uuid.UUID(test_run_id))
+                        _sel(_TR.project_id).where(_TR.id == _uuid.UUID(test_run_id))
                     )
                 ).scalar_one_or_none()
                 if not pid:

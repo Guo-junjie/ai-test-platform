@@ -170,6 +170,20 @@ def run_test_pipeline(self, test_run_id: str, req_dict: dict[str, Any]) -> dict[
         {"test_run_id": str, "status": str} —— 派发结果概要。
     """
     try:
+        # worker 进程不经 FastAPI lifespan，model_router 需逐任务从 DB 重载
+        # （client 缓存绑定旧事件循环，必须清空重建；API 进程无需此操作）
+        try:
+            from app.modules.ai.model_router import refresh_model_router_for_worker
+            from app.utils.database import AsyncSessionLocal
+
+            async def _refresh_router():
+                async with AsyncSessionLocal() as session:
+                    await refresh_model_router_for_worker(session)
+
+            asyncio.run(_refresh_router())
+        except Exception as refresh_err:  # noqa: BLE001
+            logger.warning(f"[{test_run_id}] model router refresh failed: {refresh_err}")
+
         # 取消检查点：拉取前
         if _is_cancelled(test_run_id):
             raise RunCancelled(test_run_id)

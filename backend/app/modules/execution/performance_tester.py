@@ -103,54 +103,64 @@ class PerformanceTester:
         total_requests = 0
         total_errors = 0
 
+        # 错误熔断阈值：连续全错请求达到此数立即终止（AI 生成的性能用例
+        # 可能指向不存在的接口——实测曾无限压测 8.7 万个 404 请求把流水线
+        # 卡死在 92% 十几分钟）
+        CIRCUIT_BREAK_ERRORS = 100
+
         for concurrency in concurrency_levels:
             logger.info(f"  Level: {concurrency} concurrent users")
 
             level_times: list[float] = []
             level_errors = 0
             level_requests = 0
+            consecutive_errors = 0
 
-            # 在指定时间内持续发送请求
             end_time = time.time() + duration_seconds
-            semaphore = asyncio.Semaphore(concurrency)
 
             async def send_request() -> tuple[float, bool]:
-                async with semaphore:
-                    start = time.time()
-                    try:
-                        response = await client.request(
-                            method=method.upper(),
-                            url=url,
-                            headers=headers,
-                            json=body if body else None,
-                        )
-                        elapsed = (time.time() - start) * 1000
-                        is_error = response.status_code >= 400
-                        return elapsed, is_error
-                    except Exception:
-                        elapsed = (time.time() - start) * 1000
-                        return elapsed, True
+                start = time.time()
+                try:
+                    response = await client.request(
+                        method=method.upper(),
+                        url=url,
+                        headers=headers,
+                        json=body if body else None,
+                    )
+                    elapsed = (time.time() - start) * 1000
+                    return elapsed, response.status_code >= 400
+                except Exception:
+                    return (time.time() - start) * 1000, True
 
-            # 持续发送请求直到时间结束
-            tasks: list[asyncio.Task] = []
+            # 受控批次压测：每批 concurrency 个请求并发，完成后立即下一批，
+            # 到时即停。旧实现「每 1ms 无限 create_task + 最后 gather」会让
+            # 任务按请求速度无限堆积，实际时长与请求失败速度成正比膨胀。
+            circuit_broken = False
             while time.time() < end_time:
-                task = asyncio.create_task(send_request())
-                tasks.append(task)
-                # 短暂等待避免任务堆积过快
-                await asyncio.sleep(0.001)
-
-            # 等待所有任务完成
-            if tasks:
-                results = await asyncio.gather(*tasks)
+                batch = [asyncio.create_task(send_request()) for _ in range(concurrency)]
+                results = await asyncio.gather(*batch)
                 for elapsed, is_error in results:
                     level_times.append(elapsed)
                     level_requests += 1
                     if is_error:
                         level_errors += 1
+                        consecutive_errors += 1
+                    else:
+                        consecutive_errors = 0
+                # 熔断：对不存在的接口立即止损
+                if level_requests >= CIRCUIT_BREAK_ERRORS and consecutive_errors >= CIRCUIT_BREAK_ERRORS:
+                    logger.warning(
+                        f"    circuit break: {level_errors}/{level_requests} all errors, "
+                        f"target likely broken (url={url})"
+                    )
+                    circuit_broken = True
+                    break
 
             all_response_times.extend(level_times)
             total_requests += level_requests
             total_errors += level_errors
+            if circuit_broken:
+                break
 
             level_tps = level_requests / duration_seconds if duration_seconds > 0 else 0
             logger.info(

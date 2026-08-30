@@ -408,7 +408,11 @@ async function handleCreate() {
 async function handleUpload(options: UploadRequestOptions) {
   try {
     const res: any = await uploadApi.upload(options.file as File)
-    form.upload_file_path = res?.data?.local_path || ''
+    form.upload_file_path = res?.data?.upload_file_path || ''
+    if (!form.upload_file_path) {
+      ElMessage.error('上传响应缺少压缩包路径，请重试或联系管理员')
+      return
+    }
     ElMessage.success('文件上传成功')
   } catch {
     // Error handled by axios interceptor

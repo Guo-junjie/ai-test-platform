@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.database import Project, User
+from app.models.database import Project, SourceType, User
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.dependencies import require_admin, require_role
 from app.models.database import UserRole
@@ -116,6 +116,57 @@ class CIConfigUpdate(BaseModel):
     callback_url: str | None = None      # 测试完成后回调的 CI 地址
     auto_trigger_enabled: bool = False   # GitHub push 是否自动触发完整测试
     auto_trigger_branches: list[str] = []  # 触发的分支白名单，空 = 全部分支
+
+
+class ProjectCreate(BaseModel):
+    """创建项目请求。"""
+
+    name: str
+    description: str | None = None
+    source_type: str = "upload"
+    source_config: dict = {}
+    quality_gate_config: dict = {}
+
+
+@router.post("")
+async def create_project(
+    req: ProjectCreate,
+    current_user: User = Depends(require_role(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.TEST_MANAGER)),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """显式创建项目（super_admin/admin/test_manager）。
+
+    此前项目只能由测试任务隐式自动创建——用户无法先建项目再上传
+    接口文档/生成用例，属产品缺口（集成测试 2026-08-30 实锤）。
+    """
+    name = (req.name or "").strip()
+    if not name:
+        raise HTTPException(400, "项目名称不能为空")
+    dup = (
+        await db.execute(select(Project).where(Project.name == name))
+    ).scalar_one_or_none()
+    if dup is not None:
+        raise HTTPException(409, f"项目已存在: {name}")
+
+    try:
+        st = SourceType(req.source_type)
+    except ValueError:
+        raise HTTPException(400, f"Invalid source_type: {req.source_type}")
+
+    project = Project(
+        id=uuid.uuid4(),
+        name=name,
+        description=(req.description or "").strip() or None,
+        owner_id=current_user.id,
+        source_type=st,
+        source_config=req.source_config or {},
+        quality_gate_config=req.quality_gate_config or {},
+        is_active=True,
+    )
+    db.add(project)
+    await db.commit()
+    await db.refresh(project)
+    return {"code": 0, "data": _project_to_dict(project), "message": "success"}
 
 
 async def _require_project(project_id: str, db: AsyncSession) -> Project:

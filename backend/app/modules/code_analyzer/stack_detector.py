@@ -32,6 +32,7 @@ STACK_SIGNATURES: dict[str, dict[str, Any]] = {
             "@GetMapping",
             "@PostMapping",
         ],
+        "dep_markers": ["spring-boot"],
         "language": "java",
         "framework": "spring-boot",
     },
@@ -39,6 +40,7 @@ STACK_SIGNATURES: dict[str, dict[str, Any]] = {
         "files": ["requirements.txt", "setup.py", "pyproject.toml"],
         "framework_imports": ["from flask import", "import flask"],
         "route_decorators": ["@app.route", "@blueprint.route", "@bp.route"],
+        "dep_markers": ["flask"],
         "language": "python",
         "framework": "flask",
     },
@@ -46,6 +48,7 @@ STACK_SIGNATURES: dict[str, dict[str, Any]] = {
         "files": ["manage.py", "requirements.txt"],
         "framework_files": ["settings.py"],
         "framework_imports": ["from django", "import django"],
+        "dep_markers": ["django"],
         "language": "python",
         "framework": "django",
     },
@@ -58,6 +61,7 @@ STACK_SIGNATURES: dict[str, dict[str, Any]] = {
             "@router.get",
             "@router.post",
         ],
+        "dep_markers": ["fastapi"],
         "language": "python",
         "framework": "fastapi",
     },
@@ -70,6 +74,7 @@ STACK_SIGNATURES: dict[str, dict[str, Any]] = {
             "router.GET(",
             "router.POST(",
         ],
+        "dep_markers": ["github.com/gin-gonic/gin"],
         "language": "go",
         "framework": "gin",
     },
@@ -82,6 +87,7 @@ STACK_SIGNATURES: dict[str, dict[str, Any]] = {
             "router.get(",
             "router.post(",
         ],
+        "dep_markers": ["\"express\""],
         "language": "javascript",
         "framework": "express",
     },
@@ -95,6 +101,7 @@ STACK_SIGNATURES: dict[str, dict[str, Any]] = {
             "@Put(",
             "@Delete(",
         ],
+        "dep_markers": ["@nestjs/core"],
         "language": "typescript",
         "framework": "nestjs",
     },
@@ -102,6 +109,7 @@ STACK_SIGNATURES: dict[str, dict[str, Any]] = {
         "files": ["composer.json"],
         "framework_files": ["artisan", "config/app.php"],
         "route_files": ["routes/api.php", "routes/web.php"],
+        "dep_markers": ["laravel/framework"],
         "language": "php",
         "framework": "laravel",
     },
@@ -267,6 +275,25 @@ class StackDetector:
             置信度评分（0.0 ~ 1.0+）。
         """
         score = 0.0
+
+        # 0. 依赖清单内容（最强信号 +0.5）：requirements.txt / package.json /
+        #    composer.json / go.mod 里直接声明了框架依赖——轻量项目（单文件
+        #    + 清单）此前只能得 0.3 分走 unknown 兜底，实测漏判 flask 项目
+        dep_files = [
+            "requirements.txt", "pyproject.toml", "setup.py",
+            "package.json", "composer.json", "go.mod", "pom.xml", "build.gradle",
+        ]
+        dep_content = ""
+        for df in dep_files:
+            try:
+                dep_content += (root / df).read_text(encoding="utf-8", errors="ignore").lower()
+            except Exception:  # noqa: BLE001
+                continue
+        if dep_content:
+            for marker in signature.get("dep_markers", []):
+                if marker.lower() in dep_content:
+                    score += 0.5
+                    break
 
         # 1. 文件签名（+0.3 / 个）
         for filename in signature.get("files", []):
