@@ -44,7 +44,9 @@ pydyf==0.8.0
 matplotlib==3.8.2
 
 # 容器管理
-docker==7.0.0
+# 7.1.0：修复与 requests>=2.32 的 "Not supported URL scheme http+docker" 不兼容
+# （7.0.0 在挂载 docker.sock 的容器内 from_env() 必现，能力11 自动覆盖率依赖此能力）
+docker==7.1.0
 
 # 对象存储
 minio==7.2.3

@@ -115,6 +115,10 @@ services:
     volumes:
       - ./backend:/app
       - ./data:/app/data
+      # 能力11 自动覆盖率：探针注入/采集需要操作宿主机 Docker（启动带探针的 SUT、
+      # 拷出覆盖率数据、采集后停止容器）。仅在可信环境开启；安全敏感环境保持注释
+      # 并走「手动上传覆盖率报告」路径。
+      - /var/run/docker.sock:/var/run/docker.sock
     command: celery -A app.celery_app worker --loglevel=info --concurrency=4 -Q celery,execution
 
   celery-beat:
