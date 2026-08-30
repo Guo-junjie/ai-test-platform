@@ -12,7 +12,7 @@
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -54,16 +54,31 @@ class CreateTestRunRequest(BaseModel):
 
 @router.get("")
 async def list_test_runs(
+    project_id: str | None = Query(None, description="按项目ID过滤"),
+    status: str | None = Query(None, description="按状态过滤（pulling/executing/completed/failed...）"),
+    limit: int = Query(100, ge=1, le=500),
     db: AsyncSession = Depends(get_db_session),
 ):
-    """列出所有测试任务。"""
+    """列出测试任务（支持项目/状态过滤）。"""
     # outerjoin Project 让项目名为空时也能保留 run（项目被删/未关联兜底）
-    result = await db.execute(
+    stmt = (
         select(TestRun, Project)
         .outerjoin(Project, Project.id == TestRun.project_id)
         .order_by(TestRun.created_at.desc())
-        .limit(100)
+        .limit(limit)
     )
+    if project_id:
+        try:
+            stmt = stmt.where(TestRun.project_id == uuid.UUID(project_id))
+        except ValueError:
+            raise HTTPException(400, f"Invalid project_id: {project_id}")
+    if status:
+        try:
+            stmt = stmt.where(TestRun.status == TestStatus(status))
+        except ValueError:
+            raise HTTPException(400, f"Invalid status: {status}")
+
+    result = await db.execute(stmt)
     rows = result.fetchall()
 
     return {
