@@ -425,7 +425,8 @@ const badgeSrc = computed(() =>
 async function loadCIProjects(): Promise<void> {
   try {
     const res: any = await projectApi.getList()
-    ciProjects.value = res?.data ?? []
+        const d = res?.data ?? res
+    ciProjects.value = Array.isArray(d) ? d : d?.list || d?.items || []
   } catch {
     ciProjects.value = []
   }

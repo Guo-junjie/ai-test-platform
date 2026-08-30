@@ -327,7 +327,8 @@ async function submitFeedback(
 onMounted(async () => {
   try {
     const res: any = await projectApi.getList()
-    projects.value = res?.data ?? []
+        const d = res?.data ?? res
+    projects.value = Array.isArray(d) ? d : d?.list || d?.items || []
   } catch {
     projects.value = []
   }
