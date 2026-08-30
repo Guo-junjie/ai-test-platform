@@ -222,6 +222,60 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- CI/CD 集成 -->
+    <el-card shadow="hover" style="margin-top: 16px">
+      <template #header>
+        <div class="card-header">
+          <span>CI/CD 集成（Jenkins / GitLab CI / GitHub Actions）</span>
+        </div>
+      </template>
+
+      <el-form label-width="130px" style="max-width: 720px">
+        <el-form-item label="项目">
+          <el-select v-model="ciProjectId" placeholder="选择项目" style="width: 100%" @change="loadCIConfig">
+            <el-option v-for="p in ciProjects" :key="p.id" :label="p.name" :value="p.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="CI Token">
+          <div style="display:flex; gap:8px; width:100%">
+            <el-input v-model="ciToken" readonly placeholder="未生成（生成后仅显示一次，请妥善保存）" />
+            <el-button :disabled="!ciProjectId || !canManageCI" :loading="tokenLoading" @click="handleRotateToken">
+              {{ ciToken ? '轮换' : '生成' }}
+            </el-button>
+          </div>
+        </el-form-item>
+        <el-form-item label="测试完成回调">
+          <el-input v-model="ciCallbackUrl" placeholder="https://ci.example.com/webhook（测试完成后 POST 结果摘要，可空）" />
+        </el-form-item>
+        <el-form-item label="push 自动测试">
+          <div style="display:flex; align-items:center; gap:12px; width:100%">
+            <el-switch v-model="ciTriggerEnabled" />
+            <el-input
+              v-model="ciTriggerBranches"
+              placeholder="触发分支，逗号分隔（留空 = 全部分支），如 main,release"
+              style="flex:1"
+              :disabled="!ciTriggerEnabled"
+            />
+          </div>
+        </el-form-item>
+        <el-form-item label="质量徽章">
+          <div style="display:flex; align-items:center; gap:8px">
+            <img v-if="ciProjectId" :src="badgeSrc" alt="badge" style="height:20px" />
+            <el-button size="small" :disabled="!ciProjectId" @click="copyBadgeUrl">复制 Markdown</el-button>
+          </div>
+        </el-form-item>
+        <el-form-item>
+          <el-button type="primary" :disabled="!ciProjectId || !canManageCI" :loading="ciSaving" @click="saveCIConfig">
+            保存 CI 配置
+          </el-button>
+        </el-form-item>
+      </el-form>
+
+      <el-alert type="info" :closable="false" show-icon title="CI 用法" description="
+curl -X POST 平台地址/api/webhook/trigger -H 'X-CI-Token: <Token>' -d '{&quot;branch&quot;:&quot;main&quot;}'
+# 轮询卡点：curl 平台地址/api/webhook/ci-result/<test_run_id>?token=<Token> → ci_passed" />
+    </el-card>
   </div>
 </template>
 
@@ -229,7 +283,8 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { UploadRequestOptions } from 'element-plus'
-import { sourceApi, uploadApi } from '@/api'
+import { sourceApi, uploadApi, projectApi, projectConfigApi } from '@/api'
+import { useAuthStore } from '@/stores'
 import SourceForm from '@/components/SourceForm.vue'
 
 // ==================== State ====================
@@ -350,6 +405,94 @@ async function handleUpload(options: UploadRequestOptions) {
 
 onMounted(() => {
   loadSources()
+})
+
+// ============ CI/CD 集成 ============
+const authStoreCI = useAuthStore()
+const canManageCI = computed(() => ['super_admin', 'admin'].includes(authStoreCI.role))
+const ciProjects = ref<any[]>([])
+const ciProjectId = ref<string>('')
+const ciToken = ref<string>('')
+const ciCallbackUrl = ref<string>('')
+const ciTriggerEnabled = ref<boolean>(false)
+const ciTriggerBranches = ref<string>('')
+const tokenLoading = ref<boolean>(false)
+const ciSaving = ref<boolean>(false)
+const badgeSrc = computed(() =>
+  ciProjectId.value ? projectConfigApi.badgeUrl(ciProjectId.value) : ''
+)
+
+async function loadCIProjects(): Promise<void> {
+  try {
+    const res: any = await projectApi.getList()
+    ciProjects.value = res?.data ?? []
+  } catch {
+    ciProjects.value = []
+  }
+}
+
+async function loadCIConfig(): Promise<void> {
+  ciToken.value = ''
+  if (!ciProjectId.value) return
+  try {
+    const res: any = await projectConfigApi.getCIConfig(ciProjectId.value)
+    if (res?.code === 0 && res?.data) {
+      ciCallbackUrl.value = res.data.callback_url || ''
+      ciTriggerEnabled.value = !!res.data.auto_trigger?.enabled
+      ciTriggerBranches.value = (res.data.auto_trigger?.branches || []).join(',')
+    }
+  } catch { /* 忽略 */ }
+}
+
+async function handleRotateToken(): Promise<void> {
+  try {
+    tokenLoading.value = true
+    const res: any = await projectConfigApi.rotateCIToken(ciProjectId.value)
+    if (res?.code === 0) {
+      ciToken.value = res.data.token
+      ElMessage.success('Token 已生成，请立即保存（仅本次可见）')
+    } else {
+      ElMessage.error(res?.message || '生成失败')
+    }
+  } finally {
+    tokenLoading.value = false
+  }
+}
+
+async function saveCIConfig(): Promise<void> {
+  try {
+    ciSaving.value = true
+    const res: any = await projectConfigApi.updateCIConfig(ciProjectId.value, {
+      callback_url: ciCallbackUrl.value.trim() || undefined,
+      auto_trigger_enabled: ciTriggerEnabled.value,
+      auto_trigger_branches: ciTriggerBranches.value
+        .split(',')
+        .map((b) => b.trim())
+        .filter(Boolean),
+    })
+    if (res?.code === 0) {
+      ElMessage.success('CI 配置已保存')
+    } else {
+      ElMessage.error(res?.message || '保存失败')
+    }
+  } finally {
+    ciSaving.value = false
+  }
+}
+
+async function copyBadgeUrl(): Promise<void> {
+  const origin = window.location.origin
+  const md = `[![tests](${origin}${projectConfigApi.badgeUrl(ciProjectId.value)})](${origin}/coverage)`
+  try {
+    await navigator.clipboard.writeText(md)
+    ElMessage.success('Markdown 已复制')
+  } catch {
+    ElMessage.warning(md)
+  }
+}
+
+onMounted(() => {
+  void loadCIProjects()
 })
 </script>
 
