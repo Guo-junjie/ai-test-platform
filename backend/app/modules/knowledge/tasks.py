@@ -22,6 +22,25 @@ def rebuild_knowledge_base(
     return asyncio.run(_rebuild(kb_type, force_full))
 
 
+@celery_app.task(name="app.modules.knowledge.tasks.process_knowledge_document", bind=True)
+def process_knowledge_document(self, doc_id: str) -> dict:
+    """索引单个知识文档（解析→章节切片→嵌入→入库）。
+
+    文档上传/重新索引后由 API 派发；状态流转 parsing→indexed/failed 落在
+    knowledge_documents.status，前端通过列表/详情轮询。
+    """
+    import uuid as _uuid
+
+    return asyncio.run(_process_document(_uuid.UUID(doc_id)))
+
+
+async def _process_document(doc_id) -> dict:
+    from app.modules.knowledge.document_indexer import index_document
+
+    async with AsyncSessionLocal() as db:
+        return await index_document(db, doc_id)
+
+
 async def _rebuild(kb_type: str | None, force_full: bool = False) -> dict:
     """全量重建逻辑（在 Celery Worker 进程内运行）。
 

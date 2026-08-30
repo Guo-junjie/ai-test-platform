@@ -16,6 +16,7 @@ from app.models.database import (
     Defect,
     TestCase,
     ApiEndpoint,
+    TestRun,
     KBChunkType,
 )
 
@@ -56,6 +57,7 @@ async def upsert_chunks(db: AsyncSession, records: list[dict]) -> int:
         chunk = KnowledgeChunk(
             id=rec.get("id") or uuid.uuid4(),
             kb_type=rec["kb_type"],
+            project_id=rec.get("project_id"),
             source_ref=rec.get("source_ref"),
             content=rec["content"],
             embedding=rec.get("embedding"),
@@ -70,19 +72,25 @@ async def upsert_chunks(db: AsyncSession, records: list[dict]) -> int:
 
 async def _fetch_source_rows(
     db: AsyncSession, kb_type: str
-) -> list[tuple[str, str, dict]]:
-    """按 kb_type 从对应源表取 (source_ref, content, meta)。
+) -> list[tuple[str, str, dict, str | None]]:
+    """按 kb_type 从对应源表取 (source_ref, content, meta, project_id)。
 
     各源表字段以 app/models/database.py 真实列名为准；JSONB 列统一 or {} / or [] 防 None，
     拼串前统一 str() / json.dumps(..., ensure_ascii=False)，避免 None 进 +。
+    project_id：defect/case 经 test_run 关联解析；doc 直接取；term 为全局(None)。
+    4 元组自 P0 项目隔离起生效，旧调用按 4 元组解包。
     """
     import json
 
-    rows: list[tuple[str, str, dict]] = []
+    rows: list[tuple[str, str, dict, str | None]] = []
 
     if kb_type == "defect":
-        result = await db.execute(select(Defect))
-        for d in result.scalars().all():
+        result = await db.execute(
+            select(Defect, TestRun.project_id).outerjoin(
+                TestRun, TestRun.id == Defect.test_run_id
+            )
+        )
+        for d, project_id in result.all():
             content = " ".join(
                 str(x) for x in [d.title, d.description, d.root_cause, d.fix_suggestion] if x
             ).strip()
@@ -92,11 +100,15 @@ async def _fetch_source_rows(
                 "defect_type": d.defect_type.value if d.defect_type else None,
                 "severity": d.severity.value if d.severity else None,
             }
-            rows.append((f"defect:{d.id}", content, meta))
+            rows.append((f"defect:{d.id}", content, meta, str(project_id) if project_id else None))
 
     elif kb_type == "case":
-        result = await db.execute(select(TestCase))
-        for c in result.scalars().all():
+        result = await db.execute(
+            select(TestCase, TestRun.project_id).outerjoin(
+                TestRun, TestRun.id == TestCase.test_run_id
+            )
+        )
+        for c, project_id in result.all():
             expected = c.expected_result or {}
             expected_summary = json.dumps(expected, ensure_ascii=False) if expected else ""
             content = " ".join(
@@ -113,7 +125,7 @@ async def _fetch_source_rows(
             if not content:
                 continue
             meta = {"case_type": c.case_type, "priority": c.priority}
-            rows.append((f"case:{c.id}", content, meta))
+            rows.append((f"case:{c.id}", content, meta, str(project_id) if project_id else None))
 
     elif kb_type == "doc":
         result = await db.execute(select(ApiEndpoint))
@@ -132,7 +144,7 @@ async def _fetch_source_rows(
             if not content:
                 continue
             meta = {"method": e.method, "path": e.path}
-            rows.append((f"doc:{e.id}", content, meta))
+            rows.append((f"doc:{e.id}", content, meta, str(e.project_id) if e.project_id else None))
 
     elif kb_type == "term":
         result = await db.execute(select(KnowledgeTerm))
@@ -144,7 +156,7 @@ async def _fetch_source_rows(
             if not content:
                 continue
             meta = {"domain": t.domain}
-            rows.append((f"term:{t.id}", content, meta))
+            rows.append((f"term:{t.id}", content, meta, None))
 
     return rows
 
@@ -171,11 +183,14 @@ async def _full_rebuild_kb_type(db: AsyncSession, kb_type: str) -> int:
     """
     rows = await _fetch_source_rows(db, kb_type)
     records: list[dict] = []
-    for source_ref, content, meta in rows:
+    for source_ref, content, meta, project_id in rows:
         src_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
-        records.extend(
-            build_chunk_records(content, kb_type, source_ref, meta, src_hash=src_hash)
+        new_records = build_chunk_records(
+            content, kb_type, source_ref, meta, src_hash=src_hash
         )
+        for r in new_records:
+            r["project_id"] = project_id
+        records.extend(new_records)
 
     if records:
         texts = [r["content"] for r in records]
@@ -206,9 +221,9 @@ async def _incremental_rebuild_kb_type(db: AsyncSession, kb_type: str) -> int:
     """
     # 1) 当前源行
     rows = await _fetch_source_rows(db, kb_type)
-    current: dict[str, tuple[str, dict]] = {}
-    for source_ref, content, meta in rows:
-        current[source_ref] = (content, meta)
+    current: dict[str, tuple[str, dict, str | None]] = {}
+    for source_ref, content, meta, project_id in rows:
+        current[source_ref] = (content, meta, project_id)
 
     # 2) 已存 chunk 的 _src_hash（按 source_ref 分组，取其一）
     existing = (
@@ -224,11 +239,11 @@ async def _incremental_rebuild_kb_type(db: AsyncSession, kb_type: str) -> int:
         existing_hash.setdefault(c.source_ref, h)
 
     # 3) 计算当前哈希，判定变更 / 新增
-    changed_refs: list[tuple[str, str, dict, str]] = []
-    for source_ref, (content, meta) in current.items():
+    changed_refs: list[tuple[str, str, dict, str, str | None]] = []
+    for source_ref, (content, meta, project_id) in current.items():
         src_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
         if existing_hash.get(source_ref) != src_hash:
-            changed_refs.append((source_ref, content, meta, src_hash))
+            changed_refs.append((source_ref, content, meta, src_hash, project_id))
 
     # 首次增量：老 chunk 无 _src_hash，会触发整体重算（预期行为，仅记日志）
     if existing_hash and any(v is None for v in existing_hash.values()):
@@ -249,11 +264,13 @@ async def _incremental_rebuild_kb_type(db: AsyncSession, kb_type: str) -> int:
 
     total = 0
     # 5) 变更/新增：先删该 ref 旧 chunk，再重插（带新哈希 + 重新 embed）
-    for source_ref, content, meta, src_hash in changed_refs:
+    for source_ref, content, meta, src_hash, project_id in changed_refs:
         await delete_chunks_by_source_ref(db, kb_type, source_ref)
         records = build_chunk_records(
             content, kb_type, source_ref, meta, src_hash=src_hash
         )
+        for r in records:
+            r["project_id"] = project_id
         if records:
             texts = [r["content"] for r in records]
             emb = await embed_texts(texts)  # None 安全 → 关键词兜底

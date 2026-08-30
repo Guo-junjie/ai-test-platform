@@ -67,11 +67,16 @@ class UserRole(PyEnum):
 # ==================== 能力12 枚举 ====================
 
 class KBChunkType(PyEnum):
-    """知识库切片类型（SAEnum 必须显式 name=，避开 PG 枚举名大小写坑）"""
+    """知识库切片类型（SAEnum 必须显式 name=，避开 PG 枚举名大小写坑）
+
+    document 为人工上传的知识文档（测试规范/经验手册等）；doc 为接口资产切片
+    （历史命名，语义实为 endpoint，保持兼容不再新增此类内容）。
+    """
     DEFECT = "defect"
     CASE = "case"
     DOC = "doc"
     TERM = "term"
+    DOCUMENT = "document"
 
 
 # ==================== 能力3/4 枚举 ====================
@@ -852,6 +857,9 @@ class KnowledgeChunk(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     # SAEnum 必须显式 name=，否则 PG 枚举名全小写易触发 asyncpg DatatypeMismatchError
     kb_type = Column(CasePairEnum(KBChunkType, values_callable=lambda x: [e.value for e in x], name="kbchunktype"), nullable=False, index=True)
+    # 项目隔离：文档类切片必填（绝不跨项目泄漏）；自动派生切片尽力回填，
+    # NULL 表示全局知识（术语等），检索过滤规则为 (project_id IS NULL OR project_id = :pid)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=True)
     source_ref = Column(String(200), nullable=True, index=True)
     content = Column(Text, nullable=False)
     # JSONB 存 float[]；无嵌入模型时为 NULL（关键词检索兜底）
@@ -861,6 +869,7 @@ class KnowledgeChunk(Base):
 
     __table_args__ = (
         Index("ix_knowledge_chunks_type_created", "kb_type", "created_at"),
+        Index("ix_knowledge_chunks_project", "project_id"),
     )
 
 
@@ -900,6 +909,43 @@ class KBRuntimeConfig(Base):
     key = Column(String(64), primary_key=True)
     value = Column(JSONB, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# ==================== 知识文档（P0：人工上传文档入知识库） ====================
+
+
+class KnowledgeDocument(Base):
+    """知识文档 — 人工上传的测试规范/经验手册等非结构化知识（文档中心化 P0）。
+
+    生命周期（简化版）：parsing → indexed / failed；删除即移除文件与全部切片。
+    解析出的全文缓存在 raw_text，重新索引（换嵌入模型后）无需重新解析文件。
+    """
+    __tablename__ = "knowledge_documents"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    uploader_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    title = Column(String(500), nullable=False)
+    filename = Column(String(500), nullable=False)
+    file_type = Column(String(20), nullable=False)  # pdf / docx / md / txt
+    category = Column(String(100), nullable=True)   # 测试规范 / 技术知识 / 测试经验 / FAQ ...
+    description = Column(Text, nullable=True)
+    storage_key = Column(String(500), nullable=False)   # 本地卷路径 /app/data/uploads/knowledge/<uuid>.<ext>
+    minio_key = Column(String(500), nullable=True)      # MinIO 镜像对象名，失败为 NULL
+    file_size = Column(Integer, default=0)
+    sha256 = Column(String(64), nullable=True, index=True)
+    version = Column(Integer, default=1)
+    status = Column(String(20), default="parsing", nullable=False)  # parsing / indexed / failed
+    chunk_count = Column(Integer, default=0)
+    error = Column(Text, nullable=True)
+    raw_text = Column(Text, nullable=True)              # 解析全文缓存（重建索引免重解析）
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("idx_knowledge_documents_project", "project_id"),
+        Index("idx_knowledge_documents_status", "status"),
+    )
 
 
 # ==================== 数据库初始化 ====================
@@ -1158,6 +1204,28 @@ async def init_db():
         logger.warning(f"Skip test_results case_type sync (connection error): {e}")
     else:
         logger.info("TestResult case_type/case_name columns + (test_run_id,case_type) index ensured")
+
+    # 能力12 P0 项目隔离：补齐 knowledge_chunks.project_id 列 + 索引。
+    # create_all 不会 ALTER 既有表，故此处用幂等 ADD COLUMN IF NOT EXISTS 兜底。
+    try:
+        async with async_engine.connect() as conn:
+            autocommit_conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
+            try:
+                await autocommit_conn.execute(
+                    text("ALTER TABLE knowledge_chunks ADD COLUMN IF NOT EXISTS project_id UUID")
+                )
+                await autocommit_conn.execute(
+                    text("CREATE INDEX IF NOT EXISTS ix_knowledge_chunks_project ON knowledge_chunks(project_id)")
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to add knowledge_chunks.project_id: {e}. "
+                    f"请手动 ALTER 或执行 alembic 迁移。"
+                )
+    except Exception as e:
+        logger.warning(f"Skip knowledge_chunks.project_id sync (connection error): {e}")
+    else:
+        logger.info("KnowledgeChunk project_id column + index ensured")
 
     # 能力12：best-effort 启用 pgvector 快路径（失败仅记日志，代码绝不依赖；
     # 检索使用 JSONB + Python 侧余弦相似度，不要求 pgvector 扩展）。

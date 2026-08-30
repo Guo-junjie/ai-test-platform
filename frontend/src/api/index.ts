@@ -395,7 +395,7 @@ export const reportAnalysisApi = {
 }
 
 // ============ 知识库 RAG（能力12：状态概览 / 术语表维护 / 检索预览） ============
-export type KbType = 'defect' | 'case' | 'doc' | 'term'
+export type KbType = 'defect' | 'case' | 'doc' | 'term' | 'document'
 
 export const knowledgeApi = {
   /** 知识库概览：enabled / 切片数 / 术语数 / 嵌入模型 / 上次重建时间 / 卡死判定 */
@@ -435,8 +435,33 @@ export const knowledgeApi = {
   /** 删除术语 */
   removeTerm: (id: string) => api.delete(`/knowledge/terms/${id}`),
   /** 检索预览 */
-  search: (data: { query: string; kb_type: string; top_k?: number }) =>
+  search: (data: { query: string; kb_type: string; top_k?: number; project_id?: string }) =>
     api.post('/knowledge/search', data),
+  // ============ 知识文档（P0 文档中心化） ============
+  /** 上传知识文档（pdf/docx/md/txt ≤20MB），派发异步索引任务 */
+  uploadDocument: (
+    file: File,
+    payload: { project_id: string; title?: string; category?: string; description?: string }
+  ) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('project_id', payload.project_id)
+    if (payload.title) fd.append('title', payload.title)
+    if (payload.category) fd.append('category', payload.category)
+    if (payload.description) fd.append('description', payload.description)
+    return api.post('/knowledge/documents', fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 120000,
+    })
+  },
+  /** 文档列表：params { project_id?, status?, q?, page, size } */
+  listDocuments: (params?: any) => api.get('/knowledge/documents', { params }),
+  /** 文档详情 */
+  getDocument: (id: string) => api.get(`/knowledge/documents/${id}`),
+  /** 删除文档（含全部切片） */
+  removeDocument: (id: string) => api.delete(`/knowledge/documents/${id}`),
+  /** 重新索引（更换嵌入模型后） */
+  reindexDocument: (id: string) => api.post(`/knowledge/documents/${id}/reindex`),
 }
 
 export default api

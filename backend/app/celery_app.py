@@ -47,14 +47,22 @@ celery_app.conf.update(
     task_time_limit=60 * 60,
 )
 
-# Celery Beat 配置 — 使用 django-celery-beat DatabaseScheduler
-try:
-    celery_app.conf.update(
-        beat_scheduler="django_celery_beat.schedulers:DatabaseScheduler",
-    )
-except ImportError:
-    # django-celery-beat 未安装时的容错
-    pass
+# Celery Beat 调度 — 静态 tick 模式。
+#
+# 为什么不用 django-celery-beat DatabaseScheduler：
+# 这是 FastAPI 项目，没有 Django settings（DJANGO_SETTINGS_MODULE），
+# DatabaseScheduler 在 beat 进程 import django_celery_beat.models 时即抛
+# ImproperlyConfigured（beat 容器启动即崩，Exited(1)，实锤于部署机日志）。
+#
+# 现方案：beat 每 30 秒派发一次 scheduled_tick，由它轮询 scheduled_tasks 表、
+# 按 cron_expression 计算到期任务并乐观锁抢占后派发 execute_scheduled_task。
+# 定时任务的增删改是纯 DB 操作，tick 天然感知，无需重启 beat。
+celery_app.conf.beat_schedule = {
+    "scheduled-tick-every-30s": {
+        "task": "app.modules.scheduler.tasks.scheduled_tick",
+        "schedule": 30.0,
+    },
+}
 
 
 @celery_app.task(bind=True)

@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.pool import NullPool
 from loguru import logger
 
 from app.config import settings
@@ -140,14 +141,18 @@ def reset_async_engine() -> None:
         except Exception as exc:  # noqa: BLE001
             logger.warning(f"reset_async_engine: dispose old engine failed (non-fatal): {exc}")
 
-    # 2) 重建 engine
+    # 2) 重建 engine。
+    # 【必须用 NullPool】Celery 每个任务都是 asyncio.run() 新建 event loop，
+    # QueuePool 会把上一个 loop 创建的 asyncpg 连接复用到下一个 loop，
+    # 触发 "Future attached to a different loop"（pool_pre_ping 对 asyncpg 的
+    # RuntimeError 不归类为断连，无法稳定自愈——部署机 2026-08-30 实锤：
+    # scheduled_tick 与 process_knowledge_document 反复失败）。
+    # NullPool 完全不复用连接，每个 loop 内新建/关闭，从根上消除该问题；
+    # worker 任务频率低（30s tick + 偶发任务），无连接复用收益，性能无感。
     new_engine = create_async_engine(
         settings.async_database_url,
         echo=settings.APP_DEBUG,
-        pool_size=20,
-        max_overflow=10,
-        pool_pre_ping=True,
-        pool_recycle=3600,
+        poolclass=NullPool,
     )
 
     # 3) 重建 sessionmaker 绑定新 engine
