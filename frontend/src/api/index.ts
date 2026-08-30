@@ -118,6 +118,8 @@ export const reportApi = {
   getPdf: (runId: string) => api.get(`/reports/${runId}/pdf`, { responseType: 'blob' }),
   share: (runId: string) => api.get(`/reports/${runId}/share`),
   generate: (runId: string) => api.post(`/reports/${runId}/generate`, {}, { timeout: 300000 }),
+  /** 删除报告（manager 及以上，不影响底层测试数据） */
+  remove: (runId: string) => api.delete(`/reports/${runId}`),
 }
 
 // ============ AI 模型配置 ============

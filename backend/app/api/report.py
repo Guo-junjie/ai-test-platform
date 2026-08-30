@@ -18,10 +18,11 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse, FileResponse
 from pathlib import Path
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, func, Integer, delete as sa_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.database import TestReport, TestRun
+from app.models.database import Project, TestReport, TestResult, TestRun, User, UserRole
+from app.modules.auth.dependencies import require_role
 from app.utils.database import get_db_session
 from app.utils.logger import get_logger
 from app.config import settings
@@ -53,11 +54,13 @@ async def get_report_history(
     支持按 test_run_id 或 project_id 过滤，分页返回。
     """
     query = select(TestReport).order_by(desc(TestReport.created_at))
+    count_query = select(func.count()).select_from(TestReport)
 
     if test_run_id:
         try:
             run_uuid = uuid.UUID(test_run_id)
             query = query.where(TestReport.test_run_id == run_uuid)
+            count_query = count_query.where(TestReport.test_run_id == run_uuid)
         except ValueError:
             raise HTTPException(400, f"Invalid test_run_id: {test_run_id}")
 
@@ -68,15 +71,44 @@ async def get_report_history(
         run_ids = [row[0] for row in run_result.fetchall()]
         if run_ids:
             query = query.where(TestReport.test_run_id.in_(run_ids))
+            count_query = count_query.where(TestReport.test_run_id.in_(run_ids))
         else:
             return {"code": 0, "data": {"list": [], "total": 0}, "message": "success"}
 
-    # 分页
+    # 分页（total 必须全量计数——此前 len(当前页) 导致超过一页后分页失效）
     offset = (page - 1) * page_size
     query = query.offset(offset).limit(page_size)
 
     result = await db.execute(query)
     reports = result.scalars().all()
+    total = (await db.execute(count_query)).scalar() or 0
+
+    # 批量补充项目信息与通过率（避免逐行 N+1）
+    run_ids = [r.test_run_id for r in reports]
+    runs_map: dict = {}
+    stats_map: dict = {}
+    if run_ids:
+        runs_rows = await db.execute(
+            select(TestRun.id, TestRun.project_id, Project.name)
+            .join(Project, Project.id == TestRun.project_id)
+            .where(TestRun.id.in_(run_ids))
+        )
+        for rid, pid, pname in runs_rows.fetchall():
+            runs_map[rid] = {"project_id": str(pid) if pid else None, "project_name": pname or "—"}
+
+        from app.models.database import TestResult
+
+        stats_rows = await db.execute(
+            select(
+                TestResult.test_run_id,
+                func.count(),
+                func.sum(func.cast(func.coalesce(TestResult.is_passed, False), Integer)),
+            )
+            .where(TestResult.test_run_id.in_(run_ids))
+            .group_by(TestResult.test_run_id)
+        )
+        for rid, total_cnt, passed_cnt in stats_rows.fetchall():
+            stats_map[rid] = (total_cnt or 0, int(passed_cnt or 0))
 
     return {
         "code": 0,
@@ -85,6 +117,10 @@ async def get_report_history(
                 {
                     "id": str(r.id),
                     "test_run_id": str(r.test_run_id),
+                    "project_id": runs_map.get(r.test_run_id, {}).get("project_id"),
+                    "project_name": runs_map.get(r.test_run_id, {}).get("project_name", "—"),
+                    "total_tests": stats_map.get(r.test_run_id, (0, 0))[0],
+                    "passed_tests": stats_map.get(r.test_run_id, (0, 0))[1],
                     "quality_score": r.quality_score,
                     "gate_passed": r.gate_passed,
                     "html_path": r.html_path,
@@ -94,11 +130,61 @@ async def get_report_history(
                 }
                 for r in reports
             ],
-            "total": len(reports),
+            "total": total,
             "page": page,
             "page_size": page_size,
         },
         "message": "success",
+    }
+
+
+@router.delete("/{run_id}")
+async def delete_report(
+    run_id: str,
+    current_user: User = Depends(require_role(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.TEST_MANAGER)),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """删除测试报告（manager 及以上）：DB 记录 + MinIO/本地报告文件 best-effort 清理。
+
+    只删报告，不删测试任务/用例/结果等底层数据。
+    """
+    import uuid as _uuid
+
+    try:
+        rid = _uuid.UUID(run_id)
+    except ValueError:
+        raise HTTPException(400, f"Invalid run_id: {run_id}")
+
+    report = (
+        await db.execute(select(TestReport).where(TestReport.test_run_id == rid))
+    ).scalar_one_or_none()
+    if report is None:
+        raise HTTPException(404, f"Report not found for run: {run_id}")
+
+    # 报告文件（MinIO + 本地）best-effort 清理
+    removed_files = 0
+    try:
+        from app.utils.storage import get_minio_client
+
+        client = get_minio_client()
+        for key in (report.html_path, report.pdf_path):
+            if key and "/" in key:
+                bucket = key.split("/", 1)[0]
+                obj = key.split("/", 1)[1]
+                try:
+                    client.remove_object(bucket, obj)
+                    removed_files += 1
+                except Exception:  # noqa: BLE001
+                    pass
+    except Exception:  # noqa: BLE001 - MinIO 不可用不阻塞 DB 删除
+        pass
+
+    await db.execute(sa_delete(TestReport).where(TestReport.id == report.id))
+    await db.commit()
+    return {
+        "code": 0,
+        "data": {"deleted": True, "files_removed": removed_files},
+        "message": "报告已删除",
     }
 
 
