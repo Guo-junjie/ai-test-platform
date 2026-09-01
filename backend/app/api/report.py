@@ -188,6 +188,46 @@ async def delete_report(
     }
 
 
+@router.get("/{run_id}/share-view")
+async def share_view(
+    run_id: str,
+    db: AsyncSession = Depends(get_db_session),
+):
+    """
+    整页渲染报告 HTML（text/html），供分享链接在浏览器直接打开。
+
+    与 /{run_id}/html 的区别：后者返回 JSON 包裹（供前端 iframe 取 html 字段），
+    本路由直接返回裸 HTML，浏览器打开即整页渲染，图表也能正常显示。
+    """
+    try:
+        run_uuid = uuid.UUID(run_id)
+    except ValueError:
+        raise HTTPException(400, f"Invalid run_id: {run_id}")
+
+    result = await db.execute(
+        select(TestReport).where(TestReport.test_run_id == run_uuid)
+    )
+    report = result.scalar_one_or_none()
+
+    if report is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"报告尚未生成（run_id={run_id}）。请先点击「重新生成报告」按钮。",
+        )
+
+    html_object_name = report.html_path
+    if not html_object_name:
+        raise HTTPException(404, "HTML report path not available (请重新生成报告)")
+
+    html_content = await _load_report_html(html_object_name)
+    if html_content is None:
+        raise HTTPException(500, "Failed to read HTML report")
+
+    return Response(content=html_content, media_type="text/html")
+
+
+
+
 @router.get("/{run_id}")
 async def get_report(
     run_id: str,
@@ -285,44 +325,6 @@ async def serve_echarts_bundle():
     if not _ECHARTS_PATH.exists():
         raise HTTPException(404, "echarts bundle not found (请重新部署后端)")
     return FileResponse(str(_ECHARTS_PATH), media_type="application/javascript")
-
-
-@router.get("/{run_id}/share-view")
-async def share_view(
-    run_id: str,
-    db: AsyncSession = Depends(get_db_session),
-):
-    """
-    整页渲染报告 HTML（text/html），供分享链接在浏览器直接打开。
-
-    与 /{run_id}/html 的区别：后者返回 JSON 包裹（供前端 iframe 取 html 字段），
-    本路由直接返回裸 HTML，浏览器打开即整页渲染，图表也能正常显示。
-    """
-    try:
-        run_uuid = uuid.UUID(run_id)
-    except ValueError:
-        raise HTTPException(400, f"Invalid run_id: {run_id}")
-
-    result = await db.execute(
-        select(TestReport).where(TestReport.test_run_id == run_uuid)
-    )
-    report = result.scalar_one_or_none()
-
-    if report is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"报告尚未生成（run_id={run_id}）。请先点击「重新生成报告」按钮。",
-        )
-
-    html_object_name = report.html_path
-    if not html_object_name:
-        raise HTTPException(404, "HTML report path not available (请重新生成报告)")
-
-    html_content = await _load_report_html(html_object_name)
-    if html_content is None:
-        raise HTTPException(500, "Failed to read HTML report")
-
-    return Response(content=html_content, media_type="text/html")
 
 
 @router.get("/{run_id}/pdf")

@@ -242,7 +242,14 @@ async function viewReport(row: any) {
 
   try {
     const res: any = await reportApi.getHtml(row.test_run_id)
-    reportHtml.value = res?.data?.html || ''
+    let html = res?.data?.html || ''
+    // srcdoc iframe 无 origin，相对路径（/api/...）静默解析失败 → 图表库
+    // 加载不了（图表永远"加载中"的根因）。注入 <base> 以平台后端为基准解析
+    if (html && !/<base\s/i.test(html)) {
+      const origin = window.location.origin
+      html = html.replace(/<head([^>]*)>/i, `<head$1><base href="${origin}/">`)
+    }
+    reportHtml.value = html
   } catch {
     ElMessage.error('无法加载报告内容')
   } finally {

@@ -350,7 +350,8 @@ class Defect(Base):
     __tablename__ = "defects"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    test_run_id = Column(UUID(as_uuid=True), ForeignKey("test_runs.id"), nullable=False)
+    # nullable=True：缺陷中心支持手动登记（不挂测试任务）
+    test_run_id = Column(UUID(as_uuid=True), ForeignKey("test_runs.id"), nullable=True)
     test_case_id = Column(UUID(as_uuid=True), ForeignKey("test_cases.id"), nullable=True)
 
     # 缺陷信息
@@ -368,6 +369,12 @@ class Defect(Base):
 
     # 状态
     is_resolved = Column(Boolean, default=False)
+    # 缺陷中心状态机（open/in_fix/verified/closed/rejected）；
+    # 历史数据 NULL 视为 open
+    status = Column(String(20), default="open", nullable=True)
+    # 归属项目（流水线缺陷经 test_run 解析回填；手动创建直接填写；
+    # NULL 兜底为全局可见）
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -376,6 +383,8 @@ class Defect(Base):
 
     __table_args__ = (
         Index("idx_defects_run_severity", "test_run_id", "severity"),
+        Index("idx_defects_status", "status"),
+        Index("idx_defects_project", "project_id"),
     )
 
 
@@ -1248,6 +1257,26 @@ async def init_db():
         logger.warning(f"Skip knowledge_chunks.project_id sync (connection error): {e}")
     else:
         logger.info("KnowledgeChunk project_id column + index ensured")
+
+    # 缺陷中心：补齐 defects.status / project_id 列 + 索引（create_all 不 ALTER 旧表）。
+    try:
+        async with async_engine.connect() as conn:
+            autocommit_conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
+            for col_sql in (
+                "ALTER TABLE defects ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'open'",
+                "ALTER TABLE defects ADD COLUMN IF NOT EXISTS project_id UUID",
+                "CREATE INDEX IF NOT EXISTS idx_defects_status ON defects(status)",
+                "CREATE INDEX IF NOT EXISTS idx_defects_project ON defects(project_id)",
+                "ALTER TABLE defects ALTER COLUMN test_run_id DROP NOT NULL",
+            ):
+                try:
+                    await autocommit_conn.execute(text(col_sql))
+                except Exception as e:
+                    logger.warning(f"Failed ({col_sql[:40]}...): {e}")
+    except Exception as e:
+        logger.warning(f"Skip defects columns sync: {e}")
+    else:
+        logger.info("Defect status/project_id columns ensured")
 
     # 能力12：best-effort 启用 pgvector 快路径（失败仅记日志，代码绝不依赖；
     # 检索使用 JSONB + Python 侧余弦相似度，不要求 pgvector 扩展）。

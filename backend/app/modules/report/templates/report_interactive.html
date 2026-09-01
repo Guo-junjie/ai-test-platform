@@ -10,22 +10,47 @@
      ② 在分享链接整页打开（backend 源）→ 同域直接加载。
      这样无论哪种打开方式图表都能渲染，彻底摆脱对 /echarts.min.js（仅 frontend 源可用）
      以及外网 CDN 的依赖。unpkg 仍作为最后的兜底。 -->
-<script src="/api/reports/static/echarts.min.js"
-            onerror="loadEchartsFallback(this)"></script>
-    <script>
-    function loadEchartsFallback(failedScript) {
-        if (failedScript.dataset.fallbackTried) return;
-        failedScript.dataset.fallbackTried = '1';
-        var s = document.createElement('script');
-        s.src = 'https://unpkg.com/echarts@5/dist/echarts.min.js';
-        s.onerror = showChartError;
-        document.head.appendChild(s);
-    }
-    function showChartError() {
-        document.querySelectorAll('.chart-container').forEach(function(el) {
-            el.innerHTML = '<div class="chart-error">📊 图表库加载失败<br/><small>请检查网络（CDN 不可达）</small></div>';
-        });
-    }
+<script>
+    // echarts 加载器（自包含，双向解耦——body 脚本通过 __setChartInit 注册）。
+    // 背景：srcdoc iframe（报告页内嵌查看）里 about:srcdoc 无 origin，相对路径
+    // /api/... 静默解析失败且不触发 onerror，是「图表永远加载中」的根因。
+    // 策略：1) location.origin 绝对地址（直开/分享页）2) 相对路径（前端注入的
+    // <base> 兜底解析）3) 全部失败显示明确错误。
+    (function () {
+        var echartsLoaded = false;
+        var chartInitFn = null;
+
+        function fire() {
+            if (echartsLoaded && chartInitFn) {
+                try { chartInitFn(); } catch (e) { console.error('chart init error', e); }
+            }
+        }
+        window.__setChartInit = function (fn) {
+            chartInitFn = fn;
+            fire();
+        };
+        function onEchartsLoad() { echartsLoaded = true; fire(); }
+        function showChartError() {
+            document.querySelectorAll('.chart-container').forEach(function (el) {
+                el.innerHTML = '<div class="chart-error">📊 图表库加载失败<br/><small>请检查与平台后端(/api)的网络连通</small></div>';
+            });
+        }
+        // srcdoc 的 location.origin 是字符串 "null"，只有 http(s) 开头才可用
+        var bases = [];
+        try {
+            if (location.origin && location.origin.indexOf('http') === 0) bases.push(location.origin);
+        } catch (e) { /* ignore */ }
+        bases.push('');  // 相对路径：由 <base>（前端注入）或同源直开解析
+        var i = 0;
+        (function tryNext() {
+            if (i >= bases.length) { showChartError(); return; }
+            var s = document.createElement('script');
+            s.src = bases[i] + '/api/reports/static/echarts.min.js';
+            s.onload = onEchartsLoad;
+            s.onerror = function () { i += 1; tryNext(); };
+            document.head.appendChild(s);
+        })();
+    })();
     </script>
 </head>
 <body>
@@ -254,8 +279,8 @@
 // 传递数据给 JS
 var reportData = {{ report_data_json | safe }};
 
-// 渲染 ECharts 图表
-document.addEventListener('DOMContentLoaded', function() {
+// 渲染 ECharts 图表（向 head 加载器注册；echarts 未就绪时由加载器回调触发）
+function __renderCharts() {
     var charts = reportData.charts || {};
 
     // 如果echarts 库加载失败（CDN 全挂），showChartError 已经把占位换成「加载失败」提示
@@ -314,7 +339,12 @@ document.addEventListener('DOMContentLoaded', function() {
             if (instance) instance.resize();
         });
     });
-});
+}
+
+// 注册到 head 加载器：echarts 已就绪立即渲染，否则等加载完成回调
+if (window.__setChartInit) {
+    window.__setChartInit(__renderCharts);
+}
 
 // 表格行展开/折叠
 function toggleDetail(btn) {

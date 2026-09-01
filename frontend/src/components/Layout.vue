@@ -31,6 +31,7 @@
             <span>测试资产</span>
           </template>
           <el-menu-item index="/case-library">用例库</el-menu-item>
+          <el-menu-item index="/defects">缺陷中心</el-menu-item>
           <el-menu-item index="/scenario">场景编排</el-menu-item>
           <el-menu-item index="/doc-parser">接口文档解析</el-menu-item>
           <el-menu-item index="/doc-review">接口文档评审</el-menu-item>
