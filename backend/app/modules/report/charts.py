@@ -20,7 +20,7 @@ class ChartBuilder:
     """
 
     @staticmethod
-    def build_quality_gauge(score: int) -> dict[str, Any]:
+    def build_quality_gauge(score: int | float | None = 0) -> dict[str, Any]:
         """
         构建质量评分仪表盘。
 
@@ -30,9 +30,15 @@ class ChartBuilder:
         Returns:
             ECharts Gauge option dict。
         """
-        if score >= 80:
+        try:
+            score_val = int(score) if score is not None else 0
+        except (ValueError, TypeError):
+            score_val = 0
+        score_val = max(0, min(100, score_val))
+
+        if score_val >= 80:
             color = "#67c23a"
-        elif score >= 60:
+        elif score_val >= 60:
             color = "#e6a23c"
         else:
             color = "#f56c6c"
@@ -41,18 +47,20 @@ class ChartBuilder:
             "title": {
                 "text": "质量评分",
                 "left": "center",
-                "top": "10%",
-                "textStyle": {"fontSize": 16, "fontWeight": "bold"},
+                "top": "8%",
+                "textStyle": {"fontSize": 15, "fontWeight": "bold"},
             },
             "series": [
                 {
                     "type": "gauge",
+                    "center": ["50%", "58%"],
+                    "radius": "80%",
                     "min": 0,
                     "max": 100,
                     "splitNumber": 10,
                     "axisLine": {
                         "lineStyle": {
-                            "width": 20,
+                            "width": 18,
                             "color": [
                                 [0.6, "#f56c6c"],
                                 [0.8, "#e6a23c"],
@@ -60,15 +68,16 @@ class ChartBuilder:
                             ],
                         }
                     },
-                    "pointer": {"width": 5},
+                    "pointer": {"width": 5, "length": "60%"},
                     "detail": {
                         "valueAnimation": True,
                         "formatter": "{value}",
-                        "fontSize": 32,
+                        "fontSize": 30,
+                        "fontWeight": "bold",
                         "color": color,
-                        "offsetCenter": [0, "70%"],
+                        "offsetCenter": [0, "72%"],
                     },
-                    "data": [{"value": score}],
+                    "data": [{"value": score_val}],
                 }
             ],
         }

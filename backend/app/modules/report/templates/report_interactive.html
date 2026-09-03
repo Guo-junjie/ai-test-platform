@@ -288,13 +288,19 @@ function __renderCharts() {
         return;
     }
 
-    // 工具：渲染前清掉占位，渲染失败时显示「无数据可显示」
+    // 工具：渲染前清掉占位，渲染失败时显示错误或无数据
     function initChart(id, option) {
         var el = document.getElementById(id);
         if (!el) return;
         if (option) {
-            el.innerHTML = '';  // 清占位
-            echarts.init(el).setOption(option);
+            try {
+                el.innerHTML = '';  // 清占位
+                var myChart = echarts.init(el);
+                myChart.setOption(option);
+            } catch (err) {
+                console.error('Failed to init chart ' + id, err);
+                el.innerHTML = '<div class="chart-error">📊 图表渲染失败<br/><small>' + (err && err.message ? err.message : '未知错误') + '</small></div>';
+            }
         } else {
             el.innerHTML = '<div class="chart-error">📊 暂无数据<br/><small>本报告无该图表数据</small></div>';
         }
@@ -311,20 +317,27 @@ function __renderCharts() {
 
     // 通过率柱状图
     if (charts.pass_rate_bar) {
-        var passEl = document.getElementById('chart-pass-rate');
-        passEl.innerHTML = '';
-        var passRateChart = echarts.init(passEl);
-        // 修复 tooltip formatter
-        if (charts.pass_rate_bar.tooltip) {
-            charts.pass_rate_bar.tooltip.formatter = function(params) {
-                var html = params[0].name + '<br/>';
-                params.forEach(function(p) {
-                    html += p.marker + p.seriesName + ': ' + p.value + '<br/>';
-                });
-                return html;
-            };
+        try {
+            var passEl = document.getElementById('chart-pass-rate');
+            if (passEl) {
+                passEl.innerHTML = '';
+                var passRateChart = echarts.init(passEl);
+                // 修复 tooltip formatter
+                if (charts.pass_rate_bar.tooltip) {
+                    charts.pass_rate_bar.tooltip.formatter = function(params) {
+                        var html = params[0].name + '<br/>';
+                        params.forEach(function(p) {
+                            html += p.marker + p.seriesName + ': ' + p.value + '<br/>';
+                        });
+                        return html;
+                    };
+                }
+                passRateChart.setOption(charts.pass_rate_bar);
+            }
+        } catch (err) {
+            console.error('Failed to init chart chart-pass-rate', err);
+            initChart('chart-pass-rate', null);
         }
-        passRateChart.setOption(charts.pass_rate_bar);
     } else {
         initChart('chart-pass-rate', null);
     }
