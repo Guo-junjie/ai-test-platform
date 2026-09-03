@@ -22,6 +22,64 @@ def rebuild_knowledge_base(
     return asyncio.run(_rebuild(kb_type, force_full))
 
 
+@celery_app.task(name="app.modules.knowledge.tasks.process_knowledge_document", bind=True)
+def process_knowledge_document(self, doc_id: str) -> dict:
+    """索引单个知识文档（解析→章节切片→嵌入→入库）。
+
+    文档上传/重新索引后由 API 派发；状态流转 parsing→indexed/failed 落在
+    knowledge_documents.status，前端通过列表/详情轮询。
+    """
+    import uuid as _uuid
+
+    return asyncio.run(_process_document(_uuid.UUID(doc_id)))
+
+
+async def _process_document(doc_id) -> dict:
+    from app.modules.knowledge.document_indexer import index_document
+
+    async with AsyncSessionLocal() as db:
+        return await index_document(db, doc_id)
+
+
+@celery_app.task(name="app.modules.knowledge.tasks.auto_sync_knowledge")
+def auto_sync_knowledge() -> dict:
+    """知识自动同步 — Celery Beat 每日派发，增量重建 defect/case/doc/term 四类切片。
+
+    经验闭环的最后一环：新产生的缺陷/用例/接口资产无需管理员手动点「一键重建」，
+    每日凌晨自动增量入知识库（内容哈希 diff，只重算变更项，嵌入配额消耗极小）。
+    知识文档（document 类）不走此任务——它们在上传/重新索引时即时索引。
+
+    守卫：手动重建进行中（state==running 且未卡死）则跳过本轮，避免并发重建。
+    """
+    return asyncio.run(_auto_sync())
+
+
+async def _auto_sync() -> dict:
+    from datetime import datetime
+
+    from app.modules.knowledge.retriever import get_rebuild_state
+
+    try:
+        async with AsyncSessionLocal() as s:
+            state = await get_rebuild_state(s)
+        if state.get("state") == "running":
+            updated = state.get("updated_at")
+            recent = True
+            if updated:
+                try:
+                    upd = datetime.fromisoformat(updated)
+                    # 与 API 侧一致的卡死判定（1 小时）：卡死则放行自动重建
+                    recent = (datetime.utcnow() - upd).total_seconds() < 3600
+                except Exception:  # noqa: BLE001
+                    recent = True
+            if recent:
+                return {"status": "skipped", "reason": "manual rebuild in progress"}
+        return await _rebuild(None, force_full=False)
+    except Exception as exc:  # noqa: BLE001 - 定时任务失败不影响主流程
+        logger.exception(f"KB auto sync failed: {exc}")
+        return {"status": "error", "error": str(exc)}
+
+
 async def _rebuild(kb_type: str | None, force_full: bool = False) -> dict:
     """全量重建逻辑（在 Celery Worker 进程内运行）。
 

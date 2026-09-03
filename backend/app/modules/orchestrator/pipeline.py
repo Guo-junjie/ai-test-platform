@@ -277,11 +277,15 @@ class PipelineOrchestrator:
         await set_task_progress(test_run_id, self.PROGRESS_GENERATE, "生成测试用例")
 
         from app.modules.case_generator import TestCaseGenerator
+        from app.utils.database import get_test_run_project_id
+
+        # 能力12 P1：解析项目 ID，让知识库注入按项目过滤（解析失败走全局回退）
+        project_id = await get_test_run_project_id(test_run_id)
 
         generator = TestCaseGenerator()
         apis = analysis_result.get("apis", [])
         ai_analysis = analysis_result.get("ai_analysis", {})
-        test_cases = await generator.generate_all(apis, ai_analysis)
+        test_cases = await generator.generate_all(apis, ai_analysis, project_id=project_id)
 
         logger.info(
             f"[{test_run_id}] Cases generated: "

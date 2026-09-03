@@ -25,6 +25,12 @@ const routes = [
     meta: { title: '测试运行' },
   },
   {
+    path: '/defects',
+    name: 'Defects',
+    component: () => import('@/views/Defects.vue'),
+    meta: { title: '缺陷中心' },
+  },
+  {
     path: '/report',
     name: 'ReportList',
     component: () => import('@/views/Report.vue'),
@@ -167,6 +173,12 @@ const routes = [
     name: 'KnowledgeBase',
     component: () => import('@/views/KnowledgeBase.vue'),
     meta: { title: '知识库RAG' },
+  },
+  {
+    path: '/knowledge-qa',
+    name: 'KnowledgeQA',
+    component: () => import('@/views/KnowledgeQA.vue'),
+    meta: { title: '知识问答' },
   },
   // 兜底：任何未注册路径统一回仪表盘，避免匹配失败时 router-view 渲染空白页且无任何报错
   {

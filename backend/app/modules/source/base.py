@@ -64,6 +64,9 @@ class SourceConfig:
     # 通用
     workspace_dir: str = "/app/data/repos"
     incremental: bool = True
+    # upload 专用：保留压缩包（上传接口需返回路径供后续测试任务再次解压；
+    # 流水线内二次解压时默认 False，用完即删）
+    keep_archive: bool = False
 
 
 class CodeSourceAdapter(ABC):

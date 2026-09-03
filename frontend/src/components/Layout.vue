@@ -31,6 +31,7 @@
             <span>测试资产</span>
           </template>
           <el-menu-item index="/case-library">用例库</el-menu-item>
+          <el-menu-item index="/defects">缺陷中心</el-menu-item>
           <el-menu-item index="/scenario">场景编排</el-menu-item>
           <el-menu-item index="/doc-parser">接口文档解析</el-menu-item>
           <el-menu-item index="/doc-review">接口文档评审</el-menu-item>
@@ -53,6 +54,7 @@
           <el-menu-item index="/quality-trend">质量趋势</el-menu-item>
           <el-menu-item index="/sources">数据源管理</el-menu-item>
           <el-menu-item index="/knowledge">知识库RAG</el-menu-item>
+          <el-menu-item index="/knowledge-qa">知识问答</el-menu-item>
         </el-sub-menu>
 
         <!-- 系统 -->

@@ -89,29 +89,54 @@ async def search_terms(
     return [t for t, _ in scored[:top_k]]
 
 
+def _source_label(chunk: KnowledgeChunk) -> str:
+    """生成人类可读的来源标签（新文档原则四：AI 输出必须有来源）。
+
+    文档切片优先展示《文档名》§章节标题；其余回退 source_ref 原样。
+    """
+    meta = chunk.meta if isinstance(chunk.meta, dict) else {}
+    doc_title = meta.get("doc_title") or ""
+    if doc_title:
+        section = meta.get("chunk_title") or ""
+        label = f"文档《{doc_title}》"
+        if section:
+            label += f"·{section}"
+        return label
+    return chunk.source_ref or ""
+
+
 async def retrieve_chunks(
     db: AsyncSession,
     query: str,
     kb_type: str,
     top_k: int = 5,
     candidate_limit: int = 5000,
+    project_id: str | None = None,
 ) -> list[RetrievalHit]:
     """候选集 SELECT ... WHERE kb_type ORDER BY created_at DESC LIMIT 5000。
 
     有 query 向量且候选有 embedding → 余弦排序取 top_k；
     否则 → 关键词打分(token 重叠) 取 top_k。
     仅保留正向得分命中，避免注入无关内容。
+
+    项目隔离：project_id 提供时过滤 (project_id IS NULL OR project_id = :pid) —
+    文档类切片必填 project_id 绝不跨项目泄漏；术语等全局切片（NULL）始终可见。
     """
     try:
         kb_enum = KBChunkType(kb_type)
     except ValueError:
         return []
-    result = await db.execute(
+    stmt = (
         select(KnowledgeChunk)
         .where(KnowledgeChunk.kb_type == kb_enum)
         .order_by(KnowledgeChunk.created_at.desc())
         .limit(candidate_limit)
     )
+    if project_id:
+        stmt = stmt.where(
+            (KnowledgeChunk.project_id.is_(None)) | (KnowledgeChunk.project_id == project_id)
+        )
+    result = await db.execute(stmt)
     candidates = result.scalars().all()
     if not candidates:
         return []
@@ -187,6 +212,7 @@ async def retrieve_and_inject(
     query: str,
     kb_type: str,
     top_k: int = 5,
+    project_id: str | None = None,
 ) -> str:
     """统一注入入口（所有注入点唯一调用）。
 
@@ -194,7 +220,7 @@ async def retrieve_and_inject(
     - query 空 → return ""
     - db 为 None 时自行开短生命周期 AsyncSessionLocal() 并在 finally 关闭
     - kb_type=='term' → 调 search_terms 拼【业务术语参考】
-    - 其他 → retrieve_chunks 拼【历史经验参考】
+    - 其他 → retrieve_chunks 拼【历史经验参考】；project_id 提供时按项目过滤
     - 任何异常 → 记日志并 return ""（绝不抛出，不阻塞主流程）
     返回可直接拼到 prompt 顶部的字符串。
     """
@@ -252,13 +278,14 @@ async def retrieve_and_inject(
             )
             return kb
         else:
-            hits = await retrieve_chunks(db, query, kb_type, top_k=top_k)
+            hits = await retrieve_chunks(
+                db, query, kb_type, top_k=top_k, project_id=project_id
+            )
             if not hits:
                 return ""
             lines = []
             for h in hits:
-                ref = h.chunk.source_ref or ""
-                lines.append(f"【{ref}】{h.chunk.content}")
+                lines.append(f"【{_source_label(h.chunk)}】{h.chunk.content}")
             kb = "【历史经验参考】\n" + "\n".join(lines)
             top_score = hits[0].score if hits else 0.0
             logger.info(

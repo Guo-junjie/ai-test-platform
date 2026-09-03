@@ -10,6 +10,15 @@
             新建测试任务
           </el-button>
         </div>
+      
+        <div style="display:flex; gap:8px; align-items:center">
+          <el-select v-model="filterProjectId" placeholder="全部项目" clearable style="width: 170px" @change="onFilterChange">
+            <el-option v-for="p in projects" :key="p.id" :label="p.name" :value="p.id" />
+          </el-select>
+          <el-select v-model="filterStatus" placeholder="全部状态" clearable style="width: 140px" @change="onFilterChange">
+            <el-option v-for="(label, key) in STATUS_OPTIONS" :key="key" :label="label" :value="key" />
+          </el-select>
+        </div>
       </template>
 
       <el-table
@@ -19,6 +28,11 @@
         style="width: 100%"
         @row-click="handleRowClick"
       >
+        <el-table-column label="项目" min-width="130" show-overflow-tooltip>
+          <template #default="{ row }">
+            <el-tag size="small" effect="plain">{{ row.project_name || '—' }}</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="任务 ID" width="120">
           <template #default="{ row }">
             <span class="mono-text">{{ row.id.substring(0, 8) }}</span>
@@ -230,6 +244,7 @@
 import { ref, reactive, onMounted, onUnmounted } from 'vue'
 import { Plus, UploadFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { projectApi } from '@/api'
 import type { UploadRequestOptions } from 'element-plus'
 import { testRunApi, uploadApi } from '@/api'
 
@@ -259,10 +274,37 @@ const form = reactive({
 
 // ==================== Methods ====================
 
+// ============ 项目/状态筛选 ============
+const projects = ref<any[]>([])
+const filterProjectId = ref<string>('')
+const filterStatus = ref<string>('')
+const STATUS_OPTIONS: Record<string, string> = {
+  pending: '等待中', pulling: '拉取代码', analyzing: '解析中',
+  generating: '生成用例', executing: '执行中', analyzing_defects: '缺陷分析',
+  reporting: '生成报告', completed: '已完成', failed: '失败', cancelled: '已取消',
+}
+
+function onFilterChange(): void {
+  void loadTestRuns()
+}
+
+async function loadProjects(): Promise<void> {
+  try {
+    const res: any = await projectApi.getList()
+    const d = res?.data ?? res
+    projects.value = Array.isArray(d) ? d : d?.list || d?.items || []
+  } catch {
+    projects.value = []
+  }
+}
+
 async function loadTestRuns() {
   loading.value = true
   try {
-    const res: any = await testRunApi.list()
+    const params: any = {}
+    if (filterProjectId.value) params.project_id = filterProjectId.value
+    if (filterStatus.value) params.status = filterStatus.value
+    const res: any = await testRunApi.getList(params)
     testRuns.value = res?.data?.list || []
 
     // Auto-poll for in-progress tasks
@@ -366,7 +408,11 @@ async function handleCreate() {
 async function handleUpload(options: UploadRequestOptions) {
   try {
     const res: any = await uploadApi.upload(options.file as File)
-    form.upload_file_path = res?.data?.local_path || ''
+    form.upload_file_path = res?.data?.upload_file_path || ''
+    if (!form.upload_file_path) {
+      ElMessage.error('上传响应缺少压缩包路径，请重试或联系管理员')
+      return
+    }
     ElMessage.success('文件上传成功')
   } catch {
     // Error handled by axios interceptor
@@ -438,6 +484,7 @@ function formatTime(time: string): string {
 // ==================== Lifecycle ====================
 
 onMounted(() => {
+  void loadProjects()
   loadTestRuns()
 })
 

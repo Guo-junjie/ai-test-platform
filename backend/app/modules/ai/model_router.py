@@ -188,6 +188,20 @@ async def refresh_model_router_from_db(db) -> None:
     )
 
 
+async def refresh_model_router_for_worker(db) -> None:
+    """Celery worker 任务环境专用：清空 client 缓存并从 DB 重载配置。
+
+    为什么必须逐任务刷新：worker 里每个任务都是 asyncio.run() 的新事件循环，
+    UnifiedModelClient 内的 AsyncOpenAI 持有绑定旧 loop 的连接，跨任务复用
+    会触发 "attached to a different loop"（与 asyncpg 连接同类问题，NullPool
+    同款修法思路——配置是纯数据可复用，**client 必须每 loop 重建**）。
+    API 进程不要调用本函数（其 router 生命周期与进程一致，client 复用正常）。
+    """
+    router = get_model_router()
+    router._clients.clear()
+    await refresh_model_router_from_db(db)
+
+
 async def init_default_models() -> None:
     """
     初始化模型路由器：从数据库加载已配置的模型。

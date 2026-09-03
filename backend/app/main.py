@@ -247,6 +247,10 @@ app.include_router(scheduled_tasks_router, prefix="/api/scheduled-tasks", tags=[
 from app.api.report_analysis import router as report_analysis_router
 app.include_router(report_analysis_router, prefix="/api", tags=["报告分析"])
 
+# 缺陷中心（独立缺陷管理：过滤/搜索/状态流转/手动创建）
+from app.api.defects import router as defects_router
+app.include_router(defects_router, prefix="/api/defects", tags=["缺陷中心"])
+
 # 知识库 RAG（能力12：状态概览 / 术语表维护 / 检索预览）
 from app.api.knowledge import router as knowledge_router
 app.include_router(knowledge_router, prefix="/api/knowledge", tags=["知识库RAG"])

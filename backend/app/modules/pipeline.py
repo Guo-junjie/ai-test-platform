@@ -24,6 +24,8 @@ from sqlalchemy import select, text  # noqa: F401  (text 供后续扩展/排错�
 from app.celery_app import celery_app as app
 from app.models.database import TestRun, TestStatus
 from app.modules.execution.engine import (
+    RunCancelled,
+    _is_cancelled,
     _set_task_progress_sync,
     _set_task_status_sync,
 )
@@ -65,9 +67,42 @@ def _mark_run_failed(test_run_id: str, error: str) -> None:
         logger.error(f"[{test_run_id}] Failed to update DB status: {db_err}")
 
 
+def _mark_run_cancelled(test_run_id: str) -> None:
+    """将 TestRun 行状态置为 CANCELLED（流水线各阶段检测到取消标志时调用）。"""
+
+    async def _update() -> None:
+        from app.utils.database import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(TestRun).where(TestRun.id == uuid.UUID(test_run_id))
+            )
+            run = result.scalar_one_or_none()
+            if run:
+                run.status = TestStatus.CANCELLED
+                run.error_message = "Cancelled by user"
+                run.completed_at = datetime.utcnow()
+                await session.commit()
+
+    try:
+        asyncio.run(_update())
+    except Exception as db_err:  # pragma: no cover - 兜底日志
+        logger.error(f"[{test_run_id}] Failed to mark cancelled: {db_err}")
+
+
 def _persist_test_cases(test_run_id: str, test_cases: dict[str, list[dict[str, Any]]]) -> int:
-    """
-    把流水线生成的 3 类测试用例（api / performance / integration）入库到 test_cases 表。
+    """同步包装（Celery 同步任务用）；async 上下文请直接 await _persist_test_cases_async。"""
+    try:
+        total = asyncio.run(_persist_test_cases_async(test_run_id, test_cases))
+        logger.info(f"[{test_run_id}] Persisted {total} test_cases to DB")
+        return total
+    except Exception as db_err:  # pragma: no cover - 兜底日志
+        logger.warning(f"[{test_run_id}] persist_test_cases failed (non-fatal): {db_err}")
+    return 0
+
+
+async def _persist_test_cases_async(test_run_id: str, test_cases: dict[str, list[dict[str, Any]]]) -> int:
+    """把流水线生成的 3 类测试用例（api / performance / integration）入库到 test_cases 表。
 
     原数据流缺这一段 —— generate_all 只返回内存 dict，没写入 DB，会让后续
     测试结果（test_results.test_case_id）没有 FK 可挂。
@@ -89,41 +124,32 @@ def _persist_test_cases(test_run_id: str, test_cases: dict[str, list[dict[str, A
         logger.warning(f"[{test_run_id}] invalid uuid, skip persist_test_cases")
         return 0
 
-    async def _do_persist() -> int:
-        nonlocal total
+    async with AsyncSessionLocal() as session:
         from sqlalchemy import insert as sa_insert
 
-        async with AsyncSessionLocal() as session:
-            rows: list[dict[str, Any]] = []
-            for case_type, cases in test_cases.items():
-                if not cases:
-                    continue
-                for case in cases:
-                    rows.append({
-                        "id": uuid.uuid4(),
-                        "test_run_id": run_uuid,
-                        "case_type": case_type,  # api / performance / integration
-                        "case_name": (case.get("name") or case.get("case_name") or "")[:500],
-                        "description": case.get("description") or "",
-                        "request_data": case.get("request_data") or {},
-                        "expected_result": case.get("expected_result") or {},
-                        "validation_rules": case.get("validation_rules") or {},
-                        "priority": case.get("priority") or "P2",
-                        "api_path": case.get("api_path") or "",
-                        "http_method": case.get("http_method") or "",
-                    })
-            if not rows:
-                return 0
-            await session.execute(sa_insert(TestCase), rows)
-            await session.commit()
-            return len(rows)
-
-    try:
-        total = asyncio.run(_do_persist())
-        logger.info(f"[{test_run_id}] Persisted {total} test_cases to DB")
-    except Exception as db_err:  # pragma: no cover - 兜底日志
-        logger.warning(f"[{test_run_id}] persist_test_cases failed (non-fatal): {db_err}")
-    return total
+        rows: list[dict[str, Any]] = []
+        for case_type, cases in test_cases.items():
+            if not cases:
+                continue
+            for case in cases:
+                rows.append({
+                    "id": uuid.uuid4(),
+                    "test_run_id": run_uuid,
+                    "case_type": case_type,  # api / performance / integration
+                    "case_name": (case.get("name") or case.get("case_name") or "")[:500],
+                    "description": case.get("description") or "",
+                    "request_data": case.get("request_data") or {},
+                    "expected_result": case.get("expected_result") or {},
+                    "validation_rules": case.get("validation_rules") or {},
+                    "priority": case.get("priority") or "P2",
+                    "api_path": case.get("api_path") or "",
+                    "http_method": case.get("http_method") or "",
+                })
+        if not rows:
+            return 0
+        await session.execute(sa_insert(TestCase), rows)
+        await session.commit()
+        return len(rows)
 
 
 # ==================== Celery 任务 ====================
@@ -144,6 +170,24 @@ def run_test_pipeline(self, test_run_id: str, req_dict: dict[str, Any]) -> dict[
         {"test_run_id": str, "status": str} —— 派发结果概要。
     """
     try:
+        # worker 进程不经 FastAPI lifespan，model_router 需逐任务从 DB 重载
+        # （client 缓存绑定旧事件循环，必须清空重建；API 进程无需此操作）
+        try:
+            from app.modules.ai.model_router import refresh_model_router_for_worker
+            from app.utils.database import AsyncSessionLocal
+
+            async def _refresh_router():
+                async with AsyncSessionLocal() as session:
+                    await refresh_model_router_for_worker(session)
+
+            asyncio.run(_refresh_router())
+        except Exception as refresh_err:  # noqa: BLE001
+            logger.warning(f"[{test_run_id}] model router refresh failed: {refresh_err}")
+
+        # 取消检查点：拉取前
+        if _is_cancelled(test_run_id):
+            raise RunCancelled(test_run_id)
+
         # Step 1: 代码拉取
         _set_task_status_sync(test_run_id, "pulling", {"step": "fetching_code"})
         _set_task_progress_sync(test_run_id, 10, "拉取代码")
@@ -171,6 +215,9 @@ def run_test_pipeline(self, test_run_id: str, req_dict: dict[str, Any]) -> dict[
         # Step 2: 代码解析
         _set_task_status_sync(test_run_id, "analyzing", {"step": "code_analysis"})
         _set_task_progress_sync(test_run_id, 25, "代码解析")
+
+        if _is_cancelled(test_run_id):
+            raise RunCancelled(test_run_id)
 
         from app.modules.code_analyzer import AICodeAnalyzer, APIExtractor, StackDetector
 
@@ -214,10 +261,19 @@ def run_test_pipeline(self, test_run_id: str, req_dict: dict[str, Any]) -> dict[
         _set_task_status_sync(test_run_id, "generating", {"step": "case_generation"})
         _set_task_progress_sync(test_run_id, 40, "生成测试用例")
 
+        if _is_cancelled(test_run_id):
+            raise RunCancelled(test_run_id)
+
         from app.modules.case_generator import TestCaseGenerator
+        from app.utils.database import get_test_run_project_id
+
+        # 能力12 P1：解析项目 ID，让知识库注入按项目过滤（解析失败走全局回退）
+        project_id = asyncio.run(get_test_run_project_id(test_run_id))
 
         generator = TestCaseGenerator()
-        test_cases = asyncio.run(generator.generate_all(apis, ai_analysis))
+        test_cases = asyncio.run(
+            generator.generate_all(apis, ai_analysis, project_id=project_id)
+        )
 
         logger.info(
             f"[{test_run_id}] Cases generated: "
@@ -242,6 +298,11 @@ def run_test_pipeline(self, test_run_id: str, req_dict: dict[str, Any]) -> dict[
         logger.info(f"[{test_run_id}] Pipeline dispatched, waiting for execution...")
 
         return {"test_run_id": test_run_id, "status": "executing"}
+
+    except RunCancelled:
+        logger.info(f"[{test_run_id}] Pipeline cancelled by user")
+        _mark_run_cancelled(test_run_id)
+        return {"test_run_id": test_run_id, "status": "cancelled"}
 
     except Exception as e:
         logger.error(f"[{test_run_id}] Pipeline failed: {e}", exc_info=True)

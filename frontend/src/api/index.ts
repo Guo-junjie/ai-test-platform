@@ -118,6 +118,8 @@ export const reportApi = {
   getPdf: (runId: string) => api.get(`/reports/${runId}/pdf`, { responseType: 'blob' }),
   share: (runId: string) => api.get(`/reports/${runId}/share`),
   generate: (runId: string) => api.post(`/reports/${runId}/generate`, {}, { timeout: 300000 }),
+  /** 删除报告（manager 及以上，不影响底层测试数据） */
+  remove: (runId: string) => api.delete(`/reports/${runId}`),
 }
 
 // ============ AI 模型配置 ============
@@ -395,7 +397,7 @@ export const reportAnalysisApi = {
 }
 
 // ============ 知识库 RAG（能力12：状态概览 / 术语表维护 / 检索预览） ============
-export type KbType = 'defect' | 'case' | 'doc' | 'term'
+export type KbType = 'defect' | 'case' | 'doc' | 'term' | 'document'
 
 export const knowledgeApi = {
   /** 知识库概览：enabled / 切片数 / 术语数 / 嵌入模型 / 上次重建时间 / 卡死判定 */
@@ -435,8 +437,66 @@ export const knowledgeApi = {
   /** 删除术语 */
   removeTerm: (id: string) => api.delete(`/knowledge/terms/${id}`),
   /** 检索预览 */
-  search: (data: { query: string; kb_type: string; top_k?: number }) =>
+  search: (data: { query: string; kb_type: string; top_k?: number; project_id?: string }) =>
     api.post('/knowledge/search', data),
+  // ============ 知识文档（P0 文档中心化） ============
+  /** 上传知识文档（pdf/docx/md/txt ≤20MB），派发异步索引任务 */
+  uploadDocument: (
+    file: File,
+    payload: { project_id: string; title?: string; category?: string; description?: string }
+  ) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('project_id', payload.project_id)
+    if (payload.title) fd.append('title', payload.title)
+    if (payload.category) fd.append('category', payload.category)
+    if (payload.description) fd.append('description', payload.description)
+    return api.post('/knowledge/documents', fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 120000,
+    })
+  },
+  /** 文档列表：params { project_id?, status?, q?, page, size } */
+  listDocuments: (params?: any) => api.get('/knowledge/documents', { params }),
+  /** 文档详情 */
+  getDocument: (id: string) => api.get(`/knowledge/documents/${id}`),
+  /** 删除文档（含全部切片） */
+  removeDocument: (id: string) => api.delete(`/knowledge/documents/${id}`),
+  /** 重新索引（更换嵌入模型后） */
+  reindexDocument: (id: string) => api.post(`/knowledge/documents/${id}/reindex`),
+  // ============ 知识问答（RAG Chat）与反馈 ============
+  /** 提问：多类型检索 → LLM 带引用回答。data { question, project_id?, top_k? } */
+  ask: (data: { question: string; project_id?: string; top_k?: number }) =>
+    api.post('/knowledge/ask', data, { timeout: 300000 }),
+  /** 提交反馈（点赞/点踩）。data { question, answer?, rating: 'up'|'down', comment?, retrieved? } */
+  submitFeedback: (data: {
+    question: string
+    answer?: string
+    rating: 'up' | 'down'
+    comment?: string
+    retrieved?: Array<Record<string, unknown>>
+  }) => api.post('/knowledge/feedback', data),
+  /** 反馈列表与统计（admin/manager）。params { rating?, page, size } */
+  listFeedback: (params?: any) => api.get('/knowledge/feedback', { params }),
+}
+
+// ============ 项目配置（覆盖率开关 / CI/CD 集成） ============
+export const projectConfigApi = {
+  /** 项目级自动覆盖率开关（manager 及以上） */
+  setCoverageConfig: (projectId: string, autoCoverage: boolean) =>
+    api.put(`/projects/${projectId}/coverage-config`, { auto_coverage: autoCoverage }),
+  /** 查看 CI 配置（token 脱敏） */
+  getCIConfig: (projectId: string) => api.get(`/projects/${projectId}/ci-config`),
+  /** 更新 CI 配置（admin）：回调地址 + push 自动触发规则 */
+  updateCIConfig: (
+    projectId: string,
+    data: { callback_url?: string; auto_trigger_enabled?: boolean; auto_trigger_branches?: string[] }
+  ) => api.put(`/projects/${projectId}/ci-config`, data),
+  /** 生成/轮换 CI Token（admin），明文仅本次返回 */
+  rotateCIToken: (projectId: string) =>
+    api.post(`/projects/${projectId}/ci-token`, {}, { timeout: 15000 }),
+  /** 质量徽章（SVG，公开） */
+  badgeUrl: (projectId: string) => `/api/webhook/badge/${projectId}.svg`,
 }
 
 export default api

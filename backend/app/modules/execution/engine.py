@@ -25,6 +25,27 @@ logger = get_logger(__name__)
 _sync_redis = None
 
 
+class RunCancelled(Exception):
+    """测试任务被用户取消 — 各阶段检查点抛出，上层据此标记 CANCELLED 而非 FAILED。"""
+
+
+def _is_cancelled(test_run_id: str) -> bool:
+    """检查取消标志（cancel API 写入 Redis；7 天过期与任务状态键一致）。"""
+    try:
+        return bool(_get_sync_redis().get(f"task:cancel:{test_run_id}"))
+    except Exception:  # noqa: BLE001 - Redis 异常时按未取消处理，不阻塞执行
+        return False
+
+
+def _check_cancelled(test_run_id: str) -> None:
+    """阶段检查点：已取消则抛 RunCancelled（Celery 任务随即终止）。"""
+    if _is_cancelled(test_run_id):
+        _set_task_status_sync(test_run_id, "cancelled", {"step": "cancelled_by_user"})
+        _set_task_progress_sync(test_run_id, 0, "已取消")
+        logger.info(f"[{test_run_id}] cancellation flag detected, aborting stage")
+        raise RunCancelled(test_run_id)
+
+
 def _get_sync_redis():
     """获取同步 Redis 客户端（惰性初始化）。"""
     global _sync_redis
@@ -57,6 +78,18 @@ def _set_task_progress_sync(task_id: str, progress: int, step: str = "") -> None
 
 
 def _persist_test_results(test_run_id: str, test_results: list[dict[str, Any]]) -> int:
+    """同步包装（Celery 同步任务用）；async 上下文请直接 await _persist_test_results_async。"""
+    try:
+        count = asyncio.run(_persist_test_results_async(test_run_id, test_results))
+        if count:
+            logger.info(f"[{test_run_id}] Persisted {count} TestResult rows to DB")
+        return count
+    except Exception as db_err:  # pragma: no cover - 兜底，不阻塞汇总
+        logger.warning(f"[{test_run_id}] persist_test_results failed (non-fatal): {db_err}")
+        return 0
+
+
+async def _persist_test_results_async(test_run_id: str, test_results: list[dict[str, Any]]) -> int:
     """
     把 aggregate 阶段汇聚到的「逐条用例执行结果」入库到 test_results 表。
 
@@ -87,10 +120,10 @@ def _persist_test_results(test_run_id: str, test_results: list[dict[str, Any]]) 
         logger.warning(f"[{test_run_id}] invalid uuid, skip persist_test_results")
         return 0
 
-    async def _do_persist() -> int:
-        from sqlalchemy import select as sa_select
-        from sqlalchemy import insert as sa_insert
+    from sqlalchemy import select as sa_select
+    from sqlalchemy import insert as sa_insert
 
+    async def _do_persist() -> int:
         async with AsyncSessionLocal() as session:
             # 1. 查出该 run 下所有 TestCase（用于 case_id 反查 + 冗余写入 case_type/case_name）
             cases_rows = (
@@ -169,14 +202,11 @@ def _persist_test_results(test_run_id: str, test_results: list[dict[str, Any]]) 
             await session.commit()
             return len(rows)
 
-    try:
-        count = asyncio.run(_do_persist())
-        if count:
-            logger.info(f"[{test_run_id}] Persisted {count} TestResult rows to DB")
-        return count
-    except Exception as db_err:  # pragma: no cover - 兜底，不阻塞汇总
-        logger.warning(f"[{test_run_id}] persist_test_results failed (non-fatal): {db_err}")
-        return 0
+    count = await _do_persist()
+    if count:
+        logger.info(f"[{test_run_id}] Persisted {count} TestResult rows to DB")
+    return count
+
 
 
 # 避免 top-level 导入 datetime 与 db 模型耦合（worker 进程冷启动更快）
@@ -261,6 +291,10 @@ def prepare_environment(
         包含 service_url 和 analysis_result 的字典。
     """
     logger.info(f"[{test_run_id}] Preparing test environment...")
+    try:
+        _check_cancelled(test_run_id)
+    except RunCancelled:
+        return {"service_url": "", "analysis_result": analysis_result, "cancelled": True}
 
     _set_task_status_sync(test_run_id, "executing", {"step": "preparing_environment"})
     _set_task_progress_sync(test_run_id, 55, "启动被测服务")
@@ -274,15 +308,47 @@ def prepare_environment(
         EnvironmentAdapterFactory,
     )
 
+    # 项目级开关：平台 AUTO_COVERAGE=1 且本项目未显式关闭时才注入探针
+    # （项目配置存 projects.quality_gate_config.auto_coverage，未设置默认采集）
+    coverage_enabled = AUTO_COVERAGE
+    try:
+        from sqlalchemy import select as _select
+
+        from app.models.database import Project as _Project
+        from app.utils.database import AsyncSessionLocal as _S
+
+        async def _proj_cov() -> bool:
+            from app.models.database import TestRun as _TR  # 局部导入：避免与同函数
+            # 链内其他嵌套函数的同名局部导入形成自由变量歧义（实测解析报错）
+
+            async with _S() as s:
+                pid_row = (
+                    await s.execute(
+                        _select(_TR.project_id).where(_TR.id == test_run_id)
+                    )
+                ).scalar_one_or_none()
+                if not pid_row:
+                    return True
+                proj = (
+                    await s.execute(_select(_Project).where(_Project.id == pid_row))
+                ).scalar_one_or_none()
+                cfg = (proj.quality_gate_config or {}) if proj else {}
+                return bool(cfg.get("auto_coverage", True))
+
+        import asyncio as _aio
+        coverage_enabled = AUTO_COVERAGE and _aio.run(_proj_cov())
+    except Exception as e:  # noqa: BLE001 - 配置读取失败按默认采集，不阻塞
+        logger.warning(f"[{test_run_id}] resolve project auto_coverage failed: {e}")
+
     adapter = EnvironmentAdapterFactory.get_adapter(stack_name)
-    # 能力11：AUTO_COVERAGE=1 时启动带覆盖率探针的 SUT；否则普通启动
-    service_url = adapter.start_service(repo_path, coverage=AUTO_COVERAGE)
+    # 能力11：coverage_enabled 时启动带覆盖率探针的 SUT；否则普通启动
+    service_url = adapter.start_service(repo_path, coverage=coverage_enabled)
 
     # 等待服务就绪
     ready = adapter.wait_for_ready(service_url, timeout=120)
 
     # 暂存覆盖率采集元数据（供 aggregate 阶段自动采集；未启用则无副作用）
-    if AUTO_COVERAGE and getattr(adapter, "_coverage_meta", None):
+    if coverage_enabled and getattr(adapter, "_coverage_meta", None):
         meta = dict(adapter._coverage_meta)
         meta["test_run_id"] = test_run_id
         # 解析 project_id 一并暂存
@@ -343,6 +409,10 @@ def run_api_tests(
     Returns:
         接口测试结果。
     """
+    try:
+        _check_cancelled(test_run_id)
+    except RunCancelled:
+        return {"test_type": "api", "total": 0, "passed": 0, "failed": 0, "results": [], "cancelled": True}
     service_url = env_result.get("service_url", "http://localhost:8000")
     logger.info(f"[{test_run_id}] Running API tests: {len(api_cases)} cases")
 
@@ -394,6 +464,10 @@ def run_performance_tests(
     Returns:
         性能测试结果。
     """
+    try:
+        _check_cancelled(test_run_id)
+    except RunCancelled:
+        return {"test_type": "performance", "total": 0, "passed": 0, "failed": 0, "results": [], "cancelled": True}
     service_url = env_result.get("service_url", "http://localhost:8000")
     logger.info(f"[{test_run_id}] Running performance tests: {len(perf_cases)} scenarios")
 
@@ -450,6 +524,10 @@ def run_integration_tests(
     Returns:
         集成测试结果。
     """
+    try:
+        _check_cancelled(test_run_id)
+    except RunCancelled:
+        return {"test_type": "integration", "total": 0, "passed": 0, "failed": 0, "results": [], "cancelled": True}
     service_url = env_result.get("service_url", "http://localhost:8000")
     logger.info(f"[{test_run_id}] Running integration tests: {len(integration_cases)} scenarios")
 
@@ -502,8 +580,11 @@ def aggregate_results(
         汇总结果。
     """
     logger.info(f"[{test_run_id}] Aggregating test results...")
-
-    _set_task_status_sync(test_run_id, "executing", {"step": "aggregating_results"})
+    try:
+        _check_cancelled(test_run_id)
+    except RunCancelled:
+        logger.info(f"[{test_run_id}] aggregate aborted: run cancelled")
+        return {"cancelled": True}
     _set_task_progress_sync(test_run_id, 95, "汇总测试结果")
 
     # test_results 是 group 的结果列表
@@ -583,5 +664,57 @@ def aggregate_results(
                     )
     except Exception as e:  # noqa: BLE001
         logger.warning(f"[coverage] aggregate auto-collect error: {e}")
+
+    # 自动生成测试报告（有结果才生成；异步任务，不阻塞本阶段）
+    if summary.get("total_tests", 0) > 0:
+        try:
+            from app.modules.report.tasks import auto_generate_report
+
+            auto_generate_report.delay(test_run_id)
+            logger.info(f"[{test_run_id}] auto report generation dispatched")
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[{test_run_id}] auto report dispatch failed (non-fatal): {e}")
+
+    # CI/CD 集成：项目配置了回调地址时推送结果摘要（best-effort，不阻塞、不重试）
+    try:
+        import asyncio as _aio
+
+        from app.utils.database import AsyncSessionLocal as _S
+        from sqlalchemy import select as _sel
+
+        from app.models.database import Project as _P
+
+        async def _callback():
+            from app.models.database import TestRun as _TR  # 局部导入避免自由变量歧义
+
+            async with _S() as s:
+                pid = (
+                    await s.execute(
+                        _sel(_TR.project_id).where(_TR.id == _uuid.UUID(test_run_id))
+                    )
+                ).scalar_one_or_none()
+                if not pid:
+                    return
+                proj = (await s.execute(_sel(_P).where(_P.id == pid))).scalar_one_or_none()
+                url = ((proj.source_config or {}).get("ci_callback_url") or "") if proj else ""
+                if not url:
+                    return
+            payload = {
+                "test_run_id": test_run_id,
+                "status": "completed",
+                "total": summary.get("total_tests", 0),
+                "passed": summary.get("total_passed", 0),
+                "failed": summary.get("total_failed", 0),
+                "ci_result_url": f"/api/webhook/ci-result/{test_run_id}",
+            }
+            import httpx as _hx
+
+            async with _hx.AsyncClient(timeout=5.0) as client:
+                await client.post(url, json=payload)
+            logger.info(f"[{test_run_id}] CI callback sent to {url}")
+
+        _aio.run(_callback())
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[{test_run_id}] CI callback failed (non-fatal): {e}")
 
     return summary

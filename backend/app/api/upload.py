@@ -81,6 +81,8 @@ async def upload_code(file: UploadFile = File(...)):
     config = SourceConfig(
         source_type=SourceType.UPLOAD,
         upload_file_path=str(save_path),
+        # 保留压缩包：前端创建测试任务时需要此路径（否则流水线解压失败）
+        keep_archive=True,
     )
 
     try:
@@ -102,6 +104,9 @@ async def upload_code(file: UploadFile = File(...)):
             "data": {
                 "status": "accepted",
                 "local_path": result["local_path"],
+                # 压缩包路径——创建测试任务时 upload_file_path 必须传它（历史 bug：
+                # 此前未返回，前端只能拿 local_path（目录）→ 流水线 Unsupported format）
+                "upload_file_path": str(save_path),
                 "snapshot_id": result.get("snapshot_id"),
                 "version_id": result.get("version_id"),
                 "total_files": result.get("total_files", 0),

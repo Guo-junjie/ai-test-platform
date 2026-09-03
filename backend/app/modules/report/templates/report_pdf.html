@@ -146,6 +146,8 @@
     <div class="meta">
         生成时间: {{ summary.basic_info.generated_at[:19].replace('T', ' ') }} |
         平台: {{ summary.basic_info.platform }} v{{ summary.basic_info.version }}
+        {% if summary.basic_info.project_name %}| 项目: {{ summary.basic_info.project_name }}{% endif %}
+        {% if summary.basic_info.branch %}| 分支: {{ summary.basic_info.branch }}{% if summary.basic_info.commit_sha %} @ {{ summary.basic_info.commit_sha[:8] }}{% endif %}{% endif %}
     </div>
 </div>
 

@@ -15,9 +15,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.database import Project, User
+from app.models.database import Project, SourceType, User
 from app.modules.auth.dependencies import get_current_user
+from app.modules.auth.dependencies import require_admin, require_role
+from app.models.database import UserRole
+from app.utils.crypto import encrypt
 from app.utils.database import get_db_session
+from pydantic import BaseModel
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -95,3 +99,184 @@ async def get_project(
         raise HTTPException(404, f"Project not found: {project_id}")
 
     return {"code": 0, "data": _project_to_dict(project), "message": "success"}
+
+
+# ==================== 项目级配置（覆盖率开关 / CI/CD 集成） ====================
+
+
+class CoverageConfigUpdate(BaseModel):
+    """项目级自动覆盖率开关。"""
+
+    auto_coverage: bool
+
+
+class CIConfigUpdate(BaseModel):
+    """项目 CI/CD 集成配置（写入 source_config）。"""
+
+    callback_url: str | None = None      # 测试完成后回调的 CI 地址
+    auto_trigger_enabled: bool = False   # GitHub push 是否自动触发完整测试
+    auto_trigger_branches: list[str] = []  # 触发的分支白名单，空 = 全部分支
+
+
+class ProjectCreate(BaseModel):
+    """创建项目请求。"""
+
+    name: str
+    description: str | None = None
+    source_type: str = "upload"
+    source_config: dict = {}
+    quality_gate_config: dict = {}
+
+
+@router.post("")
+async def create_project(
+    req: ProjectCreate,
+    current_user: User = Depends(require_role(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.TEST_MANAGER)),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """显式创建项目（super_admin/admin/test_manager）。
+
+    此前项目只能由测试任务隐式自动创建——用户无法先建项目再上传
+    接口文档/生成用例，属产品缺口（集成测试 2026-08-30 实锤）。
+    """
+    name = (req.name or "").strip()
+    if not name:
+        raise HTTPException(400, "项目名称不能为空")
+    dup = (
+        await db.execute(select(Project).where(Project.name == name))
+    ).scalar_one_or_none()
+    if dup is not None:
+        raise HTTPException(409, f"项目已存在: {name}")
+
+    try:
+        st = SourceType(req.source_type)
+    except ValueError:
+        raise HTTPException(400, f"Invalid source_type: {req.source_type}")
+
+    project = Project(
+        id=uuid.uuid4(),
+        name=name,
+        description=(req.description or "").strip() or None,
+        owner_id=current_user.id,
+        source_type=st,
+        source_config=req.source_config or {},
+        quality_gate_config=req.quality_gate_config or {},
+        is_active=True,
+    )
+    db.add(project)
+    await db.commit()
+    await db.refresh(project)
+    return {"code": 0, "data": _project_to_dict(project), "message": "success"}
+
+
+async def _require_project(project_id: str, db: AsyncSession) -> Project:
+    try:
+        pid = uuid.UUID(project_id)
+    except ValueError:
+        raise HTTPException(400, f"Invalid project_id: {project_id}")
+    project = (
+        await db.execute(select(Project).where(Project.id == pid))
+    ).scalar_one_or_none()
+    if project is None:
+        raise HTTPException(404, f"Project not found: {project_id}")
+    return project
+
+
+async def _coverage_config_impl(
+    project_id: str, req: CoverageConfigUpdate,
+    current_user: User, db: AsyncSession,
+):
+    project = await _require_project(project_id, db)
+    cfg = project.quality_gate_config or {}
+    cfg["auto_coverage"] = bool(req.auto_coverage)
+    project.quality_gate_config = cfg
+    await db.commit()
+    return {"code": 0, "data": {"project_id": project_id, "auto_coverage": bool(req.auto_coverage)}, "message": "success"}
+
+
+@router.put("/{project_id}/coverage-config")
+async def update_coverage_config(
+    project_id: str,
+    req: CoverageConfigUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """设置项目级自动覆盖率开关（super_admin/admin/test_manager）。
+
+    生效规则：平台 AUTO_COVERAGE=0 时一律不采集；=1 时按本项目开关（未设置默认采集）。
+    """
+    return await _coverage_config_impl(project_id, req, current_user, db)
+
+
+@router.get("/{project_id}/ci-config")
+async def get_ci_config(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """查看项目 CI/CD 集成配置（token 脱敏，不回传明文）。"""
+    project = await _require_project(project_id, db)
+    cfg = project.source_config or {}
+    trigger = cfg.get("auto_trigger") or {}
+    token_enc = cfg.get("ci_token_encrypted") or ""
+    return {
+        "code": 0,
+        "data": {
+            "project_id": project_id,
+            "has_token": bool(token_enc),
+            "callback_url": cfg.get("ci_callback_url") or "",
+            "auto_trigger": {
+                "enabled": bool(trigger.get("enabled")),
+                "branches": trigger.get("branches") or [],
+            },
+            # 项目级自动覆盖率开关（未设置 = 默认开启）
+            "auto_coverage": bool((project.quality_gate_config or {}).get("auto_coverage", True)),
+        },
+        "message": "success",
+    }
+
+
+@router.put("/{project_id}/ci-config")
+async def update_ci_config(
+    project_id: str,
+    req: CIConfigUpdate,
+    current_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """更新 CI/CD 集成配置（仅 super_admin/admin）。"""
+    project = await _require_project(project_id, db)
+    cfg = dict(project.source_config or {})
+    cfg["ci_callback_url"] = (req.callback_url or "").strip()
+    cfg["auto_trigger"] = {
+        "enabled": bool(req.auto_trigger_enabled),
+        "branches": [b.strip() for b in (req.auto_trigger_branches or []) if b.strip()],
+    }
+    project.source_config = cfg
+    await db.commit()
+    return {"code": 0, "data": {"project_id": project_id}, "message": "success"}
+
+
+@router.post("/{project_id}/ci-token")
+async def rotate_ci_token(
+    project_id: str,
+    current_user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """生成/轮换项目 CI Token（仅 super_admin/admin）。
+
+    明文仅本次响应返回一次（CI 侧妥善保存）；库中只存 AES 加密串。
+    CI 调用方式：请求头 X-CI-Token: <明文>。
+    """
+    import secrets
+
+    project = await _require_project(project_id, db)
+    plain = secrets.token_hex(20)
+    cfg = dict(project.source_config or {})
+    cfg["ci_token_encrypted"] = encrypt(plain)
+    project.source_config = cfg
+    await db.commit()
+    return {
+        "code": 0,
+        "data": {"project_id": project_id, "token": plain},
+        "message": "token 已生成，请立即保存（仅本次可见）",
+    }

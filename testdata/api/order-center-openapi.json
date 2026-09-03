@@ -1,0 +1,230 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "电商订单中心 API",
+    "description": "供 AI 自动化测试平台验证的接口文档：与 testdata/project/order-service 实现代码严格一致。",
+    "version": "1.0.0"
+  },
+  "servers": [{"url": "http://localhost:5000"}],
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "健康检查",
+        "responses": {
+          "200": {
+            "description": "服务健康",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {"type": "string", "example": "ok"},
+                    "service": {"type": "string", "example": "order-center"},
+                    "time": {"type": "integer", "example": 1756500000}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/register": {
+      "post": {
+        "summary": "用户注册",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["username", "password"],
+                "properties": {
+                  "username": {"type": "string", "example": "tester01"},
+                  "password": {"type": "string", "example": "pass123456",
+                               "minLength": 6}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {"description": "注册成功"},
+          "400": {"description": "用户名缺失或密码不足 6 位"},
+          "409": {"description": "用户名已存在"}
+        }
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "summary": "用户登录",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["username", "password"],
+                "properties": {
+                  "username": {"type": "string", "example": "admin"},
+                  "password": {"type": "string", "example": "admin123"}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "登录成功，返回 JWT",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "token": {"type": "string"},
+                    "token_type": {"type": "string", "example": "bearer"},
+                    "vip": {"type": "boolean"}
+                  }
+                }
+              }
+            }
+          },
+          "401": {"description": "用户名或密码错误"}
+        }
+      }
+    },
+    "/api/v1/products": {
+      "get": {
+        "summary": "商品列表",
+        "responses": {
+          "200": {"description": "商品数组与总数"}
+        }
+      },
+      "post": {
+        "summary": "上架商品（需认证）",
+        "security": [{"bearerAuth": []}],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["sku", "name", "price", "stock"],
+                "properties": {
+                  "sku": {"type": "string", "example": "SKU-010"},
+                  "name": {"type": "string", "example": "USB-C 扩展坞"},
+                  "price": {"type": "number", "example": 199.0},
+                  "stock": {"type": "integer", "example": 30}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {"description": "上架成功"},
+          "400": {"description": "参数非法（价格为负 / 库存为负 / 字段缺失）"},
+          "401": {"description": "未认证"},
+          "409": {"description": "SKU 重复"}
+        }
+      }
+    },
+    "/api/v1/products/{product_id}": {
+      "get": {
+        "summary": "商品详情（支持 id 或 sku）",
+        "parameters": [
+          {"name": "product_id", "in": "path", "required": true,
+           "schema": {"type": "string"}, "example": "SKU-001"}
+        ],
+        "responses": {
+          "200": {"description": "商品详情"},
+          "404": {"description": "商品不存在"}
+        }
+      }
+    },
+    "/api/v1/orders": {
+      "get": {
+        "summary": "我的订单列表（需认证）",
+        "security": [{"bearerAuth": []}],
+        "responses": {
+          "200": {"description": "订单数组与总数"},
+          "401": {"description": "未认证"}
+        }
+      },
+      "post": {
+        "summary": "创建订单（扣库存，VIP 折扣，需认证）",
+        "description": "价格规则：VIP 8 折；满 100 减 10；可叠加。库存不足返回 409。",
+        "security": [{"bearerAuth": []}],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["product_id", "quantity"],
+                "properties": {
+                  "product_id": {"type": "string", "example": "SKU-001"},
+                  "quantity": {"type": "integer", "minimum": 1, "example": 2}
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "下单成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {"type": "string"},
+                    "origin_price": {"type": "number", "example": 798.0},
+                    "final_price": {"type": "number", "example": 628.4},
+                    "status": {"type": "string", "example": "created"}
+                  }
+                }
+              }
+            }
+          },
+          "400": {"description": "quantity 非法"},
+          "401": {"description": "未认证"},
+          "404": {"description": "商品不存在"},
+          "409": {"description": "库存不足"}
+        }
+      }
+    },
+    "/api/v1/orders/{order_id}": {
+      "get": {
+        "summary": "订单详情（需认证，仅本人）",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"name": "order_id", "in": "path", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {"description": "订单详情"},
+          "401": {"description": "未认证"},
+          "404": {"description": "订单不存在（或不属于当前用户）"}
+        }
+      }
+    },
+    "/api/v1/orders/{order_id}/cancel": {
+      "post": {
+        "summary": "取消订单（回滚库存，需认证）",
+        "security": [{"bearerAuth": []}],
+        "parameters": [
+          {"name": "order_id", "in": "path", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {"description": "取消成功，库存已回滚"},
+          "404": {"description": "订单不存在"},
+          "409": {"description": "订单已是取消状态"}
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}
+    }
+  }
+}

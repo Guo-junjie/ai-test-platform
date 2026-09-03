@@ -89,9 +89,42 @@ TASK_STATUS_PREFIX = "task:status:"
 TASK_PROGRESS_PREFIX = "task:progress:"
 TASK_RESULT_PREFIX = "task:result:"
 
+# Celery worker 模式：async helper 内部委托同步客户端。
+# worker 每任务一个新事件循环，asyncio 连接池跨 loop 复用会炸
+# "Event loop is closed"（与 asyncpg 连接同款问题）；同步客户端无 loop
+# 绑定，本地 redis 的阻塞开销（<1ms）完全可接受。
+# 由 celery_app.worker_process_init → set_worker_redis_mode() 开启。
+_WORKER_MODE = False
+
+
+def set_worker_redis_mode() -> None:
+    global _WORKER_MODE
+    _WORKER_MODE = True
+
 # 默认过期时间（7天）
 DEFAULT_TTL = 7 * 24 * 3600
 
+
+class _SyncAsAsync:
+    """把同步 redis 客户端的方法包装为协程，让 async helper 无感切换。"""
+
+    def __init__(self, sync_client):
+        self._c = sync_client
+
+    def __getattr__(self, name):
+        fn = getattr(self._c, name)
+
+        async def _call(*args, **kwargs):
+            return fn(*args, **kwargs)
+
+        return _call
+
+
+def _task_redis():
+    """worker 模式 → 同步客户端（包装为协程接口）；API 模式 → async 客户端。"""
+    if _WORKER_MODE:
+        return _SyncAsAsync(get_redis())
+    return get_async_redis()
 
 async def set_task_status(
     task_id: str,
@@ -108,7 +141,7 @@ async def set_task_status(
         extra: 额外元数据（如当前步骤、错误信息等）。
         ttl: 过期时间（秒），默认 7 天。
     """
-    client = get_async_redis()
+    client = _task_redis()
     data: dict[str, Any] = {"status": status}
     if extra:
         data.update(extra)
@@ -130,7 +163,7 @@ async def get_task_status(task_id: str) -> dict[str, Any] | None:
     Returns:
         任务状态字典，不存在时返回 None。
     """
-    client = get_async_redis()
+    client = _task_redis()
     raw = await client.get(f"{TASK_STATUS_PREFIX}{task_id}")
     if raw is None:
         return None
@@ -152,7 +185,7 @@ async def set_task_progress(
         current_step: 当前执行步骤描述。
         ttl: 过期时间（秒）。
     """
-    client = get_async_redis()
+    client = _task_redis()
     await client.set(
         f"{TASK_PROGRESS_PREFIX}{task_id}",
         json.dumps({"progress": progress, "step": current_step}, ensure_ascii=False),
@@ -170,7 +203,7 @@ async def get_task_progress(task_id: str) -> dict[str, Any] | None:
     Returns:
         包含 progress 和 step 的字典，不存在时返回 None。
     """
-    client = get_async_redis()
+    client = _task_redis()
     raw = await client.get(f"{TASK_PROGRESS_PREFIX}{task_id}")
     if raw is None:
         return None
@@ -190,7 +223,7 @@ async def set_task_result(
         result: 任务结果数据。
         ttl: 过期时间（秒）。
     """
-    client = get_async_redis()
+    client = _task_redis()
     await client.set(
         f"{TASK_RESULT_PREFIX}{task_id}",
         json.dumps(result, ensure_ascii=False),
@@ -208,7 +241,7 @@ async def get_task_result(task_id: str) -> dict[str, Any] | None:
     Returns:
         任务结果字典，不存在时返回 None。
     """
-    client = get_async_redis()
+    client = _task_redis()
     raw = await client.get(f"{TASK_RESULT_PREFIX}{task_id}")
     if raw is None:
         return None
@@ -222,7 +255,7 @@ async def delete_task_data(task_id: str) -> None:
     Args:
         task_id: 任务 ID。
     """
-    client = get_async_redis()
+    client = _task_redis()
     await client.delete(
         f"{TASK_STATUS_PREFIX}{task_id}",
         f"{TASK_PROGRESS_PREFIX}{task_id}",
@@ -246,7 +279,7 @@ async def cache_get(key: str) -> Any | None:
     Returns:
         缓存数据，不存在时返回 None。
     """
-    client = get_async_redis()
+    client = _task_redis()
     raw = await client.get(f"{CACHE_PREFIX}{key}")
     if raw is None:
         return None
@@ -266,7 +299,7 @@ async def cache_set(
         value: 要缓存的数据。
         ttl: 过期时间（秒），默认 1 小时。
     """
-    client = get_async_redis()
+    client = _task_redis()
     await client.set(
         f"{CACHE_PREFIX}{key}",
         json.dumps(value, ensure_ascii=False),
@@ -281,5 +314,5 @@ async def cache_delete(key: str) -> None:
     Args:
         key: 缓存 key（不含前缀）。
     """
-    client = get_async_redis()
+    client = _task_redis()
     await client.delete(f"{CACHE_PREFIX}{key}")

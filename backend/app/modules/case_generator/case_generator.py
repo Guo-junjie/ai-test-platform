@@ -37,7 +37,10 @@ class TestCaseGenerator:
         self.router = get_model_router()
 
     async def generate_api_cases(
-        self, api_info: dict[str, Any], business_analysis: dict[str, Any]
+        self,
+        api_info: dict[str, Any],
+        business_analysis: dict[str, Any],
+        project_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """
         为单个 API 生成四类测试用例。
@@ -47,6 +50,7 @@ class TestCaseGenerator:
         Args:
             api_info: API 接口信息（含 path, http_method, params 等）。
             business_analysis: AI 分析结果（含 business_purpose, business_rules 等）。
+            project_id: 项目 ID（知识库按项目过滤注入；None 走全局回退）。
 
         Returns:
             测试用例列表，每个用例包含 case_id, case_type, case_name,
@@ -56,7 +60,9 @@ class TestCaseGenerator:
         kb_query = f"{api_info.get('http_method', '')} {api_info.get('path', '')} {business_analysis.get('business_purpose', '')}"
         kb = ""
         try:
-            kb = await retrieve_and_inject(None, kb_query, "case", top_k=5)
+            kb = await retrieve_and_inject(
+                None, kb_query, "case", top_k=5, project_id=project_id
+            )
         except Exception:
             kb = ""
         prompt = (kb + "\n\n" if kb else "") + self._build_prompt(api_info, business_analysis)
@@ -98,7 +104,10 @@ class TestCaseGenerator:
         return cases
 
     async def generate_all(
-        self, apis: list[dict[str, Any]], ai_analysis: dict[str, Any]
+        self,
+        apis: list[dict[str, Any]],
+        ai_analysis: dict[str, Any],
+        project_id: str | None = None,
     ) -> dict[str, list[dict[str, Any]]]:
         """
         批量生成所有 API 的测试用例。
@@ -111,6 +120,7 @@ class TestCaseGenerator:
         Args:
             apis: API 接口列表。
             ai_analysis: AI 分析结果。
+            project_id: 项目 ID（知识库按项目过滤注入；None 走全局回退）。
 
         Returns:
             包含 api / performance / integration 三类用例的字典。
@@ -131,7 +141,9 @@ class TestCaseGenerator:
                 key = f"{api.get('http_method', '')} {api.get('path', '')}"
                 business_analysis = analysis_map.get(key, {})
                 try:
-                    return await self.generate_api_cases(api, business_analysis)
+                    return await self.generate_api_cases(
+                        api, business_analysis, project_id=project_id
+                    )
                 except ModelNotConfiguredError:
                     raise
                 except Exception as e:

@@ -65,9 +65,14 @@ class EnvironmentAdapter(ABC):
             client.images.build(path=repo_path, tag=image_tag, rm=True)
 
             run_kwargs: dict[str, Any] = {
-                "ports": {f"{port}/tcp": port},
+                # 宿主端口随机分配：固定端口与平台自身（backend 8000 等）冲突，
+                # 实测 SUT 起不来 → fallback localhost → 全部用例打到平台自己
+                "ports": {f"{port}/tcp": None},
                 "detach": True,
-                "auto_remove": True,
+                # auto_remove=False：覆盖率采集需要从「已停止的容器」拷出 XML
+                # （SIGINT 优雅退出后 coverage.xml 在容器内生成）。collect_and_store
+                # 拷完后显式 remove；无覆盖率路径的容器由 collect 兜底清理
+                "auto_remove": False,
             }
             command = None
             if coverage:
@@ -91,6 +96,28 @@ class EnvironmentAdapter(ABC):
                 run_kwargs["command"] = command
 
             container = client.containers.run(image_tag, **run_kwargs)
+            # 从实际端口映射推导 service_url（host.docker.internal 由 compose
+            # extra_hosts: host-gateway 提供，worker 容器内可直达宿主映射端口；
+            # localhost 在 worker 容器内指向 worker 自己，SUT 不可达）
+            # 【必须 reload】run() 返回对象的 attrs 里 NetworkSettings.Ports
+            # 可能尚未填充（实测随机端口映射读不到 → 回退原端口 → 连接拒绝）
+            try:
+                container.reload()
+            except Exception:  # noqa: BLE001
+                pass
+            host_port = port
+            try:
+                binding = (
+                    container.attrs.get("NetworkSettings", {})
+                    .get("Ports", {})
+                    .get(f"{port}/tcp")
+                )
+                if binding and binding[0].get("HostPort"):
+                    host_port = int(binding[0]["HostPort"])
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"read host port mapping failed: {e}")
+            service_url_final = f"http://host.docker.internal:{host_port}"
+            logger.info(f"SUT service_url: {service_url_final}")
             if coverage and command:
                 self._container_id = container.id
                 self._coverage_meta = {
@@ -99,7 +126,7 @@ class EnvironmentAdapter(ABC):
                     "language": self.language,
                 }
                 logger.info(f"[coverage] SUT launched with probe; container={container.id}")
-            return f"http://localhost:{port}"
+            return service_url_final
         except Exception as e:
             logger.warning(
                 f"Docker startup failed for {image_tag}: {e}. "

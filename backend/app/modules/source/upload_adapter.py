@@ -85,8 +85,10 @@ class UploadAdapter(CodeSourceAdapter):
         # 4. 检查是否有一层多余包装目录
         local_path = self._flatten_if_needed(local_path)
 
-        # 5. 清理上传的临时文件
-        upload_path.unlink(missing_ok=True)
+        # 5. 清理上传的临时压缩包（keep_archive=True 时保留——
+        #    上传接口需要把路径返回给前端，供后续测试任务再次解压）
+        if not getattr(config, "keep_archive", False):
+            upload_path.unlink(missing_ok=True)
 
         total_files = sum(1 for _ in local_path.rglob("*") if _.is_file())
 

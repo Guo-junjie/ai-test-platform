@@ -252,19 +252,39 @@ async def upload_doc(
             fmt = "openapi"
 
     digest = sha.hexdigest()
+    # 重复检测：first() 而非 scalar_one_or_none——历史版本可能已积累同 sha
+    # 多条记录（旧实现检测到重复仍插入，去重形同虚设且后续上传 500）
     dup = (
         await db.execute(
             select(InterfaceDoc).where(
                 InterfaceDoc.project_id == pid, InterfaceDoc.sha256 == digest
             )
         )
-    ).scalar_one_or_none()
+    ).scalars().first()
 
     minio_key = None
     try:
         minio_key = upload_file(save_path, f"docs/{project_id}/{doc_id}{ext}")
     except Exception as e:  # noqa: BLE001
         logger.warning(f"MinIO mirror failed for {doc_id}: {e}")
+
+    # 幂等：同项目同内容的文档已存在 → 直接返回已有记录（含解析结果），
+    # 不再插入重复行（旧实现检测到 duplicated 仍插入，多次上传后
+    # 同 sha 多行 → 后续上传 scalar_one_or_none 抛 MultipleResultsFound 500）
+    if dup is not None:
+        return {
+            "code": 0,
+            "data": {
+                "doc_id": str(dup.id),
+                "filename": dup.filename,
+                "doc_type": dup.format.value if dup.format else fmt,
+                "file_size": dup.file_size or total,
+                "sha256": digest,
+                "status": dup.status.value if dup.status else DocStatus.PARSING.value,
+                "duplicated": True,
+            },
+            "message": "uploaded",
+        }
 
     doc = InterfaceDoc(
         id=doc_id,

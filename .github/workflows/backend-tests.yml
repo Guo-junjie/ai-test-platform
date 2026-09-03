@@ -1,0 +1,33 @@
+name: backend-tests
+
+on:
+  push:
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend-tests.yml"
+  pull_request:
+    paths:
+      - "backend/**"
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # 只装测试所需依赖（全量 requirements 含 weasyprint/locust 等重依赖，拉慢 CI）
+      - name: Install test dependencies
+        run: |
+          pip install -q pytest sqlalchemy celery redis pydantic loguru pyyaml \
+            python-dotenv aiofiles asyncpg psycopg2-binary
+
+      - name: Run pytest
+        working-directory: backend
+        env:
+          APP_DEBUG: "false"
+        run: pytest

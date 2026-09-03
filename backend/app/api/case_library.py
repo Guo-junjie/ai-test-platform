@@ -101,8 +101,8 @@ async def generate_cases(
             detail="未找到可用接口：请确认项目下已有解析出的接口资产（数据源→接口文档），或在弹窗中勾选接口后再生成",
         )
 
-    # 生成用例
-    cases = await generator.generate_all(apis, {})
+    # 生成用例（能力12 P1：传项目 ID，知识库注入按项目过滤）
+    cases = await generator.generate_all(apis, {}, project_id=str(pid))
 
     # 落库
     saved = []

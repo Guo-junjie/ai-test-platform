@@ -3,6 +3,7 @@ AI 自动化测试平台 — Celery 配置
 """
 
 from celery import Celery
+from celery.schedules import crontab
 from celery.signals import worker_process_init
 from loguru import logger
 
@@ -17,6 +18,7 @@ celery_app = Celery(
         "app.modules.pipeline",
         "app.modules.scheduler.tasks",
         "app.modules.knowledge.tasks",
+        "app.modules.report.tasks",
     ],
 )
 
@@ -47,14 +49,28 @@ celery_app.conf.update(
     task_time_limit=60 * 60,
 )
 
-# Celery Beat 配置 — 使用 django-celery-beat DatabaseScheduler
-try:
-    celery_app.conf.update(
-        beat_scheduler="django_celery_beat.schedulers:DatabaseScheduler",
-    )
-except ImportError:
-    # django-celery-beat 未安装时的容错
-    pass
+# Celery Beat 调度 — 静态 tick 模式。
+#
+# 为什么不用 django-celery-beat DatabaseScheduler：
+# 这是 FastAPI 项目，没有 Django settings（DJANGO_SETTINGS_MODULE），
+# DatabaseScheduler 在 beat 进程 import django_celery_beat.models 时即抛
+# ImproperlyConfigured（beat 容器启动即崩，Exited(1)，实锤于部署机日志）。
+#
+# 现方案：beat 每 30 秒派发一次 scheduled_tick，由它轮询 scheduled_tasks 表、
+# 按 cron_expression 计算到期任务并乐观锁抢占后派发 execute_scheduled_task。
+# 定时任务的增删改是纯 DB 操作，tick 天然感知，无需重启 beat。
+celery_app.conf.beat_schedule = {
+    "scheduled-tick-every-30s": {
+        "task": "app.modules.scheduler.tasks.scheduled_tick",
+        "schedule": 30.0,
+    },
+    # 知识自动同步（能力12 P1）：每日 03:00 增量重建 defect/case/doc/term 切片，
+    # 新缺陷/新用例无需管理员手动重建即入知识库。文档类切片上传时即时索引，不在此列。
+    "kb-auto-sync-daily-3am": {
+        "task": "app.modules.knowledge.tasks.auto_sync_knowledge",
+        "schedule": crontab(hour=3, minute=0),
+    },
+}
 
 
 @celery_app.task(bind=True)
@@ -97,3 +113,11 @@ def _init_celery_worker(**_kwargs) -> None:
     except Exception as exc:  # noqa: BLE001
         # 任何意外不影响 worker 启动；engine 仍可下次访问时惰性重建
         logger.warning(f"worker_process_init reset failed (non-fatal): {exc}")
+
+    # redis 同理：async 池跨任务 loop 复用会炸 "Event loop is closed"，
+    # worker 模式下 redis async helper 委托同步客户端（无 loop 绑定）
+    try:
+        from app.utils.redis_client import set_worker_redis_mode
+        set_worker_redis_mode()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"worker redis mode set failed (non-fatal): {exc}")

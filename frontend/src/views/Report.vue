@@ -6,11 +6,20 @@
         <div class="card-header">
           <span>测试报告</span>
           <div>
+            <el-select
+              v-model="filterProjectId"
+              placeholder="全部项目"
+              clearable
+              style="width: 180px; margin-right: 8px"
+              @change="onFilterChange"
+            >
+              <el-option v-for="p in projects" :key="p.id" :label="p.name" :value="p.id" />
+            </el-select>
             <el-input
               v-model="searchRunId"
               placeholder="按任务ID搜索"
               clearable
-              style="width: 200px; margin-right: 8px"
+              style="width: 180px; margin-right: 8px"
               @keyup.enter="loadReports"
             />
             <el-button type="primary" @click="loadReports">
@@ -27,14 +36,25 @@
         stripe
         style="width: 100%"
       >
-        <el-table-column label="报告 ID" width="120">
+        <el-table-column label="项目" min-width="140" show-overflow-tooltip>
+          <template #default="{ row }">
+            <el-tag size="small" effect="plain">{{ row.project_name || '—' }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="报告 ID" width="110">
           <template #default="{ row }">
             <span class="mono-text">{{ row.id?.substring(0, 8) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="任务 ID" width="120">
+        <el-table-column label="任务 ID" width="110">
           <template #default="{ row }">
             <span class="mono-text">{{ row.test_run_id?.substring(0, 8) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="通过率" width="110">
+          <template #default="{ row }">
+            <span v-if="row.total_tests">{{ row.passed_tests }}/{{ row.total_tests }}</span>
+            <span v-else class="muted-text">—</span>
           </template>
         </el-table-column>
         <el-table-column label="质量评分" width="120">
@@ -73,6 +93,15 @@
             <el-button size="small" type="warning" @click="generateReport(row)">
               重新生成
             </el-button>
+            <el-button
+              size="small"
+              type="danger"
+              text
+              :disabled="!canManage"
+              @click="removeReport(row)"
+            >
+              删除
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -97,7 +126,7 @@
     <!-- Report viewer dialog -->
     <el-dialog
       v-model="viewerVisible"
-      :title="`测试报告 - ${selectedReport?.test_run_id?.substring(0, 8) || ''}`"
+      :title="`测试报告 - ${selectedReport?.project_name || ''}（${selectedReport?.test_run_id?.substring(0, 8) || ''}）`"
       fullscreen
       @close="reportHtml = ''"
     >
@@ -115,11 +144,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
-import { Search, View, Download, Share } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
-import { reportApi } from '@/api'
+import { Search, View, Download, Share, Delete } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { reportApi, projectApi } from '@/api'
+import { useAuthStore } from '@/stores'
 
 // ==================== State ====================
 
@@ -130,6 +160,12 @@ const total = ref(0)
 const currentPage = ref(1)
 const pageSize = 20
 const searchRunId = ref('')
+const projects = ref<any[]>([])
+const filterProjectId = ref<string>('')
+const authStore = useAuthStore()
+const canManage = computed(() =>
+  ['super_admin', 'admin', 'test_manager'].includes(authStore.role)
+)
 
 const viewerVisible = ref(false)
 const selectedReport = ref<any>(null)
@@ -147,6 +183,9 @@ async function loadReports() {
     if (searchRunId.value) {
       params.test_run_id = searchRunId.value
     }
+    if (filterProjectId.value) {
+      params.project_id = filterProjectId.value
+    }
     const res: any = await reportApi.getList(params)
     reports.value = res?.data?.list || []
     total.value = res?.data?.total || 0
@@ -154,6 +193,44 @@ async function loadReports() {
     reports.value = []
   } finally {
     loading.value = false
+  }
+}
+
+function onFilterChange(): void {
+  currentPage.value = 1
+  void loadReports()
+}
+
+async function loadProjects(): Promise<void> {
+  try {
+    const res: any = await projectApi.getList()
+        const d = res?.data ?? res
+    projects.value = Array.isArray(d) ? d : d?.list || d?.items || []
+  } catch {
+    projects.value = []
+  }
+}
+
+async function removeReport(row: any): Promise<void> {
+  try {
+    await ElMessageBox.confirm(
+      `确定删除「${row.project_name || ''}」的报告（任务 ${row.test_run_id?.substring(0, 8)}）吗？底层测试数据不受影响。`,
+      '删除确认',
+      { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
+    )
+  } catch {
+    return
+  }
+  try {
+    const res: any = await reportApi.remove(row.test_run_id)
+    if (res?.code === 0) {
+      ElMessage.success('报告已删除')
+      await loadReports()
+    } else {
+      ElMessage.error(res?.message || '删除失败')
+    }
+  } catch {
+    /* 拦截器已处理 */
   }
 }
 
@@ -165,7 +242,14 @@ async function viewReport(row: any) {
 
   try {
     const res: any = await reportApi.getHtml(row.test_run_id)
-    reportHtml.value = res?.data?.html || ''
+    let html = res?.data?.html || ''
+    // srcdoc iframe 无 origin，相对路径（/api/...）静默解析失败 → 图表库
+    // 加载不了（图表永远"加载中"的根因）。注入 <base> 以平台后端为基准解析
+    if (html && !/<base\s/i.test(html)) {
+      const origin = window.location.origin
+      html = html.replace(/<head([^>]*)>/i, `<head$1><base href="${origin}/">`)
+    }
+    reportHtml.value = html
   } catch {
     ElMessage.error('无法加载报告内容')
   } finally {
@@ -261,6 +345,7 @@ function formatTime(time: string): string {
 
 onMounted(async () => {
   await loadReports()
+  void loadProjects()
   // 支持「从仪表盘点击'查看缺陷'跳到 /report/:id」直达打开 viewer
   const route = useRoute()
   const idFromQuery = (route.query.id as string) || (route.params.id as string) || ''
@@ -284,6 +369,10 @@ onMounted(async () => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.muted-text {
+  color: #c0c4cc;
 }
 
 .mono-text {
