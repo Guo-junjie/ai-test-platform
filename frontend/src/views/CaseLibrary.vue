@@ -27,6 +27,15 @@
             AI 生成用例
           </el-button>
           <el-button :loading="batchAdopting" :disabled="!hasDraft" @click="batchAdopt">批量采纳</el-button>
+          <el-button
+            type="primary"
+            plain
+            :disabled="selectedRows.length === 0"
+            @click="openAddToPlan(selectedRows.map((r: any) => r.id))"
+          >
+            <el-icon><Files /></el-icon>
+            加入计划（{{ selectedRows.length }}）
+          </el-button>
           <el-button @click="loadCases" :loading="listLoading">刷新</el-button>
         </el-form-item>
       </el-form>
@@ -99,11 +108,15 @@
             <el-tag size="small" :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="260" fixed="right">
+        <el-table-column label="操作" width="360" fixed="right">
           <template #default="{ row }">
             <el-button size="small" type="success" plain :disabled="row.status === 'adopted'" @click="adopt(row)">采纳</el-button>
             <el-button size="small" type="warning" plain :disabled="row.status === 'deprecated'" @click="deprecate(row)">废弃</el-button>
             <el-button size="small" plain @click="openEdit(row)">编辑</el-button>
+            <el-button size="small" plain @click="openAddToPlan([row.id])">
+              <el-icon><Files /></el-icon>
+              加入计划
+            </el-button>
             <el-button size="small" type="danger" plain @click="deleteCase(row)">删除</el-button>
           </template>
         </el-table-column>
@@ -139,13 +152,64 @@
         <el-button type="primary" :loading="savingEdit" @click="saveEdit">保存</el-button>
       </template>
     </el-dialog>
+
+    <!-- P0 阶段7：加入计划弹窗 -->
+    <el-dialog
+      v-model="addToPlanVisible"
+      title="加入测试计划"
+      width="520px"
+      destroy-on-close
+      @open="loadPlansIfNeeded"
+    >
+      <el-form label-width="80px">
+        <el-form-item label="用例数量">
+          <el-tag size="small" type="info">共 {{ addToPlanCaseIds.length }} 条用例</el-tag>
+        </el-form-item>
+        <el-form-item label="选择计划" required>
+          <el-select
+            v-model="targetPlanId"
+            placeholder="选择测试计划"
+            filterable
+            clearable
+            :loading="plansLoading"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="p in plans"
+              :key="p.id"
+              :label="`${p.name}（${p.project_name || '—'}）`"
+              :value="p.id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-alert
+          v-if="plans.length === 0 && !plansLoading"
+          type="warning"
+          :closable="false"
+          show-icon
+          title="尚未创建任何测试计划。请先在「测试任务」页选择「测试计划」Tab 创建，或前往用例库→测试计划（功能即将上线）"
+        />
+      </el-form>
+      <template #footer>
+        <el-button @click="addToPlanVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="addToPlanLoading"
+          :disabled="!targetPlanId"
+          @click="submitAddToPlan"
+        >
+          加入
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { caseApi, docApi, projectApi } from '@/api'
+import { Files } from '@element-plus/icons-vue'
+import { caseApi, docApi, planApi, projectApi } from '@/api'
 
 const projects = ref<any[]>([])
 const projectId = ref<string>('')
@@ -161,6 +225,14 @@ const activeType = ref<string>('all')
 const activeSource = ref<string>('')  // v1.4：来源过滤（''=全部 / requirement / ai_generated / manual）
 const searchKeyword = ref<string>('')  // 搜索关键字
 const selectedRows = ref<any[]>([])
+
+// P0 阶段7：「加入计划」弹窗状态
+const addToPlanVisible = ref(false)
+const addToPlanLoading = ref(false)
+const addToPlanCaseIds = ref<string[]>([])
+const plans = ref<any[]>([])
+const plansLoading = ref(false)
+const targetPlanId = ref<string>('')
 
 const SOURCE_LABELS: Record<string, string> = {
   requirement: '需求生成',
@@ -316,6 +388,57 @@ async function generate() {
 
 function onSelectionChange(rows: any[]) {
   selectedRows.value = rows
+}
+
+// ============ P0 阶段7：加入计划 ============
+async function loadPlansIfNeeded(): Promise<void> {
+  if (plans.value.length > 0 || plansLoading.value) return
+  await loadPlans()
+}
+
+async function loadPlans(): Promise<void> {
+  plansLoading.value = true
+  try {
+    const res: any = await planApi.list({ page: 1, page_size: 200 })
+    const list = res?.data?.list || res?.data?.items || res?.list || []
+    plans.value = Array.isArray(list) ? list : []
+  } catch {
+    plans.value = []
+  } finally {
+    plansLoading.value = false
+  }
+}
+
+function openAddToPlan(caseIds: string[]): void {
+  if (!caseIds || caseIds.length === 0) {
+    ElMessage.warning('请先选择至少一条用例')
+    return
+  }
+  addToPlanCaseIds.value = [...caseIds]
+  targetPlanId.value = ''
+  addToPlanVisible.value = true
+}
+
+async function submitAddToPlan(): Promise<void> {
+  if (!targetPlanId.value) {
+    ElMessage.warning('请选择目标测试计划')
+    return
+  }
+  if (addToPlanCaseIds.value.length === 0) {
+    ElMessage.warning('用例列表为空')
+    return
+  }
+  addToPlanLoading.value = true
+  try {
+    await planApi.addCases(targetPlanId.value, addToPlanCaseIds.value)
+    ElMessage.success(`已加入计划：${addToPlanCaseIds.value.length} 条用例`)
+    addToPlanVisible.value = false
+    selectedRows.value = []
+  } catch {
+    /* axios 拦截器已处理 */
+  } finally {
+    addToPlanLoading.value = false
+  }
 }
 
 async function batchAdopt() {

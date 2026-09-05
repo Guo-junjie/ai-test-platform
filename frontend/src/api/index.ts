@@ -327,6 +327,21 @@ export const caseApi = {
   /** 批量接纳：data { ids: string[] } */
   adoptBatch: (ids: string[]) => api.post('/cases/adopt-batch', { ids }),
 }
+// ============ 测试计划（P0 阶段 5：CRUD + 用例管理 + 执行） ============
+export const planApi = {
+  list: (params: any) => api.get('/plans', { params }),
+  get: (id: string) => api.get(`/plans/${id}`),
+  create: (data: any) => api.post('/plans', data),
+  update: (id: string, data: any) => api.put(`/plans/${id}`, data),
+  remove: (id: string) => api.delete(`/plans/${id}`),
+  listCases: (id: string) => api.get(`/plans/${id}/cases`),
+  addCases: (id: string, case_asset_ids: string[]) => api.post(`/plans/${id}/cases`, { case_asset_ids }),
+  removeCase: (id: string, case_id: string) => api.delete(`/plans/${id}/cases/${case_id}`),
+  toggleCase: (id: string, case_id: string, enabled: boolean) => api.put(`/plans/${id}/cases/${case_id}`, { enabled }),
+  bulkAdd: (id: string, data: any) => api.post(`/plans/${id}/cases/bulk-add`, data),
+  listExecutions: (id: string, params: any) => api.get(`/plans/${id}/executions`, { params }),
+  execute: (id: string) => api.post(`/plans/${id}/execute`),
+}
 
 // ============ 场景编排（能力4：AI 编排测试场景） ============
 export const scenarioApi = {
