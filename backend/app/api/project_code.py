@@ -20,12 +20,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.database import (
     Project,
     ProjectCodeVersion,
-    SourceType,
     User,
     UserRole,
 )
+from app.models.database import SourceType as ModelSourceType
 from app.modules.auth.dependencies import get_current_user, require_role
-from app.modules.source import SourceAdapterFactory, SourceConfig
+# 注意：SourceAdapterFactory 注册表用的是 app.modules.source.SourceType，
+# 与 app.models.database.SourceType 是两个同名枚举，不能混用
+from app.modules.source import SourceAdapterFactory, SourceConfig, SourceType
 from app.utils.database import get_db_session
 from app.utils.logger import get_logger
 
@@ -138,7 +140,7 @@ async def upload_project_code(
 
     version = ProjectCodeVersion(
         project_id=proj.id,
-        source_type=SourceType.UPLOAD,
+        source_type=ModelSourceType.UPLOAD,
         version_id=result.get("version_id") or f"upload_{timestamp}",
         local_path=result.get("local_path", ""),
         snapshot_id=result.get("snapshot_id"),
@@ -197,7 +199,7 @@ async def fetch_project_code(
 
     version = ProjectCodeVersion(
         project_id=proj.id,
-        source_type=source_type,
+        source_type=ModelSourceType(source_type.value),
         version_id=result.get("version_id") or req.commit_sha or datetime.now().strftime("%Y%m%d%H%M%S"),
         branch=config.branch,
         commit_message=result.get("commit_message"),
