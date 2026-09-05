@@ -167,6 +167,29 @@ export const changeRequestApi = {
 export const projectApi = {
   /** 获取项目列表，返回 [{ id, name }]（id 为后端真实 UUID） */
   getList: (params?: any) => api.get('/projects', { params }),
+  /** 创建项目（super_admin/admin/test_manager） */
+  create: (data: { name: string; description?: string; source_type?: string }) =>
+    api.post('/projects', data),
+}
+
+// ============ 项目代码版本（R1：代码是项目的属性） ============
+export const projectCodeApi = {
+  /** 上传代码压缩包 → 解压 → 登记为项目代码版本 */
+  upload: (projectId: string, file: File, note?: string) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    if (note) fd.append('note', note)
+    return api.post(`/projects/${projectId}/code/upload`, fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 300000,
+    })
+  },
+  /** 从仓库拉取代码 → 登记为项目代码版本（缺省读项目 source_config） */
+  fetch: (projectId: string, data?: any) =>
+    api.post(`/projects/${projectId}/code/fetch`, data ?? {}, { timeout: 300000 }),
+  /** 项目代码版本列表（最新在前） */
+  listVersions: (projectId: string, limit = 50) =>
+    api.get(`/projects/${projectId}/code/versions`, { params: { limit } }),
 }
 
 // ============ 消息通知 ============

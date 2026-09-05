@@ -42,6 +42,9 @@ class CreateTestRunRequest(BaseModel):
     mode: str = "auto"            # plan / auto / upload
     # plan 模式必填
     plan_id: str | None = None
+    # R1：代码版本引用 —— 代码是项目的属性，任务可直接引用项目已有版本，
+    # pipeline 跳过 fetch 直接使用版本的 local_path
+    code_version_id: str | None = None
     # auto 模式字段
     source_type: str = "github"  # github / svn / upload
     repo_url: str | None = None

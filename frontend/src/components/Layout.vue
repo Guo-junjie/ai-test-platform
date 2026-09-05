@@ -19,6 +19,10 @@
           <el-icon><DataLine /></el-icon>
           <span>仪表盘</span>
         </el-menu-item>
+        <el-menu-item index="/projects">
+          <el-icon><Folder /></el-icon>
+          <span>项目管理</span>
+        </el-menu-item>
         <el-menu-item index="/test-run">
           <el-icon><VideoPlay /></el-icon>
           <span>测试运行</span>

@@ -172,6 +172,32 @@ class Project(Base):
     test_runs = relationship("TestRun", back_populates="project")
 
 
+class ProjectCodeVersion(Base):
+    """项目代码版本表 —— 代码是项目的属性（R1 重构）。
+
+    每次向项目上传 zip 或从仓库拉取代码，都会在此落一条版本记录：
+    代码解压后的本地路径（local_path）供测试任务直接引用，
+    测试任务通过 code_version_id 关联版本，跳过各自的 fetch 步骤。
+    """
+    __tablename__ = "project_code_versions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False, index=True)
+    source_type = Column(SAEnum(SourceType, values_callable=lambda x: [e.value for e in x], name="sourcetype"), nullable=False)
+    # 版本标识：Git commit SHA / SVN revision / 上传内容 hash
+    version_id = Column(String(120), nullable=False)
+    branch = Column(String(200))
+    commit_message = Column(Text)
+    # 代码在服务器上的解压目录（pipeline 直接引用，跳过 fetch）
+    local_path = Column(String(500), nullable=False)
+    # MinIO 快照 ID（SnapshotManager 产出，可用于恢复）
+    snapshot_id = Column(String(64))
+    total_files = Column(Integer, default=0)
+    note = Column(String(500))
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 # ==================== AI 模型配置 ====================
 
 class AIModelConfig(Base):

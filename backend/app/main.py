@@ -167,6 +167,10 @@ app.include_router(model_config_router, prefix="/api/models", tags=["AI模型配
 from app.api.project import router as project_router
 app.include_router(project_router, prefix="/api/projects", tags=["项目"])
 
+# 项目代码版本（R1：代码是项目的属性）
+from app.api.project_code import router as project_code_router
+app.include_router(project_code_router, prefix="/api/projects", tags=["项目代码版本"])
+
 # 测试任务
 from app.api.test_run import router as test_run_router
 app.include_router(test_run_router, prefix="/api/test-runs", tags=["测试任务"])

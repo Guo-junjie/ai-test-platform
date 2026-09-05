@@ -19,6 +19,12 @@ const routes = [
     meta: { title: '仪表盘' },
   },
   {
+    path: '/projects',
+    name: 'Projects',
+    component: () => import('@/views/Projects.vue'),
+    meta: { title: '项目管理' },
+  },
+  {
     path: '/test-run',
     name: 'TestRun',
     component: () => import('@/views/TestRun.vue'),

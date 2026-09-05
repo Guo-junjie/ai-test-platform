@@ -48,9 +48,12 @@
             </template>
 
             <el-form-item label="归属项目">
-              <el-select v-model="form.project_id" placeholder="选择项目（可留空自动创建临时项目）" clearable style="width: 100%">
-                <el-option v-for="p in projects" :key="p.id" :label="p.name" :value="p.id" />
-              </el-select>
+              <div class="plan-select-row">
+                <el-select v-model="form.project_id" placeholder="选择项目（留空将自动创建临时项目）" clearable class="plan-select">
+                  <el-option v-for="p in projects" :key="p.id" :label="p.name" :value="p.id" />
+                </el-select>
+                <el-button @click="quickCreateVisible = true">+ 新建</el-button>
+              </div>
             </el-form-item>
           </el-form>
           <div class="form-actions">
@@ -157,9 +160,12 @@
               </div>
             </el-form-item>
             <el-form-item label="归属项目">
-              <el-select v-model="form.project_id" placeholder="选择项目（可留空自动创建临时项目）" clearable style="width: 100%">
-                <el-option v-for="p in projects" :key="p.id" :label="p.name" :value="p.id" />
-              </el-select>
+              <div class="plan-select-row">
+                <el-select v-model="form.project_id" placeholder="选择项目（留空将自动创建临时项目）" clearable class="plan-select">
+                  <el-option v-for="p in projects" :key="p.id" :label="p.name" :value="p.id" />
+                </el-select>
+                <el-button @click="quickCreateVisible = true">+ 新建</el-button>
+              </div>
             </el-form-item>
           </el-form>
           <div class="form-actions">
@@ -170,6 +176,9 @@
           </div>
         </el-tab-pane>
       </el-tabs>
+
+      <!-- 快捷新建项目（auto/upload Tab 共用） -->
+      <ProjectQuickCreate :visible="quickCreateVisible" @update:visible="quickCreateVisible = $event" @created="onQuickCreated" />
     </el-card>
 
     <!-- Task list -->
@@ -331,6 +340,7 @@ import { Plus, VideoPlay, UploadFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { UploadRequestOptions } from 'element-plus'
 import { projectApi, testRunApi, uploadApi, planApi } from '@/api'
+import ProjectQuickCreate from '@/components/ProjectQuickCreate.vue'
 
 const STATUS_OPTIONS: Record<string, string> = {
   pending: '等待中',
@@ -371,13 +381,14 @@ const STATUS_TAG: Record<string, string> = {
 
 export default defineComponent({
   name: 'TestRunView',
-  components: { Plus, VideoPlay, UploadFilled },
+  components: { Plus, VideoPlay, UploadFilled, ProjectQuickCreate },
   data() {
     return {
       activeMode: 'auto' as 'auto' | 'plan' | 'upload',
       loading: false,
       creating: false,
       plansLoading: false,
+      quickCreateVisible: false,
 
       testRuns: [] as any[],
       projects: [] as any[],
@@ -437,6 +448,12 @@ export default defineComponent({
         this.projects = Array.isArray(d) ? d : d?.list || d?.items || []
       } catch {
         this.projects = []
+      }
+    },
+    async onQuickCreated(project: any): Promise<void> {
+      await this.loadProjects()
+      if (project?.id) {
+        this.form.project_id = project.id
       }
     },
     async loadPlans(): Promise<void> {

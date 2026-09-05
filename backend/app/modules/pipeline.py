@@ -262,26 +262,53 @@ def run_test_pipeline(self, test_run_id: str, req_dict: dict[str, Any]) -> dict[
 
         # plan 模式短路整个 fetch + analyze；只走 case_gen + persist + execute
         if not plan_cases:
-            # plan 模式 req_dict 里的 source_type="plan" 不是 SourceType 成员，
-            # 这里三元就地解析（占位 UPLOAD 仅用于满足 SQLEnum 校验）
-            _src = req_dict.get("source_type") or "github"
-            source_config = SourceConfig(
-                source_type = SourceType.UPLOAD if _src == "plan" else SourceType(_src),
-                github_token=req_dict.get("github_token"),
-                repo_url=req_dict.get("repo_url"),
-                branch=req_dict.get("branch") or "main",
-                commit_sha=req_dict.get("commit_sha"),
-                svn_url=req_dict.get("svn_url"),
-                svn_username=req_dict.get("svn_username"),
-                svn_password=req_dict.get("svn_password"),
-                upload_file_path=req_dict.get("upload_file_path"),
-            )
+            # R1：任务引用项目代码版本 —— 直接复用版本 local_path，跳过 fetch
+            code_version_id = req_dict.get("code_version_id")
+            if code_version_id:
+                from app.models.database import ProjectCodeVersion
 
-            fetch_result = SourceAdapterFactory.fetch_code(source_config)
-            local_path = fetch_result.get("local_path", "")
-            snapshot_id = fetch_result.get("snapshot_id")
+                async def _load_code_version():
+                    from app.utils.database import AsyncSessionLocal
 
-            logger.info(f"[{test_run_id}] Code fetched: {local_path}")
+                    vid = uuid.UUID(str(code_version_id))
+                    async with AsyncSessionLocal() as session:
+                        row = (
+                            await session.execute(
+                                select(ProjectCodeVersion).where(ProjectCodeVersion.id == vid)
+                            )
+                        ).scalar_one_or_none()
+                        return row
+
+                version_row = asyncio.run(_load_code_version())
+                if version_row is None:
+                    raise Exception(f"code version not found: {code_version_id}")
+                local_path = version_row.local_path
+                snapshot_id = version_row.snapshot_id
+                logger.info(
+                    f"[{test_run_id}] Using project code version {code_version_id}: "
+                    f"path={local_path} (fetch skipped)"
+                )
+            else:
+                # plan 模式 req_dict 里的 source_type="plan" 不是 SourceType 成员，
+                # 这里三元就地解析（占位 UPLOAD 仅用于满足 SQLEnum 校验）
+                _src = req_dict.get("source_type") or "github"
+                source_config = SourceConfig(
+                    source_type = SourceType.UPLOAD if _src == "plan" else SourceType(_src),
+                    github_token=req_dict.get("github_token"),
+                    repo_url=req_dict.get("repo_url"),
+                    branch=req_dict.get("branch") or "main",
+                    commit_sha=req_dict.get("commit_sha"),
+                    svn_url=req_dict.get("svn_url"),
+                    svn_username=req_dict.get("svn_username"),
+                    svn_password=req_dict.get("svn_password"),
+                    upload_file_path=req_dict.get("upload_file_path"),
+                )
+
+                fetch_result = SourceAdapterFactory.fetch_code(source_config)
+                local_path = fetch_result.get("local_path", "")
+                snapshot_id = fetch_result.get("snapshot_id")
+
+                logger.info(f"[{test_run_id}] Code fetched: {local_path}")
 
             # Step 2: 代码解析（非 plan 模式）
             _set_task_status_sync(test_run_id, "analyzing", {"step": "code_analysis"})

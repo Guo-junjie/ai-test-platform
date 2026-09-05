@@ -8,6 +8,7 @@
           <el-select v-model="projectId" placeholder="选择项目" filterable style="width: 220px" @change="onProjectChange">
             <el-option v-for="p in projects" :key="p.id" :label="p.name" :value="p.id" />
           </el-select>
+          <el-button style="margin-left: 8px" @click="quickCreateVisible = true">+ 新建</el-button>
         </el-form-item>
         <el-form-item label="接口">
           <el-select
@@ -237,6 +238,9 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- 快捷新建项目 -->
+    <ProjectQuickCreate :visible="quickCreateVisible" @update:visible="quickCreateVisible = $event" @created="onQuickCreated" />
   </div>
 </template>
 
@@ -245,6 +249,7 @@ import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Files } from '@element-plus/icons-vue'
 import { caseApi, docApi, planApi, projectApi } from '@/api'
+import ProjectQuickCreate from '@/components/ProjectQuickCreate.vue'
 
 const projects = ref<any[]>([])
 const projectId = ref<string>('')
@@ -271,6 +276,23 @@ const targetPlanId = ref<string>('')
 const planMode = ref<'existing' | 'new'>('existing')
 const newPlanName = ref<string>('')
 const newPlanDesc = ref<string>('')
+
+// R1：快捷新建项目
+const quickCreateVisible = ref(false)
+
+async function onQuickCreated(project: any): Promise<void> {
+  try {
+    const res: any = await projectApi.getList()
+    const d = res?.data ?? res
+    projects.value = Array.isArray(d) ? d : d?.list || d?.items || []
+  } catch {
+    /* 保留旧列表 */
+  }
+  if (project?.id) {
+    projectId.value = project.id
+    onProjectChange()
+  }
+}
 
 const SOURCE_LABELS: Record<string, string> = {
   requirement: '需求生成',
