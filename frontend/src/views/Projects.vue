@@ -76,11 +76,31 @@
             <el-input v-model="createForm.svn_password" type="password" show-password />
           </el-form-item>
         </template>
+        <template v-if="createForm.source_type === 'upload'">
+          <el-form-item label="代码包">
+            <el-upload
+              drag
+              :auto-upload="false"
+              :file-list="createFileList"
+              :on-change="onCreateFileChange"
+              accept=".zip,.tar.gz,.tgz,.tar"
+              style="width: 100%"
+            >
+              <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
+              <div class="el-upload__text">拖拽文件到此处，或<em>点击选择</em></div>
+              <template #tip>
+                <div class="el-upload__tip">
+                  支持 ZIP / TAR.GZ / TAR；创建项目后立即上传为第一个代码版本（可跳过，稍后在项目详情上传）
+                </div>
+              </template>
+            </el-upload>
+          </el-form-item>
+        </template>
         <el-alert
           type="info"
           :closable="false"
           show-icon
-          title="创建后进入项目详情：上传代码压缩包或从仓库拉取，形成项目代码版本；测试任务将引用这些版本执行"
+          title="创建后进入项目详情：可继续上传代码或从仓库拉取，形成项目代码版本；测试任务将引用这些版本执行"
         />
       </el-form>
       <template #footer>
@@ -209,6 +229,9 @@ export default defineComponent({
         svn_username: '',
         svn_password: '',
       },
+      // 「本地上传」模式下随项目一起上传的代码包（创建成功后立即登记为版本）
+      createUploadFile: null as File | null,
+      createFileList: [] as any[],
 
       detailVisible: false,
       current: null as any,
@@ -243,6 +266,22 @@ export default defineComponent({
         svn_username: '',
         svn_password: '',
       }
+      this.createUploadFile = null
+      this.createFileList = []
+    },
+    onCreateFileChange(uploadFile: any): void {
+      const f: File | undefined = uploadFile?.raw
+      if (!f) return
+      const name = (f.name || '').toLowerCase()
+      const ok = name.endsWith('.zip') || name.endsWith('.tar.gz') || name.endsWith('.tgz') || name.endsWith('.tar')
+      if (!ok) {
+        ElMessage.warning('仅支持 ZIP / TAR.GZ / TAR 格式')
+        this.createUploadFile = null
+        this.createFileList = []
+        return
+      }
+      this.createUploadFile = f
+      this.createFileList = [uploadFile]
     },
     async loadProjects(): Promise<void> {
       this.loading = true
@@ -288,10 +327,21 @@ export default defineComponent({
           }
         }
         const res: any = await projectApi.create(payload)
+        const newId = res?.data?.id
         ElMessage.success(`项目「${name}」创建成功`)
+
+        // 「本地上传」模式且选择了代码包：立即登记为第一个代码版本
+        if (newId && this.createForm.source_type === 'upload' && this.createUploadFile) {
+          try {
+            await projectCodeApi.upload(newId, this.createUploadFile)
+            ElMessage.success('代码包已上传为项目的第一个代码版本')
+          } catch {
+            /* 拦截器已提示；项目已创建，可稍后在详情里重传 */
+          }
+        }
+
         this.createVisible = false
         await this.loadProjects()
-        const newId = res?.data?.id
         const created = this.projects.find((p: any) => p.id === newId)
         if (created) this.openDetail(created)
       } catch {
