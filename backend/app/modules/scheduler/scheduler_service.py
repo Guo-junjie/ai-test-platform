@@ -220,6 +220,8 @@ class SchedulerService:
         """查询定时任务列表（按创建时间倒序）。"""
         async def _query(session: AsyncSession) -> dict[str, Any]:
             q = select(ScheduledTask).order_by(desc(ScheduledTask.created_at))
+            # 软删除的任务不进列表（删除置 status=DELETED，行保留供审计）
+            q = q.where(ScheduledTask.status != ScheduledTaskStatus.DELETED)
             if project_id:
                 try:
                     pid = uuid.UUID(project_id)
