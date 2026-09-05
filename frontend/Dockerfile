@@ -2,9 +2,9 @@ FROM node:22-alpine AS builder
 
 WORKDIR /app
 COPY package.json ./
-# 官方 node 镜像默认 NODE_ENV=production，会导致 npm install 跳过 devDependencies（vue-tsc/vite/typescript 均不安装）。
-# 构建阶段必须显式带上 dev 依赖，否则 npm run build 报 "vue-tsc: not found"。
-RUN npm install --include=dev
+# 国内构建环境网络受限，走 npmmirror 镜像源（与后端 pip 阿里源同理），
+# 否则 npm install 可能卡在 <30kB/s 的国际链路上
+RUN npm config set registry https://registry.npmmirror.com && npm install --include=dev
 
 COPY . .
 
