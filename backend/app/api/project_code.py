@@ -170,6 +170,17 @@ async def fetch_project_code(
     proj = await _require_project(project_id, db)
     cfg = proj.source_config or {}
 
+    # 未提供任何仓库信息且项目配置里也没有 → 明确引导，而不是抛 500 裸错误
+    has_repo_info = bool(
+        req.repo_url or req.svn_url or cfg.get("repo_url") or cfg.get("svn_url")
+    )
+    if not has_repo_info:
+        raise HTTPException(
+            400,
+            f"项目「{proj.name}」尚未配置仓库地址（当前代码来源：{proj.source_type.value if proj.source_type else '未知'}）。"
+            "请先在项目详情点「修改代码来源」填写 GitHub/SVN 仓库地址，再执行拉取。",
+        )
+
     source_type = SourceType.GITHUB if (req.repo_url or cfg.get("repo_url")) else SourceType.SVN
     if req.svn_url or cfg.get("svn_url"):
         source_type = SourceType.SVN
@@ -187,8 +198,16 @@ async def fetch_project_code(
         incremental=False,
     )
 
+    # 二次校验：避免适配器抛出裸错误（如 svn_url is required）
+    if source_type == SourceType.GITHUB and not config.repo_url:
+        raise HTTPException(400, "缺少 GitHub 仓库地址（repo_url），请先在「修改代码来源」中填写")
+    if source_type == SourceType.SVN and not config.svn_url:
+        raise HTTPException(400, "缺少 SVN 地址（svn_url），请先在「修改代码来源」中填写")
+
     try:
         result = SourceAdapterFactory.fetch_code(config)
+    except ValueError as e:
+        raise HTTPException(400, f"仓库配置有误：{e}")
     except Exception as e:  # noqa: BLE001
         logger.error(f"Project code fetch failed: {e}", exc_info=True)
         raise HTTPException(500, f"仓库拉取失败: {e}")

@@ -8,6 +8,11 @@
             <el-option v-for="p in projects" :key="p.id" :label="p.name" :value="p.id" />
           </el-select>
         </el-form-item>
+        <el-form-item>
+          <el-button type="primary" plain :disabled="!projectId" @click="$router.push(`/case-library?project_id=${projectId}`)">
+            下一步：去用例库生成用例
+          </el-button>
+        </el-form-item>
         <el-form-item label="文档">
           <el-select
             v-model="docId"

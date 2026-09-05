@@ -10,6 +10,7 @@
 """
 
 import uuid
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
@@ -87,7 +88,7 @@ async def get_project(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ):
-    """获取单个项目详情。"""
+    """获取单个项目详情（含脱敏后的仓库配置，供「修改代码来源」回填）。"""
     try:
         pid = uuid.UUID(project_id)
     except ValueError:
@@ -98,7 +99,73 @@ async def get_project(
     if project is None:
         raise HTTPException(404, f"Project not found: {project_id}")
 
-    return {"code": 0, "data": _project_to_dict(project), "message": "success"}
+    data = _project_to_dict(project)
+    from app.api.source import _mask_sensitive_fields
+
+    data["source_config"] = _mask_sensitive_fields(project.source_config or {})
+    return {"code": 0, "data": data, "message": "success"}
+
+
+class ProjectUpdate(BaseModel):
+    """更新项目请求（R3：代码来源支持修改）。"""
+
+    name: str | None = None
+    description: str | None = None
+    source_type: str | None = None
+    # 合并语义：值为空字符串/None 的键不覆盖已有配置（token 留空 = 保持不变）
+    source_config: dict | None = None
+
+
+@router.put("/{project_id}")
+async def update_project(
+    project_id: str,
+    req: ProjectUpdate,
+    current_user: User = Depends(require_role(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.TEST_MANAGER)),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """更新项目基础信息与代码来源（source_type + 仓库配置）。"""
+    try:
+        pid = uuid.UUID(project_id)
+    except ValueError:
+        raise HTTPException(400, f"Invalid project_id: {project_id}")
+
+    project = (
+        await db.execute(select(Project).where(Project.id == pid))
+    ).scalar_one_or_none()
+    if project is None:
+        raise HTTPException(404, f"Project not found: {project_id}")
+
+    if req.name is not None:
+        name = req.name.strip()
+        if not name:
+            raise HTTPException(400, "项目名称不能为空")
+        if name != project.name:
+            dup = (
+                await db.execute(select(Project).where(Project.name == name))
+            ).scalar_one_or_none()
+            if dup is not None:
+                raise HTTPException(409, f"项目已存在: {name}")
+            project.name = name
+    if req.description is not None:
+        project.description = req.description.strip() or None
+    if req.source_type is not None:
+        try:
+            project.source_type = SourceType(req.source_type)
+        except ValueError:
+            raise HTTPException(400, f"Invalid source_type: {req.source_type}")
+    if req.source_config is not None:
+        merged = dict(project.source_config or {})
+        for key, value in req.source_config.items():
+            # 空 / 脱敏占位值不覆盖，避免把已有 token 冲掉
+            if value is None or value == "" or (isinstance(value, str) and value.startswith("****")):
+                continue
+            merged[key] = value
+        project.source_config = merged
+
+    project.updated_at = datetime.utcnow()
+    await db.commit()
+    await db.refresh(project)
+    return {"code": 0, "data": _project_to_dict(project), "message": "updated"}
 
 
 # ==================== 项目级配置（覆盖率开关 / CI/CD 集成） ====================

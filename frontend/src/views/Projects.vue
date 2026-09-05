@@ -117,7 +117,10 @@
             <span class="mono-text">{{ current.id }}</span>
           </el-descriptions-item>
           <el-descriptions-item label="描述">{{ current.description || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="代码来源">{{ sourceLabel(current.source_type) }}</el-descriptions-item>
+          <el-descriptions-item label="代码来源">
+            <span>{{ sourceLabel(current.source_type) }}</span>
+            <el-button size="small" text type="primary" style="margin-left: 8px" @click="openEditSource">修改</el-button>
+          </el-descriptions-item>
           <el-descriptions-item label="仓库配置">
             <el-link type="primary" :underline="false" @click="$router.push('/sources')">在数据源管理中维护</el-link>
           </el-descriptions-item>
@@ -187,6 +190,59 @@
         />
       </div>
     </el-drawer>
+
+    <!-- 修改代码来源对话框 -->
+    <el-dialog v-model="editSourceVisible" title="修改代码来源" width="560px" :close-on-click-modal="false">
+      <el-form label-width="90px">
+        <el-form-item label="代码来源">
+          <el-radio-group v-model="editForm.source_type">
+            <el-radio-button value="github">GitHub</el-radio-button>
+            <el-radio-button value="svn">SVN</el-radio-button>
+            <el-radio-button value="upload">本地上传</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <template v-if="editForm.source_type === 'github'">
+          <el-form-item label="仓库 URL">
+            <el-input v-model="editForm.repo_url" placeholder="https://github.com/owner/repo" />
+          </el-form-item>
+          <el-form-item label="Token">
+            <el-input v-model="editForm.github_token" type="password" show-password placeholder="留空保持原有 Token" />
+          </el-form-item>
+          <el-form-item label="分支">
+            <el-input v-model="editForm.branch" placeholder="main" />
+          </el-form-item>
+        </template>
+        <template v-if="editForm.source_type === 'svn'">
+          <el-form-item label="SVN URL">
+            <el-input v-model="editForm.svn_url" placeholder="https://svn.example.com/svn/project" />
+          </el-form-item>
+          <el-form-item label="用户名">
+            <el-input v-model="editForm.svn_username" />
+          </el-form-item>
+          <el-form-item label="密码">
+            <el-input v-model="editForm.svn_password" type="password" show-password placeholder="留空保持原有密码" />
+          </el-form-item>
+        </template>
+        <template v-if="editForm.source_type === 'upload'">
+          <el-alert
+            type="info"
+            :closable="false"
+            show-icon
+            title="本地上传模式无需仓库配置，代码通过详情页「上传代码」按钮进入项目"
+          />
+        </template>
+        <el-alert
+          type="info"
+          :closable="false"
+          show-icon
+          title="修改来源后，详情页的「从仓库拉取」将按新配置执行；已有代码版本不受影响"
+        />
+      </el-form>
+      <template #footer>
+        <el-button @click="editSourceVisible = false">取消</el-button>
+        <el-button type="primary" :loading="savingSource" @click="submitEditSource">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -243,6 +299,19 @@ export default defineComponent({
       uploading: false,
       fetching: false,
       executing: false,
+
+      // 修改代码来源
+      editSourceVisible: false,
+      savingSource: false,
+      editForm: {
+        source_type: 'github',
+        repo_url: '',
+        github_token: '',
+        branch: 'main',
+        svn_url: '',
+        svn_username: '',
+        svn_password: '',
+      },
     }
   },
   methods: {
@@ -357,6 +426,65 @@ export default defineComponent({
       this.current = row
       this.detailVisible = true
       this.loadVersions()
+    },
+    async openEditSource(): Promise<void> {
+      if (!this.current) return
+      // 拉取项目详情回填脱敏配置（token 显示为 ****，留空保存则保持原值）
+      try {
+        const res: any = await projectApi.get(this.current.id)
+        const d = res?.data || {}
+        const cfg = d.source_config || {}
+        this.editForm = {
+          source_type: d.source_type || 'upload',
+          repo_url: cfg.repo_url || '',
+          github_token: '',
+          branch: cfg.branch || 'main',
+          svn_url: cfg.svn_url || '',
+          svn_username: cfg.svn_username || '',
+          svn_password: '',
+        }
+        this.editSourceVisible = true
+      } catch {
+        ElMessage.error('加载项目配置失败')
+      }
+    },
+    async submitEditSource(): Promise<void> {
+      if (!this.current) return
+      if (this.editForm.source_type === 'github' && !this.editForm.repo_url) {
+        ElMessage.warning('请填写 GitHub 仓库地址')
+        return
+      }
+      if (this.editForm.source_type === 'svn' && !this.editForm.svn_url) {
+        ElMessage.warning('请填写 SVN 地址')
+        return
+      }
+      this.savingSource = true
+      try {
+        const payload: any = { source_type: this.editForm.source_type }
+        if (this.editForm.source_type === 'github') {
+          payload.source_config = {
+            repo_url: this.editForm.repo_url,
+            github_token: this.editForm.github_token || '',
+            branch: this.editForm.branch || 'main',
+          }
+        } else if (this.editForm.source_type === 'svn') {
+          payload.source_config = {
+            svn_url: this.editForm.svn_url,
+            svn_username: this.editForm.svn_username || '',
+            svn_password: this.editForm.svn_password || '',
+          }
+        }
+        await projectApi.update(this.current.id, payload)
+        ElMessage.success('代码来源已更新')
+        this.editSourceVisible = false
+        await this.loadProjects()
+        const updated = this.projects.find((p: any) => p.id === this.current.id)
+        if (updated) this.current = updated
+      } catch {
+        /* 拦截器已提示 */
+      } finally {
+        this.savingSource = false
+      }
     },
     async loadVersions(): Promise<void> {
       if (!this.current) return

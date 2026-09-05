@@ -250,6 +250,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Files } from '@element-plus/icons-vue'
 import { caseApi, docApi, planApi, projectApi } from '@/api'
@@ -659,6 +660,13 @@ async function saveEdit() {
 
 onMounted(async () => {
   await loadProjects()
+  // 支持从接口文档解析/评审页跳转：?project_id= 直达该项目
+  const route = useRoute()
+  const pid = (route.query.project_id as string) || ''
+  if (pid && projects.value.some((p: any) => p.id === pid)) {
+    projectId.value = pid
+    onProjectChange()
+  }
 })
 </script>
 

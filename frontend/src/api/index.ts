@@ -170,6 +170,10 @@ export const projectApi = {
   /** 创建项目（super_admin/admin/test_manager） */
   create: (data: { name: string; description?: string; source_type?: string }) =>
     api.post('/projects', data),
+  /** 项目详情（含脱敏仓库配置） */
+  get: (id: string) => api.get(`/projects/${id}`),
+  /** 更新项目（代码来源可修改；source_config 合并语义，token 留空保持不变） */
+  update: (id: string, data: any) => api.put(`/projects/${id}`, data),
 }
 
 // ============ 项目代码版本（R1：代码是项目的属性） ============
