@@ -102,6 +102,17 @@
             >
               删除
             </el-button>
+            <el-dropdown style="margin-left: 8px; vertical-align: middle" @command="(cmd: string) => gotoRelated(cmd, row)">
+              <el-button size="small">
+                关联数据<el-icon><ArrowDown /></el-icon>
+              </el-button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item command="defects">缺陷列表（本任务）</el-dropdown-item>
+                  <el-dropdown-item command="coverage">覆盖率（本任务）</el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </template>
         </el-table-column>
       </el-table>
@@ -145,11 +156,14 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { useRoute } from 'vue-router'
-import { Search, View, Download, Share, Delete } from '@element-plus/icons-vue'
+import { useRoute, useRouter } from 'vue-router'
+import { Search, View, Download, Share, Delete, ArrowDown } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { reportApi, projectApi } from '@/api'
 import { useAuthStore } from '@/stores'
+
+// R2：关联数据跳转（缺陷 / 覆盖率按本任务过滤）
+const router = useRouter()
 
 // ==================== State ====================
 
@@ -325,8 +339,21 @@ async function generateReport(row: any) {
   }
 }
 
-function scoreTagType(score: number | null): string {
-  if (score === null || score === undefined) return 'info'
+// R2：关联数据跳转 —— 缺陷/覆盖率按本任务过滤直达
+function gotoRelated(cmd: string, row: any) {
+  const rid = row?.test_run_id
+  if (!rid) {
+    ElMessage.warning('该报告缺少关联的测试任务 ID')
+    return
+  }
+  if (cmd === 'defects') {
+    router.push({ path: '/defects', query: { test_run_id: rid } })
+  } else if (cmd === 'coverage') {
+    router.push({ path: '/coverage', query: { test_run_id: rid } })
+  }
+}
+
+function scoreTagType(score: number | null): string {  if (score === null || score === undefined) return 'info'
   if (score >= 80) return 'success'
   if (score >= 60) return 'warning'
   return 'danger'

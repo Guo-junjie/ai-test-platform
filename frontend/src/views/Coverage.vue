@@ -342,6 +342,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { UploadFilled } from '@element-plus/icons-vue'
 import { coverageApi, projectApi, projectConfigApi } from '@/api'
@@ -351,6 +352,8 @@ import TrendChart from '@/components/TrendChart.vue'
 // ====== 状态 ======
 const projects = ref<any[]>([])
 const projectId = ref<string>('')
+// R2：从报告页跳转时按测试任务过滤（query.test_run_id）
+const runFilter = ref<string>('')
 const authStore = useAuthStore()
 const canManage = computed(() =>
   ['super_admin', 'admin', 'test_manager'].includes(authStore.role)
@@ -478,10 +481,14 @@ async function loadProjects() {
 }
 
 async function loadReports() {
-  if (!projectId.value) return
+  // R2：报告页跳转 ?test_run_id= 时按任务过滤（无需项目）
+  if (!projectId.value && !runFilter.value) return
   loadingReports.value = true
   try {
-    const res: any = await coverageApi.list({ project_id: projectId.value })
+    const params: any = runFilter.value
+      ? { test_run_id: runFilter.value }
+      : { project_id: projectId.value }
+    const res: any = await coverageApi.list(params)
     const list = res?.data || []
     reports.value = Array.isArray(list) ? list : []
     if (reports.value.length && !selectedReportId.value) {
@@ -646,7 +653,15 @@ watch(projectId, (val) => {
 })
 
 onMounted(() => {
-  loadProjects()
+  // R2：支持从报告页跳转 ?test_run_id=xxx，按任务直达覆盖率列表
+  const route = useRoute()
+  const rid = (route.query.test_run_id as string) || ''
+  if (rid) {
+    runFilter.value = rid
+    void loadReports()
+  } else {
+    loadProjects()
+  }
 })
 </script>
 

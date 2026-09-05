@@ -35,6 +35,9 @@
             </el-select>
             <el-input v-model="filters.q" placeholder="搜索标题/描述" clearable style="width: 180px"
               @keyup.enter="reload" @clear="reload" />
+            <el-tag v-if="filters.test_run_id" closable type="warning" style="margin-left: 4px" @close="clearRunFilter">
+              任务 {{ filters.test_run_id.substring(0, 8) }}
+            </el-tag>
             <el-button type="primary" :disabled="!canCreate" @click="openCreate">登记缺陷</el-button>
           </div>
         </div>
@@ -156,6 +159,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api, { projectApi } from '@/api'
 import { useAuthStore } from '@/stores'
@@ -186,7 +190,7 @@ const page = ref(1)
 const pageSize = 20
 const loading = ref(false)
 const stats = ref<any>({ by_severity: {}, by_status: {} })
-const filters = reactive<any>({ project_id: '', severity: '', status_code: '', defect_type: '', q: '' })
+const filters = reactive<any>({ project_id: '', severity: '', status_code: '', defect_type: '', q: '', test_run_id: '' })
 
 const detailVisible = ref(false)
 const detail = ref<any>(null)
@@ -239,6 +243,9 @@ async function load() {
 
 function reload() { page.value = 1; void load() }
 function onPage(p: number) { page.value = p; void load() }
+
+// R2：报告页「查看缺陷」跳转带 ?test_run_id=，进入即按任务过滤
+function clearRunFilter() { filters.test_run_id = ''; reload() }
 
 function openDetail(row: any) {
   detail.value = row
@@ -308,6 +315,10 @@ async function remove(row: any) {
 }
 
 onMounted(() => {
+  // R2：支持从报告页跳转 ?test_run_id=xxx 直达按任务过滤
+  const route = useRoute()
+  const rid = (route.query.test_run_id as string) || ''
+  if (rid) filters.test_run_id = rid
   void loadProjects()
   void load()
 })

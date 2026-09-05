@@ -97,6 +97,7 @@ def _defect_to_dict(d: Defect, project_name: str | None = None) -> dict[str, Any
 @router.get("")
 async def list_defects(
     project_id: str | None = Query(None, description="按项目过滤"),
+    test_run_id: str | None = Query(None, description="按测试任务过滤（报告页互链）"),
     severity: str | None = Query(None, description="P0/P1/P2/P3"),
     defect_type: str | None = Query(None),
     status_code: str | None = Query(None, description="open/in_fix/verified/closed/rejected"),
@@ -130,6 +131,11 @@ async def list_defects(
             raise HTTPException(400, f"Invalid defect_type: {defect_type}")
     if status_code:
         conds.append(Defect.status == status_code)  # status 为 String 列
+    if test_run_id:
+        try:
+            conds.append(Defect.test_run_id == uuid.UUID(test_run_id))
+        except ValueError:
+            raise HTTPException(400, f"Invalid test_run_id: {test_run_id}")
     if q:
         like = f"%{q}%"
         conds.append(or_(Defect.title.ilike(like), Defect.description.ilike(like)))

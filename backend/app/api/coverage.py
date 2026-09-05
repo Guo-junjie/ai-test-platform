@@ -157,13 +157,17 @@ async def upload_coverage(
 
 @router.get("")
 async def list_coverage(
-    project_id: str,
+    project_id: str | None = None,
     test_run_id: str | None = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ):
-    """按项目 / 测试任务列出覆盖率报告。"""
-    stmt = select(CoverageReport).where(CoverageReport.project_id == project_id)
+    """按项目 / 测试任务列出覆盖率报告（test_run_id 可单独使用，报告页互链）。"""
+    if not project_id and not test_run_id:
+        raise HTTPException(400, "project_id 与 test_run_id 至少提供一个")
+    stmt = select(CoverageReport)
+    if project_id:
+        stmt = stmt.where(CoverageReport.project_id == uuid.UUID(project_id))
     if test_run_id:
         stmt = stmt.where(CoverageReport.test_run_id == uuid.UUID(test_run_id))
     stmt = stmt.order_by(CoverageReport.created_at.desc())

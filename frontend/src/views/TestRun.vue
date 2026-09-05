@@ -100,6 +100,7 @@
                     </span>
                   </el-option>
                 </el-select>
+                <el-button :disabled="!selectedPlanId" @click="openPlanDrawer">管理计划</el-button>
                 <el-button :loading="plansLoading" @click="loadPlans">刷新</el-button>
               </div>
             </el-form-item>
@@ -319,6 +320,83 @@
         </div>
       </div>
     </el-dialog>
+
+    <!-- R2：计划管理抽屉 —— 用例清单 / 启停 / 移除 / 执行历史 -->
+    <el-drawer v-model="planDrawerVisible" :title="`管理计划 - ${planDetail?.name || ''}`" size="680px">
+      <div v-if="planDetail" class="plan-drawer-body">
+        <el-descriptions :column="2" border size="small">
+          <el-descriptions-item label="所属项目">{{ planDetail.project_name || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="状态">
+            <el-tag size="small" :type="planDetail.status === 'active' ? 'success' : 'info'">
+              {{ planDetail.status === 'active' ? '启用中' : '已归档' }}
+            </el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="描述" :span="2">{{ planDetail.description || '—' }}</el-descriptions-item>
+        </el-descriptions>
+
+        <div class="plan-section-header">
+          <span>计划用例（{{ planCases.length }}）</span>
+          <el-button size="small" plain @click="goCaseLibrary">去用例库添加</el-button>
+        </div>
+        <el-table :data="planCases" v-loading="planCasesLoading" stripe size="small" max-height="320">
+          <el-table-column label="用例标题" min-width="200" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.case?.title || '（用例已被删除）' }}</template>
+          </el-table-column>
+          <el-table-column label="类型" width="90" align="center">
+            <template #default="{ row }">
+              <el-tag size="small" effect="plain">{{ caseTypeLabel(row.case?.case_type) }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="优先级" width="80" align="center">
+            <template #default="{ row }">{{ row.case?.priority || '—' }}</template>
+          </el-table-column>
+          <el-table-column label="启用" width="80" align="center">
+            <template #default="{ row }">
+              <el-switch :model-value="row.enabled" @change="onToggleCase(row, $event as boolean)" />
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="80" fixed="right">
+            <template #default="{ row }">
+              <el-button size="small" type="danger" plain @click="onRemoveCase(row)">移除</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <div class="plan-section-header">
+          <span>执行历史（{{ planExecs.length }}）</span>
+          <el-button size="small" :loading="planExecsLoading" @click="loadPlanExecs">刷新</el-button>
+        </div>
+        <el-table :data="planExecs" v-loading="planExecsLoading" stripe size="small" max-height="280">
+          <el-table-column label="时间" width="160">
+            <template #default="{ row }">
+              <span class="time-text">{{ formatTime(row.started_at) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="状态" width="90" align="center">
+            <template #default="{ row }">
+              <el-tag size="small" :type="statusTagType(row.status)">{{ statusLabel(row.status) }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="通过/失败/总数" width="130" align="center">
+            <template #default="{ row }">
+              <span :style="{ color: row.failed > 0 ? '#f56c6c' : '#67c23a' }">
+                {{ row.passed }}/{{ row.failed }}/{{ row.total }}
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column label="任务 ID" min-width="120">
+            <template #default="{ row }">
+              <span class="mono-text">{{ row.test_run_id?.substring(0, 8) }}</span>
+            </template>
+          </el-table-column>
+        </el-table>
+        <el-empty
+          v-if="!planExecsLoading && planExecs.length === 0"
+          description="该计划还没有执行记录 —— 回到上方点「执行计划」"
+          :image-size="72"
+        />
+      </div>
+    </el-drawer>
   </div>
 </template>
 
@@ -403,6 +481,14 @@ export default defineComponent({
       filterProjectId: '',
       filterMode: '' as '' | 'auto' | 'plan' | 'upload',
       filterStatus: '',
+
+      // R2：计划管理抽屉
+      planDrawerVisible: false,
+      planDetail: null as any,
+      planCases: [] as any[],
+      planCasesLoading: false,
+      planExecs: [] as any[],
+      planExecsLoading: false,
 
       selectedPlanId: '' as string,
 
@@ -533,6 +619,79 @@ export default defineComponent({
         this.updateDetailProgress(row.id)
         this.schedulePoll()
       }
+    },
+
+    // ============ R2：计划管理抽屉 ============
+    caseTypeLabel(t?: string): string {
+      const map: Record<string, string> = {
+        api: '接口',
+        scenario: '场景',
+        integration: '集成',
+        performance: '性能',
+      }
+      return map[t || ''] || t || '—'
+    },
+    async openPlanDrawer(): Promise<void> {
+      if (!this.selectedPlanId) return
+      this.planDrawerVisible = true
+      this.planDetail = this.plans.find((p: any) => p.id === this.selectedPlanId) || null
+      this.loadPlanDetail()
+      this.loadPlanExecs()
+    },
+    async loadPlanDetail(): Promise<void> {
+      if (!this.selectedPlanId) return
+      this.planCasesLoading = true
+      try {
+        const res: any = await planApi.get(this.selectedPlanId)
+        this.planDetail = res?.data || null
+        this.planCases = res?.data?.cases || []
+      } catch {
+        this.planCases = []
+      } finally {
+        this.planCasesLoading = false
+      }
+    },
+    async loadPlanExecs(): Promise<void> {
+      if (!this.selectedPlanId) return
+      this.planExecsLoading = true
+      try {
+        const res: any = await planApi.listExecutions(this.selectedPlanId, { page: 1, page_size: 50 })
+        this.planExecs = res?.data?.list || []
+      } catch {
+        this.planExecs = []
+      } finally {
+        this.planExecsLoading = false
+      }
+    },
+    async onToggleCase(row: any, enabled: boolean): Promise<void> {
+      try {
+        await planApi.toggleCase(this.selectedPlanId, row.case_asset_id, enabled)
+        row.enabled = enabled
+        ElMessage.success(enabled ? '用例已启用，下次执行将包含' : '用例已停用，下次执行将跳过')
+        this.loadPlans()
+      } catch {
+        /* 拦截器已提示 */
+      }
+    },
+    async onRemoveCase(row: any): Promise<void> {
+      const title = row.case?.title || row.case_asset_id?.substring(0, 8)
+      try {
+        await ElMessageBox.confirm(`确定从计划中移除用例「${title}」吗？`, '移除确认', { type: 'warning' })
+      } catch {
+        return
+      }
+      try {
+        await planApi.removeCase(this.selectedPlanId, row.case_asset_id)
+        ElMessage.success('已从计划移除')
+        this.loadPlanDetail()
+        this.loadPlans()
+      } catch {
+        /* 拦截器已提示 */
+      }
+    },
+    goCaseLibrary(): void {
+      const pid = this.planDetail?.project_id || ''
+      window.location.href = pid ? `/case-library?project_id=${pid}` : '/case-library'
     },
 
     // ============ 创建测试任务：auto 模式 ============
@@ -716,6 +875,19 @@ export default defineComponent({
 }
 .plan-select {
   flex: 1;
+}
+.plan-drawer-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.plan-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 6px;
+  font-weight: 600;
+  color: #303133;
 }
 .form-actions {
   margin-top: 8px;
