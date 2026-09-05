@@ -8,6 +8,7 @@
           <span class="qa-title-sub">基于知识库的 AI 助手，回答附来源引用</span>
         </div>
         <div class="qa-actions">
+          <el-button plain @click="$router.push('/knowledge')">管理知识库</el-button>
           <el-select
             v-model="projectFilter"
             placeholder="全部项目（不限）"

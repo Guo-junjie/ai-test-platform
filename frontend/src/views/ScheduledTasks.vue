@@ -20,7 +20,9 @@
       <el-table :data="tasks" v-loading="loading" style="width: 100%">
         <el-table-column prop="name" label="名称" />
         <el-table-column prop="cron_expression" label="Cron 表达式" width="140" />
-        <el-table-column prop="target_type" label="目标类型" width="120" />
+        <el-table-column label="目标类型" width="120">
+          <template #default="{ row }">{{ targetLabel(row.target_type) }}</template>
+        </el-table-column>
         <el-table-column label="状态" width="100">
           <template #default="{ row }">
             <el-tag :type="row.status === 'active' ? 'success' : 'info'">
@@ -84,12 +86,30 @@
           style="margin-bottom: 16px;"
         />
         <el-form-item label="目标类型" prop="target_type">
-          <el-select v-model="form.target_type" style="width: 100%;">
-            <el-option label="测试场景" value="scenario" />
+          <el-select v-model="form.target_type" style="width: 100%;" @change="onTargetTypeChange">
+            <el-option label="测试计划（周期回归）" value="plan" />
             <el-option label="用例集合" value="case_collection" />
+            <el-option label="测试场景" value="scenario" />
           </el-select>
         </el-form-item>
-        <el-form-item label="目标 ID">
+        <el-form-item v-if="form.target_type === 'plan'" label="测试计划" required>
+          <el-select
+            v-model="form.target_id"
+            filterable
+            :loading="plansLoading"
+            placeholder="选择要周期回归的测试计划"
+            style="width: 100%;"
+          >
+            <el-option
+              v-for="p in plans"
+              :key="p.id"
+              :label="`${p.name}（${p.case_count ?? 0} 用例）`"
+              :value="p.id"
+            />
+          </el-select>
+          <div class="form-tip">按计划内「启用」的用例执行；启停用例请到测试运行页「管理计划」</div>
+        </el-form-item>
+        <el-form-item v-else label="目标 ID">
           <el-input v-model="form.target_id" placeholder="场景 ID（用例集合留空 = 全部已采纳用例）" />
         </el-form-item>
         <el-form-item label="被测服务">
@@ -132,7 +152,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
-import { scheduledTaskApi, projectApi } from '@/api'
+import { scheduledTaskApi, planApi, projectApi } from '@/api'
 import dayjs from 'dayjs'
 
 const projectId = ref('')
@@ -160,6 +180,33 @@ const form = reactive({
   target_id: '',
   service_url: '',
 })
+
+// R3：测试计划目标 —— 当前项目下的计划列表
+const plans = ref<any[]>([])
+const plansLoading = ref(false)
+
+async function loadPlans(): Promise<void> {
+  if (!projectId.value) return
+  plansLoading.value = true
+  try {
+    const res: any = await planApi.list({ project_id: projectId.value, page: 1, page_size: 200 })
+    plans.value = res?.data?.list || res?.data?.items || []
+  } catch {
+    plans.value = []
+  } finally {
+    plansLoading.value = false
+  }
+}
+
+function onTargetTypeChange(t: string): void {
+  if (t === 'plan' && plans.value.length === 0) {
+    void loadPlans()
+  }
+}
+
+function targetLabel(t: string): string {
+  return ({ scenario: '测试场景', case_collection: '用例集合', plan: '测试计划' } as Record<string, string>)[t] || t
+}
 
 const formRules: FormRules = {
   name: [{ required: true, message: '请输入任务名称', trigger: 'blur' }],
@@ -230,6 +277,9 @@ function openEditDialog(row: any): void {
     target_id: row.target_id || '',
     service_url: (row.env_config && row.env_config.service_url) || '',
   })
+  if (form.target_type === 'plan' && plans.value.length === 0) {
+    void loadPlans()
+  }
   dialogVisible.value = true
 }
 
@@ -335,5 +385,11 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+.form-tip {
+  font-size: 12px;
+  color: #909399;
+  line-height: 1.6;
+  margin-top: 4px;
 }
 </style>

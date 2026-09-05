@@ -40,6 +40,10 @@
           <el-button @click="loadCases" :loading="listLoading">刷新</el-button>
         </el-form-item>
       </el-form>
+      <div class="kb-tip">
+        💡 提示：将<a href="/knowledge" @click.prevent="$router.push('/knowledge')">测试规范、历史缺陷</a>沉淀到知识库并重建后，
+        AI 生成用例与缺陷分析会自动参考团队经验，产出更贴合业务的用例。
+      </div>
     </el-card>
 
     <!-- 用例库 -->
@@ -692,5 +696,19 @@ onMounted(async () => {
   font-size: 12px;
   color: #606266;
   word-break: break-all;
+}
+
+.kb-tip {
+  margin-top: 4px;
+  padding: 8px 12px;
+  background: #f4f8ff;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #606266;
+  line-height: 1.8;
+}
+.kb-tip a {
+  color: #409eff;
+  text-decoration: none;
 }
 </style>

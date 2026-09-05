@@ -23,41 +23,62 @@
           <el-icon><Folder /></el-icon>
           <span>项目管理</span>
         </el-menu-item>
-        <el-menu-item index="/test-run">
-          <el-icon><VideoPlay /></el-icon>
-          <span>测试运行</span>
-        </el-menu-item>
 
-        <!-- 测试资产 -->
+        <!-- 测试准备：接入材料与解析（核心链路第 2-3 步） -->
+        <el-sub-menu index="g-prep">
+          <template #title>
+            <el-icon><Cpu /></el-icon>
+            <span>测试准备</span>
+          </template>
+          <el-menu-item index="/sources">数据源管理</el-menu-item>
+          <el-menu-item index="/analysis">代码解析</el-menu-item>
+          <el-menu-item index="/doc-parser">接口文档解析</el-menu-item>
+          <el-menu-item index="/doc-review">接口文档评审</el-menu-item>
+          <el-menu-item index="/requirement-parse">需求文档解析</el-menu-item>
+        </el-sub-menu>
+
+        <!-- 测试资产：解析产出汇聚为可复用资产（核心链路第 4 步） -->
         <el-sub-menu index="g-assets">
           <template #title>
             <el-icon><Files /></el-icon>
             <span>测试资产</span>
           </template>
           <el-menu-item index="/case-library">用例库</el-menu-item>
-          <el-menu-item index="/defects">缺陷中心</el-menu-item>
           <el-menu-item index="/scenario">场景编排</el-menu-item>
-          <el-menu-item index="/doc-parser">接口文档解析</el-menu-item>
-          <el-menu-item index="/doc-review">接口文档评审</el-menu-item>
-          <el-menu-item index="/requirement-parse">需求文档解析</el-menu-item>
-          <el-menu-item index="/coverage">代码覆盖率</el-menu-item>
-          <el-menu-item index="/report">测试报告</el-menu-item>
-          <el-menu-item index="/report-analysis">报告分析</el-menu-item>
-        </el-sub-menu>
-
-        <!-- 数据智能 -->
-        <el-sub-menu index="g-data">
-          <template #title>
-            <el-icon><Cpu /></el-icon>
-            <span>数据智能</span>
-          </template>
-          <el-menu-item index="/analysis">代码解析</el-menu-item>
           <el-menu-item index="/scripts">脚本生成</el-menu-item>
           <el-menu-item index="/database-manage">数据库连接</el-menu-item>
+        </el-sub-menu>
+
+        <!-- 测试执行：按计划执行 / 周期执行（核心链路第 5 步） -->
+        <el-sub-menu index="g-exec">
+          <template #title>
+            <el-icon><VideoPlay /></el-icon>
+            <span>测试执行</span>
+          </template>
+          <el-menu-item index="/test-run">测试运行</el-menu-item>
           <el-menu-item index="/scheduled-tasks">定时任务</el-menu-item>
+        </el-sub-menu>
+
+        <!-- 测试结果：产出与洞察（核心链路第 6 步） -->
+        <el-sub-menu index="g-result">
+          <template #title>
+            <el-icon><DataLine /></el-icon>
+            <span>测试结果</span>
+          </template>
+          <el-menu-item index="/report">测试报告</el-menu-item>
+          <el-menu-item index="/report-analysis">报告分析</el-menu-item>
+          <el-menu-item index="/defects">缺陷中心</el-menu-item>
+          <el-menu-item index="/coverage">代码覆盖率</el-menu-item>
           <el-menu-item index="/quality-trend">质量趋势</el-menu-item>
-          <el-menu-item index="/sources">数据源管理</el-menu-item>
-          <el-menu-item index="/knowledge">知识库RAG</el-menu-item>
+        </el-sub-menu>
+
+        <!-- 知识智能：横向增强用例生成 / 缺陷分析 -->
+        <el-sub-menu index="g-kb">
+          <template #title>
+            <el-icon><Reading /></el-icon>
+            <span>知识智能</span>
+          </template>
+          <el-menu-item index="/knowledge">知识库</el-menu-item>
           <el-menu-item index="/knowledge-qa">知识问答</el-menu-item>
         </el-sub-menu>
 

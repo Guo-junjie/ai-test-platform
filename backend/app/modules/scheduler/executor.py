@@ -24,6 +24,7 @@ from app.models.database import (
     ScheduledTask,
     TestCaseAsset,
     CaseAssetStatus,
+    TestPlanExecution,
     TestRun,
     TestStatus,
     SourceType,
@@ -137,6 +138,48 @@ async def execute_scheduled_chain(task_id: str) -> dict[str, Any]:
             run_async = run_api
             test_type = "api"
 
+        elif task.target_type.value == "plan":
+            # R3：测试计划周期回归 —— 取计划内 enabled 用例资产，复用用例集合执行路径
+            if not task.target_id:
+                return {"status": "failed", "error": "未绑定测试计划 ID",
+                        "test_run_id": None, "total": 0, "passed": 0, "failed": 0}
+            from app.models.database import TestPlan, TestPlanCase
+
+            plan = (
+                await session.execute(
+                    select(TestPlan).where(TestPlan.id == task.target_id)
+                )
+            ).scalar_one_or_none()
+            if plan is None:
+                return {"status": "failed", "error": f"测试计划不存在: {task.target_id}",
+                        "test_run_id": None, "total": 0, "passed": 0, "failed": 0}
+            if plan.status != "active":
+                return {"status": "failed", "error": f"测试计划已归档: {plan.name}",
+                        "test_run_id": None, "total": 0, "passed": 0, "failed": 0}
+            plan_rows = (
+                await session.execute(
+                    select(TestPlanCase, TestCaseAsset)
+                    .join(TestCaseAsset, TestCaseAsset.id == TestPlanCase.case_asset_id)
+                    .where(TestPlanCase.plan_id == plan.id, TestPlanCase.enabled == True)  # noqa: E712
+                    .order_by(TestPlanCase.sort_order.asc(), TestPlanCase.added_at.asc())
+                )
+            ).all()
+            assets = [asset for _, asset in plan_rows]
+            if not assets:
+                return {
+                    "status": "failed",
+                    "error": f"计划「{plan.name}」内没有启用的用例（请在计划管理中检查）",
+                    "test_run_id": None, "total": 0, "passed": 0, "failed": 0,
+                }
+            cases = [_asset_to_api_case(a) for a in assets]
+            persist_cases = {"api": cases}
+
+            async def run_plan_api():
+                return await APITester().run_tests(cases, service_url)
+
+            run_async = run_plan_api
+            test_type = "api"
+
         elif task.target_type.value == "scenario":
             if not task.target_id:
                 return {"status": "failed", "error": "未绑定场景 ID",
@@ -214,6 +257,24 @@ async def execute_scheduled_chain(task_id: str) -> dict[str, Any]:
         analysis_result={"trigger": "scheduled", "scheduled_task_id": task_id,
                          "total": total, "passed": passed, "failed": failed},
     )
+
+    # R3：plan 目标补执行历史 —— 定时回归与手动执行一样出现在计划管理抽屉
+    if task.target_type.value == "plan" and task.target_id:
+        try:
+            async with AsyncSessionLocal() as session:
+                session.add(TestPlanExecution(
+                    plan_id=task.target_id,
+                    test_run_id=uuid.UUID(run_id),
+                    total=total,
+                    passed=passed,
+                    failed=failed,
+                    started_at=None,
+                    finished_at=datetime.utcnow(),
+                ))
+                await session.commit()
+        except Exception as exc:  # noqa: BLE001 - 历史记录失败不影响执行结果
+            logger.warning(f"[sched:{task_id}] failed to record plan execution history: {exc}")
+
     logger.info(f"[sched:{task_id}] executed: total={total} passed={passed} failed={failed}")
     return {"status": "success", "test_run_id": run_id, "total": total,
             "passed": passed, "failed": failed, "error": None}

@@ -23,6 +23,7 @@
               强制全量重建
             </el-checkbox>
             <el-button :disabled="rebuildLoading" @click="loadStatus">刷新</el-button>
+            <el-button type="primary" plain @click="$router.push('/knowledge-qa')">知识问答</el-button>
           </div>
         </div>
       </template>

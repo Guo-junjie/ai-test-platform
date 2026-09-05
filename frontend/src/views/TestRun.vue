@@ -364,7 +364,10 @@
 
         <div class="plan-section-header">
           <span>执行历史（{{ planExecs.length }}）</span>
-          <el-button size="small" :loading="planExecsLoading" @click="loadPlanExecs">刷新</el-button>
+          <div>
+            <el-button size="small" plain @click="$router.push('/scheduled-tasks')">定时回归</el-button>
+            <el-button size="small" :loading="planExecsLoading" @click="loadPlanExecs">刷新</el-button>
+          </div>
         </div>
         <el-table :data="planExecs" v-loading="planExecsLoading" stripe size="small" max-height="280">
           <el-table-column label="时间" width="160">

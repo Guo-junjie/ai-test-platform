@@ -14,7 +14,7 @@ class ScheduledTaskRequest(BaseModel):
 
     name: str = Field(..., description="任务名称")
     cron_expression: str = Field(default="0 0 * * *", description="Cron 表达式")
-    target_type: str = Field(default="scenario", description="目标类型: scenario / case_collection")
+    target_type: str = Field(default="scenario", description="目标类型: scenario / case_collection / plan")
     target_id: Optional[str] = Field(default=None, description="目标 ID")
     project_id: Optional[str] = Field(default=None, description="所属项目 ID")
     description: str = Field(default="", description="任务描述")

@@ -121,9 +121,10 @@ class ScheduledTaskStatus(PyEnum):
 
 
 class ScheduledTaskTargetType(PyEnum):
-    """定时任务关联对象类型（能力8）"""
+    """定时任务关联对象类型（能力8；R3 起支持测试计划周期回归）"""
     SCENARIO = "scenario"
     CASE_COLLECTION = "case_collection"
+    PLAN = "plan"
 
 
 class AnalysisType(PyEnum):

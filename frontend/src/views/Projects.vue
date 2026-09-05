@@ -118,6 +118,9 @@
           </el-descriptions-item>
           <el-descriptions-item label="描述">{{ current.description || '—' }}</el-descriptions-item>
           <el-descriptions-item label="代码来源">{{ sourceLabel(current.source_type) }}</el-descriptions-item>
+          <el-descriptions-item label="仓库配置">
+            <el-link type="primary" :underline="false" @click="$router.push('/sources')">在数据源管理中维护</el-link>
+          </el-descriptions-item>
         </el-descriptions>
 
         <div class="section-header">
