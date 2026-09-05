@@ -39,6 +39,9 @@ _PAIR_LIST: Tuple[Tuple[str, type], ...] = (
     ("caseassetstatus", __import__("app.models.database", fromlist=["CaseAssetStatus"]).CaseAssetStatus),
     ("scenariostatus", __import__("app.models.database", fromlist=["ScenarioStatus"]).ScenarioStatus),
     ("endpointsource", __import__("app.models.database", fromlist=["EndpointSource"]).EndpointSource),
+    # P0：SourceType 模型从裸 SAEnum 改为 values_callable=小写，老库只有大写 label，
+    # 启动时 ALTER ADD VALUE 补齐小写避免 LookupError（同时支持两类值写入）
+    ("sourcetype", __import__("app.models.database", fromlist=["SourceType"]).SourceType),
 )
 
 

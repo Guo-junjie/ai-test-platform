@@ -251,6 +251,10 @@ app.include_router(report_analysis_router, prefix="/api", tags=["报告分析"])
 from app.api.defects import router as defects_router
 app.include_router(defects_router, prefix="/api/defects", tags=["缺陷中心"])
 
+# P0 测试计划（CRUD + 用例管理 + 执行触发）
+from app.api.plan import router as plan_router
+app.include_router(plan_router, prefix="/api/plans", tags=["测试计划"])
+
 # 知识库 RAG（能力12：状态概览 / 术语表维护 / 检索预览）
 from app.api.knowledge import router as knowledge_router
 app.include_router(knowledge_router, prefix="/api/knowledge", tags=["知识库RAG"])

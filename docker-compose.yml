@@ -104,6 +104,7 @@ services:
     container_name: aitp-celery-worker
     environment:
       TZ: Asia/Shanghai
+      PYTHONPATH: /app
     env_file: .env
     depends_on:
       postgres:

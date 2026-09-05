@@ -32,8 +32,17 @@ router = APIRouter()
 
 
 class CreateTestRunRequest(BaseModel):
-    """创建测试任务请求"""
+    """创建测试任务请求（P0 模式分支）
 
+    mode 决定走哪条链路：
+    - plan:  plan_id 必填；跳过 fetch/analyze/AI 生成，直接执行测试计划内用例
+    - auto:  source_type 决定 fetch 方式（github/svn/upload）；AI 生成用例后执行
+    - upload: 历史上传压缩包模式（auto 模式的特例，保留向后兼容）
+    """
+    mode: str = "auto"            # plan / auto / upload
+    # plan 模式必填
+    plan_id: str | None = None
+    # auto 模式字段
     source_type: str = "github"  # github / svn / upload
     repo_url: str | None = None
     branch: str = "main"
@@ -99,6 +108,8 @@ async def list_test_runs(
                     "started_at": run.started_at.isoformat() if run.started_at else None,
                     "completed_at": run.completed_at.isoformat() if run.completed_at else None,
                     "created_at": run.created_at.isoformat() if run.created_at else None,
+                    "plan_id": str(run.plan_id) if run.plan_id else None,
+                    "current_step": run.current_step or "pending",
                 }
                 for run, project in rows
             ],
@@ -337,4 +348,107 @@ async def cancel_test_run(
         "code": 0,
         "data": {"test_run_id": test_run_id, "status": "cancelled"},
         "message": "Test run cancelled",
+    }
+
+
+# ==================== P0：执行摘要（解决测试依据不可见问题）====================
+
+
+@router.get("/{run_id}/exec-summary")
+async def get_exec_summary(
+    run_id: str,
+    db: AsyncSession = Depends(get_db_session),
+):
+    """执行摘要：来源描述/用例数/通过/失败/缺陷/计划上下文/报告链接。
+
+    让用户一打开任务详情就知道"它跑的是什么、跑成什么、产物在哪"，
+    解决"测试依据不可见"的体验问题。
+    """
+    try:
+        rid = uuid.UUID(run_id)
+    except ValueError:
+        raise HTTPException(400, f"Invalid run_id: {run_id}")
+
+    from sqlalchemy import func as _f
+    from app.models.database import (
+        Defect, TestCase, TestResult, TestRun, TestPlan, TestPlanExecution, TestReport,
+    )
+
+    run = (await db.execute(select(TestRun).where(TestRun.id == rid))).scalar_one_or_none()
+    if run is None:
+        raise HTTPException(404, "Test run not found")
+
+    cases_total = (await db.execute(
+        select(_f.count()).select_from(TestCase).where(TestCase.test_run_id == rid)
+    )).scalar() or 0
+    results_total = (await db.execute(
+        select(_f.count()).select_from(TestResult).where(TestResult.test_run_id == rid)
+    )).scalar() or 0
+    passed = (await db.execute(
+        select(_f.count()).select_from(TestResult).where(
+            TestResult.test_run_id == rid, TestResult.is_passed.is_(True)
+        )
+    )).scalar() or 0
+    defects = (await db.execute(
+        select(_f.count()).select_from(Defect).where(Defect.test_run_id == rid)
+    )).scalar() or 0
+    report = (await db.execute(
+        select(TestReport).where(TestReport.test_run_id == rid)
+    )).scalar_one_or_none()
+
+    plan_name = None
+    plan_execution = None
+    if run.plan_id:
+        p = (await db.execute(select(TestPlan).where(TestPlan.id == run.plan_id))).scalar_one_or_none()
+        plan_name = p.name if p else None
+        pe = (await db.execute(
+            select(TestPlanExecution).where(TestPlanExecution.test_run_id == rid)
+        )).scalar_one_or_none()
+        if pe:
+            plan_execution = {
+                "id": str(pe.id),
+                "total": pe.total, "passed": pe.passed, "failed": pe.failed,
+                "duration_ms": pe.duration_ms,
+                "started_at": pe.started_at.isoformat() if pe.started_at else None,
+                "finished_at": pe.finished_at.isoformat() if pe.finished_at else None,
+            }
+
+    # 来源描述（人类可读）
+    if run.plan_id and plan_name:
+        source_desc = f"测试计划《{plan_name}》+ {cases_total} 用例"
+    elif run.source_type and run.source_type.value == "upload" and (run.source_ref or "").startswith("plan:"):
+        source_desc = f"测试计划 + {cases_total} 用例"
+    elif run.source_type and run.source_type.value == "upload":
+        source_desc = f"上传代码 + 自动生成 {results_total} 用例执行"
+    elif run.branch:
+        sha = (run.commit_sha or "")[:8]
+        source_desc = f"{run.source_type.value}/{run.branch}" + (f" @ {sha}" if sha else "")
+    else:
+        source_desc = run.source_ref or "-"
+
+    return {
+        "code": 0,
+        "data": {
+            "run_id": str(run.id),
+            "project_id": str(run.project_id) if run.project_id else None,
+            "mode": "plan" if run.plan_id else "auto",
+            "status": run.status.value if run.status else "pending",
+            "progress": run.progress or 0,
+            "current_step": run.current_step or "pending",
+            "source_description": source_desc,
+            "plan_id": str(run.plan_id) if run.plan_id else None,
+            "plan_name": plan_name,
+            "cases_total": cases_total,
+            "results_total": results_total,
+            "results_passed": passed,
+            "results_failed": (results_total - passed),
+            "defect_count": defects,
+            "has_report": report is not None,
+            "report_id": str(report.id) if report else None,
+            "report_quality_score": report.quality_score if report else None,
+            "plan_execution": plan_execution,
+            "started_at": run.started_at.isoformat() if run.started_at else None,
+            "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        },
+        "message": "success",
     }

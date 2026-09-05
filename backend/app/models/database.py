@@ -161,7 +161,7 @@ class Project(Base):
     name = Column(String(200), nullable=False)
     description = Column(Text)
     owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
-    source_type = Column(SAEnum(SourceType, name="sourcetype"), nullable=False)
+    source_type = Column(SAEnum(SourceType, values_callable=lambda x: [e.value for e in x], name="sourcetype"), nullable=False)
     source_config = Column(JSONB, default={})  # 仓库地址、分支等配置
     quality_gate_config = Column(JSONB, default={})  # 质量门禁规则
     is_active = Column(Boolean, default=True)
@@ -232,7 +232,7 @@ class TestRun(Base):
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
 
     # 数据源信息
-    source_type = Column(SAEnum(SourceType, name="sourcetype"), nullable=False)
+    source_type = Column(SAEnum(SourceType, values_callable=lambda x: [e.value for e in x], name="sourcetype"), nullable=False)
     source_ref = Column(String(500))  # repo URL / SVN path / upload filename
     branch = Column(String(200))
     commit_sha = Column(String(40))  # Git commit / SVN revision
@@ -241,6 +241,13 @@ class TestRun(Base):
     # 任务状态
     status = Column(SAEnum(TestStatus, name="teststatus"), default=TestStatus.PENDING, nullable=False)
     progress = Column(Integer, default=0)  # 0-100
+    # P0 方案：测试计划模式 —— 任务绑定测试计划时填充此列，与 source_type 互斥
+    # （plan_id 非空 = 执行测试计划；NULL = 走老链路：自动生成/上传）
+    plan_id = Column(UUID(as_uuid=True), ForeignKey("test_plans.id"), nullable=True)
+    # P0 方案：当前执行步骤（pending/pulling/analyzing/generating/executing/
+    # aggregating/reporting/completed），与 progress 同步从 Redis 落库，
+    # 历史任务也能查到最终步骤（解决进度条旁 step=N/A）
+    current_step = Column(String(50), default="pending", nullable=True)
     error_message = Column(Text)
 
     # 时间
@@ -263,6 +270,7 @@ class TestRun(Base):
 
     __table_args__ = (
         Index("idx_test_runs_project_status", "project_id", "status"),
+        Index("idx_test_runs_plan", "plan_id"),
         Index("idx_test_runs_created", "created_at"),
     )
 
@@ -713,6 +721,69 @@ class TestCaseAsset(Base):
 
 
 # ==================== 能力4：测试场景表（steps JSONB 单表） ====================
+
+
+
+class TestPlan(Base):
+    """测试计划（资产层）：由用例库用例资产组成，可重复执行。"""
+    __tablename__ = "test_plans"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    name = Column(String(200), nullable=False)
+    description = Column(Text)
+    status = Column(String(20), default="active")  # active / archived
+    source = Column(String(20), default="manual")  # manual / imported_from
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    project = relationship("Project")
+    created_by_user = relationship("User", foreign_keys=[created_by])
+    plan_cases = relationship("TestPlanCase", back_populates="plan", cascade="all, delete-orphan")
+    executions = relationship("TestPlanExecution", back_populates="plan")
+
+    __table_args__ = (
+        Index("idx_test_plans_project", "project_id"),
+    )
+
+
+class TestPlanCase(Base):
+    """测试计划-用例资产关联（多对多 + 排序 + 单条启用/禁用）。"""
+    __tablename__ = "test_plan_cases"
+
+    plan_id = Column(UUID(as_uuid=True), ForeignKey("test_plans.id", ondelete="CASCADE"), primary_key=True)
+    case_asset_id = Column(UUID(as_uuid=True), ForeignKey("test_case_assets.id"), primary_key=True)
+    sort_order = Column(Integer, default=0)
+    enabled = Column(Boolean, default=True)  # 计划内可临时屏蔽某条
+    added_at = Column(DateTime, default=datetime.utcnow)
+
+    plan = relationship("TestPlan", back_populates="plan_cases")
+    case_asset = relationship("TestCaseAsset")
+
+
+class TestPlanExecution(Base):
+    """测试计划执行快照——每次触发执行插一行，保留历史。"""
+    __tablename__ = "test_plan_executions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    plan_id = Column(UUID(as_uuid=True), ForeignKey("test_plans.id"), nullable=False)
+    test_run_id = Column(UUID(as_uuid=True), ForeignKey("test_runs.id"), nullable=False)
+    total = Column(Integer, default=0)
+    passed = Column(Integer, default=0)
+    failed = Column(Integer, default=0)
+    skipped = Column(Integer, default=0)
+    duration_ms = Column(Integer, default=0)
+    started_at = Column(DateTime)
+    finished_at = Column(DateTime)
+
+    plan = relationship("TestPlan", back_populates="executions")
+    test_run = relationship("TestRun")
+
+    __table_args__ = (
+        Index("idx_test_plan_exec_plan", "plan_id"),
+        Index("idx_test_plan_exec_run", "test_run_id"),
+    )
 
 
 class Scenario(Base):
@@ -1277,6 +1348,24 @@ async def init_db():
         logger.warning(f"Skip defects columns sync: {e}")
     else:
         logger.info("Defect status/project_id columns ensured")
+
+    # P0 测试计划：新增 3 张表 + test_runs 补两列（init_db 幂等兜底）。
+    try:
+        async with async_engine.connect() as conn:
+            autocommit_conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
+            for col_sql in (
+                "ALTER TABLE test_runs ADD COLUMN IF NOT EXISTS plan_id UUID",
+                "ALTER TABLE test_runs ADD COLUMN IF NOT EXISTS current_step VARCHAR(50) DEFAULT 'pending'",
+                "CREATE INDEX IF NOT EXISTS idx_test_runs_plan ON test_runs(plan_id)",
+            ):
+                try:
+                    await autocommit_conn.execute(text(col_sql))
+                except Exception as e:
+                    logger.warning(f"Failed ({col_sql[:40]}...): {e}")
+    except Exception as e:
+        logger.warning(f"Skip test_runs plan_id/current_step sync: {e}")
+    else:
+        logger.info("TestRun plan_id/current_step columns ensured")
 
     # 能力12：best-effort 启用 pgvector 快路径（失败仅记日志，代码绝不依赖；
     # 检索使用 JSONB + Python 侧余弦相似度，不要求 pgvector 扩展）。

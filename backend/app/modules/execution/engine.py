@@ -57,7 +57,10 @@ def _get_sync_redis():
 
 
 def _set_task_status_sync(task_id: str, status: str, extra: dict[str, Any] | None = None) -> None:
-    """同步设置任务状态到 Redis。"""
+    """同步设置任务状态到 Redis + 同步落库 current_step（解决 step=N/A）。
+
+    extra 里若含 step 字段，会被提取出来写 DB（否则用 status 作为兜底）。
+    """
     data: dict[str, Any] = {"status": status}
     if extra:
         data.update(extra)
@@ -66,15 +69,52 @@ def _set_task_status_sync(task_id: str, status: str, extra: dict[str, Any] | Non
         json.dumps(data, ensure_ascii=False),
         ex=7 * 24 * 3600,
     )
+    # 落库（current_step 列，P0 解决 step=N/A）
+    step_text = (extra or {}).get("step") or status
+    try:
+        from sqlalchemy import update as _upd
+        from app.models.database import TestRun as _TR
+        from app.utils.database import SyncSessionLocal as _SL
+        with _SL() as s:
+            s.execute(_upd(_TR).where(_TR.id == uuid.UUID(task_id)).values(current_step=step_text[:50]))
+            s.commit()
+    except Exception:  # noqa: BLE001 - 落库失败不影响 Redis 进度
+        pass
 
 
 def _set_task_progress_sync(task_id: str, progress: int, step: str = "") -> None:
-    """同步设置任务进度到 Redis。"""
+    """同步设置任务进度到 Redis + 同步落库 current_step。"""
     _get_sync_redis().set(
         f"task:progress:{task_id}",
         json.dumps({"progress": progress, "step": step}, ensure_ascii=False),
         ex=7 * 24 * 3600,
     )
+    if step:
+        # current_step 同步落库：用 raw psycopg2 独立连接（绕开 ORM engine，
+        # 避免 worker 子进程里 SyncSessionLocal 拿不到 engine 的问题）
+        import logging as _lg
+        _log = _lg.getLogger(__name__)
+        _log.info(f"persist current_step task={task_id} step={step[:50]!r}")
+        try:
+            import psycopg2
+            from app.config import settings as _s
+            _dsn = f"host={_s.POSTGRES_HOST} port={_s.POSTGRES_PORT} dbname={_s.POSTGRES_DB} user={_s.POSTGRES_USER} password={_s.POSTGRES_PASSWORD}"
+            with psycopg2.connect(_dsn) as _c, _c.cursor() as _cur:
+                _cur.execute("UPDATE test_runs SET current_step = %s WHERE id = %s", (step[:50], task_id))
+                _c.commit()
+            _log.info("current_step raw OK")
+        except Exception as e:
+            _log.error(f"current_step raw failed: {type(e).__name__}: {e}", exc_info=True)
+        # 备用：尝试 ORM
+        try:
+            from sqlalchemy import update as _upd
+            from app.models.database import TestRun as _TR
+            from app.utils.database import SyncSessionLocal as _SL
+            with _SL() as s2:
+                s2.execute(_upd(_TR).where(_TR.id == uuid.UUID(task_id)).values(current_step=step[:50]))
+                s2.commit()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _persist_test_results(test_run_id: str, test_results: list[dict[str, Any]]) -> int:
@@ -298,6 +338,14 @@ def prepare_environment(
 
     _set_task_status_sync(test_run_id, "executing", {"step": "preparing_environment"})
     _set_task_progress_sync(test_run_id, 55, "启动被测服务")
+
+    # P0 plan 模式：无 SUT，直接用 plan 模式传的 service_url_override 短路启动
+    if analysis_result.get("service_url_override"):
+        logger.info(f"[{test_run_id}] plan mode: skip SUT launch, use placeholder URL")
+        return {
+            "service_url": analysis_result["service_url_override"],
+            "analysis_result": analysis_result,
+        }
 
     tech_stack = analysis_result.get("tech_stack", {})
     stack_name = tech_stack.get("stack", "unknown")
@@ -674,6 +722,40 @@ def aggregate_results(
             logger.info(f"[{test_run_id}] auto report generation dispatched")
         except Exception as e:  # noqa: BLE001
             logger.warning(f"[{test_run_id}] auto report dispatch failed (non-fatal): {e}")
+
+    # P0：plan 模式写计划执行快照（test_plan_executions）
+    try:
+        from app.models.database import TestPlanExecution as _TPE
+        import asyncio as _aio
+
+        async def _write_plan_exec():
+            from app.utils.database import AsyncSessionLocal as _SL
+            from sqlalchemy import select as _sel
+
+            from app.models.database import TestRun as _TR
+
+            async with _SL() as s:
+                run_row = (await s.execute(_sel(_TR).where(_TR.id == test_run_id))).scalar_one_or_none()
+                if not run_row or not run_row.plan_id:
+                    return
+                total_n = summary.get("total_tests", 0)
+                passed_n = summary.get("total_passed", 0)
+                failed_n = summary.get("total_failed", 0)
+                # started_at 从 first_test_results / created_at 取（若 available）
+                started = run_row.started_at or run_row.created_at
+                finished = run_row.completed_at or started
+                duration_ms = int((finished - started).total_seconds() * 1000) if (started and finished) else 0
+                s.add(_TPE(
+                    plan_id=run_row.plan_id,
+                    test_run_id=run_row.id,
+                    total=total_n, passed=passed_n, failed=failed_n,
+                    duration_ms=duration_ms,
+                    started_at=started, finished_at=finished,
+                ))
+                await s.commit()
+        _aio.run(_write_plan_exec())
+    except Exception as e:  # noqa: BLE001 - 快照失败不影响报告
+        logger.warning(f"[{test_run_id}] write plan execution snapshot failed: {e}")
 
     # CI/CD 集成：项目配置了回调地址时推送结果摘要（best-effort，不阻塞、不重试）
     try:

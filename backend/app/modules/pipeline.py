@@ -188,60 +188,141 @@ def run_test_pipeline(self, test_run_id: str, req_dict: dict[str, Any]) -> dict[
         if _is_cancelled(test_run_id):
             raise RunCancelled(test_run_id)
 
-        # Step 1: 代码拉取
-        _set_task_status_sync(test_run_id, "pulling", {"step": "fetching_code"})
-        _set_task_progress_sync(test_run_id, 10, "拉取代码")
+        # ==================== P0 模式分支 ====================
+        # plan 模式：跳过 fetch/analyze/generate，直接用计划内用例资产入 test_cases
+        plan_id_str = req_dict.get("plan_id")
+        plan_cases = None
+        if plan_id_str:
+            try:
+                from app.models.database import TestCaseAsset, TestPlan, TestPlanCase
+
+                async def _load_plan_cases():
+                    """从 test_plan_cases + test_case_assets 取 enabled 用例，按 case_type 分桶。"""
+                    async with AsyncSessionLocal() as s:
+                        pid_uuid = uuid.UUID(plan_id_str)
+                        plan_row = (
+                            await s.execute(
+                                select(TestPlan).where(TestPlan.id == pid_uuid)
+                            )
+                        ).scalar_one_or_none()
+                        if plan_row is None:
+                            raise Exception("plan not found")
+                        if plan_row.status != "active":
+                            raise Exception(f"plan {plan_id_str} is {plan_row.status}, not active")
+                        rows = (
+                            await s.execute(
+                                select(TestCaseAsset)
+                                .join(TestPlanCase, TestPlanCase.case_asset_id == TestCaseAsset.id)
+                                .where(
+                                    TestPlanCase.plan_id == pid_uuid,
+                                    TestPlanCase.enabled.is_(True),
+                                )
+                                .order_by(TestPlanCase.sort_order.asc())
+                            )
+                        ).scalars().all()
+                        buckets = {"api": [], "performance": [], "integration": []}
+                        # case_type 枚举是 positive/negative/boundary/exception
+                        # （设计语义是"测试类型"），但 buckets 用 api/performance/integration
+                        # （设计语义是"测试器类型"）——所有用例默认走 API 测试器
+                        _CT_MAP = {"performance": "performance", "integration": "integration"}
+                        for a in rows:
+                            t = _CT_MAP.get(a.case_type, "api")
+                            buckets.setdefault(t, []).append({
+                                "case_id": str(a.id),
+                                "case_name": a.title,
+                                "request": a.request_data or {},
+                                "expected": a.expected_result or {},
+                            })
+                        return buckets, plan_row
+
+                plan_cases, plan_row = asyncio.run(_load_plan_cases())
+                _set_task_status_sync(test_run_id, "loading_cases", {"step": "loading_plan_cases"})
+                _set_task_progress_sync(test_run_id, 30, f"加载计划用例 ({sum(len(v) for v in plan_cases.values())} 条)")
+                if _is_cancelled(test_run_id):
+                    raise RunCancelled(test_run_id)
+                logger.info(
+                    f"[{test_run_id}] plan mode: loaded plan {plan_id_str} with "
+                    f"api={len(plan_cases['api'])} perf={len(plan_cases['performance'])} "
+                    f"integ={len(plan_cases['integration'])}"
+                )
+                # 计划元数据（供 analysis_result 传递给报告/缺陷）
+                plan_id_for_result = plan_id_str
+                plan_name_for_result = plan_row.name
+                project_id_for_result = str(plan_row.project_id)
+            except Exception as e:
+                logger.error(f"[{test_run_id}] plan mode load failed: {e}", exc_info=True)
+                raise RunCancelled  # 走失败路径标 FAILED
+
+        # Step 1: 代码拉取（非 plan 模式）
+        if not plan_cases:
+            _set_task_status_sync(test_run_id, "pulling", {"step": "fetching_code"})
+            _set_task_progress_sync(test_run_id, 10, "拉取代码")
 
         from app.modules.source import SourceAdapterFactory, SourceConfig, SourceType
 
-        source_config = SourceConfig(
-            source_type=SourceType(req_dict.get("source_type") or "github"),
-            github_token=req_dict.get("github_token"),
-            repo_url=req_dict.get("repo_url"),
-            branch=req_dict.get("branch") or "main",
-            commit_sha=req_dict.get("commit_sha"),
-            svn_url=req_dict.get("svn_url"),
-            svn_username=req_dict.get("svn_username"),
-            svn_password=req_dict.get("svn_password"),
-            upload_file_path=req_dict.get("upload_file_path"),
-        )
-
-        fetch_result = SourceAdapterFactory.fetch_code(source_config)
-        local_path = fetch_result.get("local_path", "")
-        snapshot_id = fetch_result.get("snapshot_id")
-
-        logger.info(f"[{test_run_id}] Code fetched: {local_path}")
-
-        # Step 2: 代码解析
-        _set_task_status_sync(test_run_id, "analyzing", {"step": "code_analysis"})
-        _set_task_progress_sync(test_run_id, 25, "代码解析")
-
-        if _is_cancelled(test_run_id):
-            raise RunCancelled(test_run_id)
-
-        from app.modules.code_analyzer import AICodeAnalyzer, APIExtractor, StackDetector
-
-        detector = StackDetector()
-        stack_info = detector.detect(local_path)
-
-        extractor = APIExtractor()
-        apis = extractor.extract(local_path, stack_info)
-
-        ai_analyzer = AICodeAnalyzer()
-        try:
-            ai_analysis = asyncio.run(
-                ai_analyzer.analyze_project(local_path, apis, stack_info)
+        # plan 模式短路整个 fetch + analyze；只走 case_gen + persist + execute
+        if not plan_cases:
+            # plan 模式 req_dict 里的 source_type="plan" 不是 SourceType 成员，
+            # 这里三元就地解析（占位 UPLOAD 仅用于满足 SQLEnum 校验）
+            _src = req_dict.get("source_type") or "github"
+            source_config = SourceConfig(
+                source_type = SourceType.UPLOAD if _src == "plan" else SourceType(_src),
+                github_token=req_dict.get("github_token"),
+                repo_url=req_dict.get("repo_url"),
+                branch=req_dict.get("branch") or "main",
+                commit_sha=req_dict.get("commit_sha"),
+                svn_url=req_dict.get("svn_url"),
+                svn_username=req_dict.get("svn_username"),
+                svn_password=req_dict.get("svn_password"),
+                upload_file_path=req_dict.get("upload_file_path"),
             )
-        except ModelNotConfiguredError:
-            raise
-        except Exception as e:
-            logger.error(f"[{test_run_id}] AI analysis failed: {e}")
-            ai_analysis = {
-                "business_modules": [],
-                "data_flow": {},
-                "risk_areas": [],
-                "api_analyses": [],
-            }
+
+            fetch_result = SourceAdapterFactory.fetch_code(source_config)
+            local_path = fetch_result.get("local_path", "")
+            snapshot_id = fetch_result.get("snapshot_id")
+
+            logger.info(f"[{test_run_id}] Code fetched: {local_path}")
+
+            # Step 2: 代码解析（非 plan 模式）
+            _set_task_status_sync(test_run_id, "analyzing", {"step": "code_analysis"})
+            _set_task_progress_sync(test_run_id, 25, "代码解析")
+
+            if _is_cancelled(test_run_id):
+                raise RunCancelled(test_run_id)
+
+            from app.modules.code_analyzer import AICodeAnalyzer, APIExtractor, StackDetector
+
+            detector = StackDetector()
+            stack_info = detector.detect(local_path)
+            extractor = APIExtractor()
+            apis = extractor.extract(local_path, stack_info)
+        else:
+            stack_info = {"stack": "plan", "language": "plan", "framework": "plan", "confidence": 1.0}
+            apis = []
+
+        if plan_cases:
+            # plan 模式无代码分析——所有元数据已从 plan 拿到
+            stack_info = {"stack": "plan", "language": "plan", "framework": "plan", "confidence": 1.0}
+            apis = []
+            ai_analysis = {"business_modules": [], "data_flow": {}, "risk_areas": [], "api_analyses": []}
+            local_path = ""  # plan 模式无本地代码路径
+            snapshot_id = None
+        else:
+            ai_analyzer = AICodeAnalyzer()
+            try:
+                ai_analysis = asyncio.run(
+                    ai_analyzer.analyze_project(local_path, apis, stack_info)
+                )
+            except ModelNotConfiguredError:
+                raise
+            except Exception as e:
+                logger.error(f"[{test_run_id}] AI analysis failed: {e}")
+                ai_analysis = {
+                    "business_modules": [],
+                    "data_flow": {},
+                    "risk_areas": [],
+                    "api_analyses": [],
+                }
 
         analysis_result: dict[str, Any] = {
             "tech_stack": stack_info,
@@ -251,29 +332,38 @@ def run_test_pipeline(self, test_run_id: str, req_dict: dict[str, Any]) -> dict[
             "repo_path": local_path,
             "snapshot_id": snapshot_id,
         }
+        # plan 模式补充上下文（让报告/缺陷知道这次跑的是哪个计划）
+        if plan_cases:
+            analysis_result["plan_id"] = plan_id_for_result
+            analysis_result["plan_name"] = plan_name_for_result
 
         logger.info(
             f"[{test_run_id}] Analysis completed: stack={stack_info.get('stack')}, "
             f"apis={len(apis)}"
         )
 
-        # Step 3: 用例生成
-        _set_task_status_sync(test_run_id, "generating", {"step": "case_generation"})
-        _set_task_progress_sync(test_run_id, 40, "生成测试用例")
+        # Step 3: 用例生成（plan 模式跳过 AI 生成，直接用计划内用例）
+        if not plan_cases:
+            _set_task_status_sync(test_run_id, "generating", {"step": "case_generation"})
+            _set_task_progress_sync(test_run_id, 40, "生成测试用例")
 
-        if _is_cancelled(test_run_id):
-            raise RunCancelled(test_run_id)
+            if _is_cancelled(test_run_id):
+                raise RunCancelled(test_run_id)
 
-        from app.modules.case_generator import TestCaseGenerator
-        from app.utils.database import get_test_run_project_id
+            from app.modules.case_generator import TestCaseGenerator
+            from app.utils.database import get_test_run_project_id
 
-        # 能力12 P1：解析项目 ID，让知识库注入按项目过滤（解析失败走全局回退）
-        project_id = asyncio.run(get_test_run_project_id(test_run_id))
+            # 能力12 P1：解析项目 ID，让知识库注入按项目过滤（解析失败走全局回退）
+            project_id = asyncio.run(get_test_run_project_id(test_run_id))
 
-        generator = TestCaseGenerator()
-        test_cases = asyncio.run(
-            generator.generate_all(apis, ai_analysis, project_id=project_id)
-        )
+            generator = TestCaseGenerator()
+            test_cases = asyncio.run(
+                generator.generate_all(apis, ai_analysis, project_id=project_id)
+            )
+        else:
+            test_cases = plan_cases
+            project_id = project_id_for_result
+            logger.info(f"[{test_run_id}] plan mode: skip AI generation, use {sum(len(v) for v in plan_cases.values())} plan cases")
 
         logger.info(
             f"[{test_run_id}] Cases generated: "
@@ -293,6 +383,10 @@ def run_test_pipeline(self, test_run_id: str, req_dict: dict[str, Any]) -> dict[
         from app.modules.execution.engine import TestExecutionEngine
 
         engine = TestExecutionEngine()
+        # plan 模式无 SUT：传占位 service_url 让 prepare_environment 跳过启动
+        # （性能测试在无目标 URL 时熔断保护下自然 0 用例返回）
+        if plan_cases:
+            analysis_result["service_url_override"] = "http://plan-mode-no-sut"
         engine.execute_all(test_run_id, analysis_result, test_cases)
 
         logger.info(f"[{test_run_id}] Pipeline dispatched, waiting for execution...")
