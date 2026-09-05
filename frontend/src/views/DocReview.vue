@@ -337,6 +337,13 @@ async function viewHistory(row: any) {
 
 onMounted(async () => {
   await loadProjects()
+  // 支持直接带 ?project_id= 进入（如从项目/用例库跳转）
+  const qpid = route.query.project_id as string | undefined
+  if (qpid && projects.value.some((p: any) => p.id === qpid)) {
+    projectId.value = qpid
+    await loadDocs()
+    return
+  }
   const qid = route.query.doc_id as string | undefined
   if (qid) {
     try {
