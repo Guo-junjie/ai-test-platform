@@ -5,13 +5,16 @@
       <template #header>
         <div class="card-header">
           <span>新建测试任务</span>
-          <el-tag size="small" effect="plain">P0 三模式入口</el-tag>
         </div>
       </template>
 
       <el-tabs v-model="activeMode" class="mode-tabs">
         <!-- ==================== Mode 1: Auto（拉代码 + AI 生成） ==================== -->
         <el-tab-pane label="代码仓库" name="auto">
+          <div class="mode-desc">
+            全自动流水线：拉取仓库代码 → AI 解析接口 → AI 生成用例 → 执行 → 缺陷分析 → 测试报告。
+            适合首次接入项目，无需提前准备用例。
+          </div>
           <el-form :model="form" label-width="100px">
             <el-form-item label="数据源类型">
               <el-radio-group v-model="form.source_type">
@@ -60,36 +63,42 @@
 
         <!-- ==================== Mode 2: Test Plan（已有用例，直接执行） ==================== -->
         <el-tab-pane label="测试计划" name="plan">
-          <el-alert
-            type="info"
-            :closable="false"
-            show-icon
-            title="选择已建好的测试计划，系统会跳过代码拉取与 AI 生成步骤，直接执行计划中已启用的用例"
-            style="margin-bottom: 16px"
-          />
-          <el-form label-width="100px">
+          <div class="mode-desc">
+            按计划执行：跳过代码拉取与 AI 生成，直接运行计划内已启用的用例，适合回归测试。
+            <br>
+            还没有计划？到<b>「用例库」</b>选择用例 → 点<b>「加入计划」</b>→ 选「新建计划」即可创建。
+          </div>
+          <el-empty
+            v-if="!plansLoading && plans.length === 0"
+            description="还没有测试计划 —— 去「用例库」选择用例，点「加入计划」新建"
+          >
+            <el-button type="primary" plain @click="loadPlans">重新加载</el-button>
+          </el-empty>
+          <el-form v-else label-width="100px">
             <el-form-item label="测试计划" required>
-              <el-select
-                v-model="selectedPlanId"
-                placeholder="选择测试计划"
-                filterable
-                clearable
-                :loading="plansLoading"
-                style="width: 100%"
-                @visible-change="onPlanDropdownToggle"
-              >
-                <el-option
-                  v-for="p in plans"
-                  :key="p.id"
-                  :label="`${p.name}（${p.case_count ?? 0} 用例）`"
-                  :value="p.id"
+              <div class="plan-select-row">
+                <el-select
+                  v-model="selectedPlanId"
+                  placeholder="选择测试计划"
+                  filterable
+                  clearable
+                  :loading="plansLoading"
+                  class="plan-select"
                 >
-                  <span style="float: left">{{ p.name }}</span>
-                  <span style="float: right; color: var(--el-text-color-secondary); font-size: 12px">
-                    {{ p.project_name || '—' }} · {{ p.case_count ?? 0 }} 用例
-                  </span>
-                </el-option>
-              </el-select>
+                  <el-option
+                    v-for="p in plans"
+                    :key="p.id"
+                    :label="`${p.name}（${p.case_count ?? 0} 用例）`"
+                    :value="p.id"
+                  >
+                    <span style="float: left">{{ p.name }}</span>
+                    <span style="float: right; color: var(--el-text-color-secondary); font-size: 12px">
+                      {{ p.project_name || '—' }} · {{ p.case_count ?? 0 }} 用例
+                    </span>
+                  </el-option>
+                </el-select>
+                <el-button :loading="plansLoading" @click="loadPlans">刷新</el-button>
+              </div>
             </el-form-item>
 
             <el-form-item v-if="selectedPlan" label="计划概要">
@@ -124,13 +133,10 @@
 
         <!-- ==================== Mode 3: Upload（zip 上传） ==================== -->
         <el-tab-pane label="上传代码" name="upload">
-          <el-alert
-            type="warning"
-            :closable="false"
-            show-icon
-            title="上传压缩包后会自动解析代码 + AI 生成用例，再执行测试"
-            style="margin-bottom: 16px"
-          />
+          <div class="mode-desc">
+            全自动流水线：上传代码压缩包 → AI 解析接口 → AI 生成用例 → 执行 → 缺陷分析 → 测试报告。
+            适合代码在内网/本地、无法直连仓库的场景。
+          </div>
           <el-form :model="form" label-width="100px">
             <el-form-item label="上传代码">
               <el-upload
@@ -415,6 +421,13 @@ export default defineComponent({
       return idx === -1 ? 0 : idx
     },
   },
+  watch: {
+    activeMode(mode: string): void {
+      if (mode === 'plan' && this.plans.length === 0 && !this.plansLoading) {
+        this.loadPlans()
+      }
+    },
+  },
   methods: {
     // ============ 数据加载 ============
     async loadProjects(): Promise<void> {
@@ -436,11 +449,6 @@ export default defineComponent({
         this.plans = []
       } finally {
         this.plansLoading = false
-      }
-    },
-    onPlanDropdownToggle(open: boolean): void {
-      if (open && this.plans.length === 0) {
-        this.loadPlans()
       }
     },
     async loadTestRuns(): Promise<void> {
@@ -674,6 +682,23 @@ export default defineComponent({
 }
 .mode-tabs :deep(.el-tabs__header) {
   margin-bottom: 16px;
+}
+.mode-desc {
+  color: #909399;
+  font-size: 13px;
+  line-height: 1.8;
+  margin-bottom: 16px;
+}
+.mode-desc b {
+  color: #409eff;
+}
+.plan-select-row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+.plan-select {
+  flex: 1;
 }
 .form-actions {
   margin-top: 8px;

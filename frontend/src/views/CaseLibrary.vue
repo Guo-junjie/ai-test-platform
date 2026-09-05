@@ -153,11 +153,11 @@
       </template>
     </el-dialog>
 
-    <!-- P0 阶段7：加入计划弹窗 -->
+    <!-- P0 阶段7：加入计划弹窗（支持新建计划） -->
     <el-dialog
       v-model="addToPlanVisible"
       title="加入测试计划"
-      width="520px"
+      width="560px"
       destroy-on-close
       @open="loadPlansIfNeeded"
     >
@@ -165,40 +165,75 @@
         <el-form-item label="用例数量">
           <el-tag size="small" type="info">共 {{ addToPlanCaseIds.length }} 条用例</el-tag>
         </el-form-item>
-        <el-form-item label="选择计划" required>
-          <el-select
-            v-model="targetPlanId"
-            placeholder="选择测试计划"
-            filterable
-            clearable
-            :loading="plansLoading"
-            style="width: 100%"
-          >
-            <el-option
-              v-for="p in plans"
-              :key="p.id"
-              :label="`${p.name}（${p.project_name || '—'}）`"
-              :value="p.id"
-            />
-          </el-select>
+        <el-form-item label="计划">
+          <el-radio-group v-model="planMode">
+            <el-radio-button value="existing">选择已有计划</el-radio-button>
+            <el-radio-button value="new">新建计划</el-radio-button>
+          </el-radio-group>
         </el-form-item>
-        <el-alert
-          v-if="plans.length === 0 && !plansLoading"
-          type="warning"
-          :closable="false"
-          show-icon
-          title="尚未创建任何测试计划。请先在「测试任务」页选择「测试计划」Tab 创建，或前往用例库→测试计划（功能即将上线）"
-        />
+
+        <template v-if="planMode === 'existing'">
+          <el-form-item label="选择计划" required>
+            <el-select
+              v-model="targetPlanId"
+              placeholder="选择测试计划"
+              filterable
+              clearable
+              :loading="plansLoading"
+              style="width: 100%"
+            >
+              <el-option
+                v-for="p in plans"
+                :key="p.id"
+                :label="`${p.name}（${p.project_name || '—'}）`"
+                :value="p.id"
+              />
+            </el-select>
+          </el-form-item>
+          <el-alert
+            v-if="plans.length === 0 && !plansLoading"
+            type="warning"
+            :closable="false"
+            show-icon
+            title="当前还没有测试计划，请切换到「新建计划」直接创建"
+          />
+        </template>
+
+        <template v-else>
+          <el-form-item label="计划名称" required>
+            <el-input
+              v-model="newPlanName"
+              placeholder="例如：订单中心回归测试"
+              maxlength="200"
+              show-word-limit
+            />
+          </el-form-item>
+          <el-form-item label="备注">
+            <el-input
+              v-model="newPlanDesc"
+              type="textarea"
+              :rows="2"
+              placeholder="计划用途说明（可选）"
+              maxlength="500"
+            />
+          </el-form-item>
+          <el-alert
+            type="info"
+            :closable="false"
+            show-icon
+            :title="`新计划将归属当前项目「${currentProjectName || '未选择'}」，创建后可在「测试任务 → 测试计划」页一键执行`"
+          />
+        </template>
       </el-form>
       <template #footer>
         <el-button @click="addToPlanVisible = false">取消</el-button>
         <el-button
           type="primary"
           :loading="addToPlanLoading"
-          :disabled="!targetPlanId"
+          :disabled="planMode === 'existing' && !targetPlanId"
           @click="submitAddToPlan"
         >
-          加入
+          {{ planMode === 'new' ? '创建并加入' : '加入' }}
         </el-button>
       </template>
     </el-dialog>
@@ -233,6 +268,9 @@ const addToPlanCaseIds = ref<string[]>([])
 const plans = ref<any[]>([])
 const plansLoading = ref(false)
 const targetPlanId = ref<string>('')
+const planMode = ref<'existing' | 'new'>('existing')
+const newPlanName = ref<string>('')
+const newPlanDesc = ref<string>('')
 
 const SOURCE_LABELS: Record<string, string> = {
   requirement: '需求生成',
@@ -390,10 +428,17 @@ function onSelectionChange(rows: any[]) {
   selectedRows.value = rows
 }
 
-// ============ P0 阶段7：加入计划 ============
+// ============ P0 阶段7：加入计划（支持新建计划） ============
+const currentProjectName = computed(() => {
+  return projects.value.find((p: any) => p.id === projectId.value)?.name || ''
+})
+
 async function loadPlansIfNeeded(): Promise<void> {
-  if (plans.value.length > 0 || plansLoading.value) return
-  await loadPlans()
+  if (plansLoading.value) return
+  if (plans.value.length === 0) {
+    await loadPlans()
+    if (plans.value.length === 0) planMode.value = 'new'
+  }
 }
 
 async function loadPlans(): Promise<void> {
@@ -416,22 +461,60 @@ function openAddToPlan(caseIds: string[]): void {
   }
   addToPlanCaseIds.value = [...caseIds]
   targetPlanId.value = ''
+  planMode.value = 'existing'
+  newPlanName.value = ''
+  newPlanDesc.value = ''
   addToPlanVisible.value = true
 }
 
 async function submitAddToPlan(): Promise<void> {
-  if (!targetPlanId.value) {
-    ElMessage.warning('请选择目标测试计划')
-    return
-  }
   if (addToPlanCaseIds.value.length === 0) {
     ElMessage.warning('用例列表为空')
     return
   }
+  let pid = targetPlanId.value
+  let createdName = ''
+  if (planMode.value === 'new') {
+    const name = newPlanName.value.trim()
+    if (name.length < 2) {
+      ElMessage.warning('计划名称至少 2 个字符')
+      return
+    }
+    if (!projectId.value) {
+      ElMessage.warning('请先在页面顶部选择项目')
+      return
+    }
+    addToPlanLoading.value = true
+    try {
+      const res: any = await planApi.create({
+        name,
+        description: newPlanDesc.value.trim() || undefined,
+        project_id: projectId.value,
+      })
+      pid = res?.data?.id || ''
+      createdName = name
+    } catch {
+      return // 创建失败（如重名 409），拦截器已提示
+    } finally {
+      addToPlanLoading.value = false
+    }
+    if (!pid) {
+      ElMessage.error('创建计划失败：响应缺少计划 ID')
+      return
+    }
+  } else if (!pid) {
+    ElMessage.warning('请选择目标测试计划')
+    return
+  }
+
   addToPlanLoading.value = true
   try {
-    await planApi.addCases(targetPlanId.value, addToPlanCaseIds.value)
-    ElMessage.success(`已加入计划：${addToPlanCaseIds.value.length} 条用例`)
+    await planApi.addCases(pid, addToPlanCaseIds.value)
+    ElMessage.success(
+      createdName
+        ? `已创建计划「${createdName}」并加入 ${addToPlanCaseIds.value.length} 条用例`
+        : `已加入计划：${addToPlanCaseIds.value.length} 条用例`,
+    )
     addToPlanVisible.value = false
     selectedRows.value = []
   } catch {
