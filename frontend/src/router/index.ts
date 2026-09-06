@@ -52,7 +52,7 @@ const routes = [
     path: '/sources',
     name: 'SourceManage',
     component: () => import('@/views/SourceManage.vue'),
-    meta: { title: '数据源管理' },
+    meta: { title: '仓库配置' },
   },
   {
     path: '/analysis',

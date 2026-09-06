@@ -121,6 +121,18 @@
                 导入选中 ({{ selectedKeys.length }})
               </el-button>
               <el-button :disabled="endpoints.length === 0" @click="importAll">导入全部</el-button>
+              <el-button
+                type="success"
+                :disabled="!projectId || endpoints.length === 0"
+                :loading="generating"
+                @click="generateCases"
+              >
+                生成测试用例
+              </el-button>
+              <div class="gen-tip">
+                导入接口后可一键 AI 生成用例（存入用例库）；
+                将<a href="/knowledge" @click.prevent="router.push('/knowledge')">测试规范、历史缺陷</a>沉淀到知识库，生成质量更高。
+              </div>
             </div>
           </div>
         </el-card>
@@ -174,8 +186,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage, type UploadFile } from 'element-plus'
-import { docApi, projectApi } from '@/api'
+import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus'
+import { caseApi, docApi, projectApi } from '@/api'
 import ApiSpecTable from '@/components/ApiSpecTable.vue'
 
 const router = useRouter()
@@ -274,6 +286,44 @@ async function doImport(payload: any) {
   }
 }
 
+// R5：来源页生成用例 —— 解析导入的接口直接生成用例进用例库
+const generating = ref(false)
+
+async function generateCases() {
+  if (!projectId.value) {
+    ElMessage.warning('请先选择项目')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      '将按该项目已导入的接口 AI 生成测试用例，结果存入「用例库」。是否继续？',
+      '生成测试用例',
+      { confirmButtonText: '生成', cancelButtonText: '取消', type: 'info' },
+    )
+  } catch {
+    return
+  }
+  generating.value = true
+  try {
+    const res: any = await caseApi.generate({ project_id: projectId.value })
+    const cnt = res?.data?.inserted ?? 0
+    try {
+      await ElMessageBox.confirm(
+        `已生成 ${cnt} 条用例并存入用例库（草稿态，需评审采纳）。`,
+        '生成完成',
+        { confirmButtonText: '去用例库查看', cancelButtonText: '留在本页', type: 'success' },
+      )
+      router.push(`/case-library?project_id=${projectId.value}`)
+    } catch {
+      /* 留在本页 */
+    }
+  } catch {
+    /* 拦截器已提示 */
+  } finally {
+    generating.value = false
+  }
+}
+
 async function loadAssets() {
   if (!projectId.value) return
   assetsLoading.value = true
@@ -351,6 +401,16 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.gen-tip {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #909399;
+  line-height: 1.8;
+}
+.gen-tip a {
+  color: #409eff;
+  text-decoration: none;
+}
 .actions {
   margin-top: 12px;
   display: flex;

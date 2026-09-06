@@ -1,75 +1,20 @@
 <template>
   <div class="test-run-page">
-    <!-- Create test run card with 3 mode tabs -->
+    <!-- 执行测试计划（代码进入与执行统一走项目管理） -->
     <el-card shadow="hover" class="create-card">
       <template #header>
         <div class="card-header">
-          <span>新建测试任务</span>
+          <span>执行测试计划</span>
         </div>
       </template>
 
-      <el-tabs v-model="activeMode" class="mode-tabs">
-        <!-- ==================== Mode 1: Auto（拉代码 + AI 生成） ==================== -->
-        <el-tab-pane label="代码仓库" name="auto">
-          <div class="mode-desc">
-            全自动流水线：拉取仓库代码 → AI 解析接口 → AI 生成用例 → 执行 → 缺陷分析 → 测试报告。
-            适合首次接入项目，无需提前准备用例。
-          </div>
-          <el-form :model="form" label-width="100px">
-            <el-form-item label="数据源类型">
-              <el-radio-group v-model="form.source_type">
-                <el-radio-button value="github">GitHub 仓库</el-radio-button>
-                <el-radio-button value="svn">SVN 仓库</el-radio-button>
-              </el-radio-group>
-            </el-form-item>
-
-            <template v-if="form.source_type === 'github'">
-              <el-form-item label="仓库 URL" required>
-                <el-input v-model="form.repo_url" placeholder="https://github.com/owner/repo" />
-              </el-form-item>
-              <el-form-item label="GitHub Token">
-                <el-input v-model="form.github_token" type="password" show-password placeholder="ghp_xxxxxxxxxxxx" />
-              </el-form-item>
-              <el-form-item label="分支">
-                <el-input v-model="form.branch" placeholder="main" />
-              </el-form-item>
-            </template>
-
-            <template v-if="form.source_type === 'svn'">
-              <el-form-item label="SVN URL" required>
-                <el-input v-model="form.svn_url" placeholder="https://svn.example.com/svn/project" />
-              </el-form-item>
-              <el-form-item label="用户名">
-                <el-input v-model="form.svn_username" placeholder="SVN 用户名" />
-              </el-form-item>
-              <el-form-item label="密码">
-                <el-input v-model="form.svn_password" type="password" show-password placeholder="SVN 密码" />
-              </el-form-item>
-            </template>
-
-            <el-form-item label="归属项目">
-              <div class="plan-select-row">
-                <el-select v-model="form.project_id" placeholder="选择项目（留空将自动创建临时项目）" clearable class="plan-select">
-                  <el-option v-for="p in projects" :key="p.id" :label="p.name" :value="p.id" />
-                </el-select>
-                <el-button @click="quickCreateVisible = true">+ 新建</el-button>
-              </div>
-            </el-form-item>
-          </el-form>
-          <div class="form-actions">
-            <el-button type="primary" :loading="creating" @click="handleCreateAuto">
-              <el-icon><Plus /></el-icon>
-              启动测试
-            </el-button>
-          </div>
-        </el-tab-pane>
-
-        <!-- ==================== Mode 2: Test Plan（已有用例，直接执行） ==================== -->
-        <el-tab-pane label="测试计划" name="plan">
+        <!-- 测试计划执行（唯一创建入口；代码经项目版本化后由版本触发执行） -->
           <div class="mode-desc">
             按计划执行：跳过代码拉取与 AI 生成，直接运行计划内已启用的用例，适合回归测试。
             <br>
             还没有计划？到<b>「用例库」</b>选择用例 → 点<b>「加入计划」</b>→ 选「新建计划」即可创建。
+            <br>
+            要测试<b>新代码</b>？到<b>「项目管理」</b>项目详情上传/拉取代码版本 → 点<b>「执行测试」</b>。
           </div>
           <el-empty
             v-if="!plansLoading && plans.length === 0"
@@ -133,53 +78,6 @@
               执行计划
             </el-button>
           </div>
-        </el-tab-pane>
-
-        <!-- ==================== Mode 3: Upload（zip 上传） ==================== -->
-        <el-tab-pane label="上传代码" name="upload">
-          <div class="mode-desc">
-            全自动流水线：上传代码压缩包 → AI 解析接口 → AI 生成用例 → 执行 → 缺陷分析 → 测试报告。
-            适合代码在内网/本地、无法直连仓库的场景。
-          </div>
-          <el-form :model="form" label-width="100px">
-            <el-form-item label="上传代码">
-              <el-upload
-                drag
-                :auto-upload="true"
-                :show-file-list="false"
-                :http-request="handleUpload"
-                accept=".zip,.tar.gz,.tgz,.tar"
-              >
-                <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
-                <div class="el-upload__text">拖拽文件到此处，或<em>点击上传</em></div>
-                <template #tip>
-                  <div class="el-upload__tip">支持 ZIP / TAR.GZ 格式压缩包</div>
-                </template>
-              </el-upload>
-              <div v-if="form.upload_file_path" class="upload-path">
-                已上传: <span class="mono-text">{{ form.upload_file_path }}</span>
-              </div>
-            </el-form-item>
-            <el-form-item label="归属项目">
-              <div class="plan-select-row">
-                <el-select v-model="form.project_id" placeholder="选择项目（留空将自动创建临时项目）" clearable class="plan-select">
-                  <el-option v-for="p in projects" :key="p.id" :label="p.name" :value="p.id" />
-                </el-select>
-                <el-button @click="quickCreateVisible = true">+ 新建</el-button>
-              </div>
-            </el-form-item>
-          </el-form>
-          <div class="form-actions">
-            <el-button type="primary" :loading="creating" @click="handleCreateUpload">
-              <el-icon><Plus /></el-icon>
-              启动测试
-            </el-button>
-          </div>
-        </el-tab-pane>
-      </el-tabs>
-
-      <!-- 快捷新建项目（auto/upload Tab 共用） -->
-      <ProjectQuickCreate :visible="quickCreateVisible" @update:visible="quickCreateVisible = $event" @created="onQuickCreated" />
     </el-card>
 
     <!-- Task list -->
@@ -417,11 +315,9 @@
  * Options API 的 data() 返回类型显式，规避该 bug。
  */
 import { defineComponent } from 'vue'
-import { Plus, VideoPlay, UploadFilled } from '@element-plus/icons-vue'
+import { VideoPlay } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import type { UploadRequestOptions } from 'element-plus'
-import { projectApi, testRunApi, uploadApi, planApi } from '@/api'
-import ProjectQuickCreate from '@/components/ProjectQuickCreate.vue'
+import { projectApi, testRunApi, planApi } from '@/api'
 
 const STATUS_OPTIONS: Record<string, string> = {
   pending: '等待中',
@@ -462,14 +358,12 @@ const STATUS_TAG: Record<string, string> = {
 
 export default defineComponent({
   name: 'TestRunView',
-  components: { Plus, VideoPlay, UploadFilled, ProjectQuickCreate },
+  components: { VideoPlay },
   data() {
     return {
-      activeMode: 'auto' as 'auto' | 'plan' | 'upload',
       loading: false,
       creating: false,
       plansLoading: false,
-      quickCreateVisible: false,
 
       testRuns: [] as any[],
       projects: [] as any[],
@@ -495,17 +389,6 @@ export default defineComponent({
 
       selectedPlanId: '' as string,
 
-      form: {
-        source_type: 'github',
-        repo_url: '',
-        github_token: '',
-        branch: 'main',
-        svn_url: '',
-        svn_username: '',
-        svn_password: '',
-        upload_file_path: '',
-        project_id: '' as string,
-      },
 
       STATUS_OPTIONS,
       STEP_TIMELINE,
@@ -521,13 +404,6 @@ export default defineComponent({
       return idx === -1 ? 0 : idx
     },
   },
-  watch: {
-    activeMode(mode: string): void {
-      if (mode === 'plan' && this.plans.length === 0 && !this.plansLoading) {
-        this.loadPlans()
-      }
-    },
-  },
   methods: {
     // ============ 数据加载 ============
     async loadProjects(): Promise<void> {
@@ -537,12 +413,6 @@ export default defineComponent({
         this.projects = Array.isArray(d) ? d : d?.list || d?.items || []
       } catch {
         this.projects = []
-      }
-    },
-    async onQuickCreated(project: any): Promise<void> {
-      await this.loadProjects()
-      if (project?.id) {
-        this.form.project_id = project.id
       }
     },
     async loadPlans(): Promise<void> {
@@ -697,74 +567,6 @@ export default defineComponent({
       window.location.href = pid ? `/case-library?project_id=${pid}` : '/case-library'
     },
 
-    // ============ 创建测试任务：auto 模式 ============
-    resetForm(): void {
-      this.form.source_type = 'github'
-      this.form.repo_url = ''
-      this.form.github_token = ''
-      this.form.branch = 'main'
-      this.form.svn_url = ''
-      this.form.svn_username = ''
-      this.form.svn_password = ''
-      this.form.upload_file_path = ''
-      this.form.project_id = ''
-    },
-    async handleCreateAuto(): Promise<void> {
-      if (this.form.source_type === 'github' && !this.form.repo_url) {
-        ElMessage.warning('请输入仓库 URL')
-        return
-      }
-      if (this.form.source_type === 'svn' && !this.form.svn_url) {
-        ElMessage.warning('请输入 SVN URL')
-        return
-      }
-      this.creating = true
-      try {
-        await testRunApi.create({
-          mode: 'auto',
-          source_type: this.form.source_type,
-          repo_url: this.form.repo_url,
-          github_token: this.form.github_token || undefined,
-          branch: this.form.branch,
-          svn_url: this.form.svn_url,
-          svn_username: this.form.svn_username,
-          svn_password: this.form.svn_password,
-          project_id: this.form.project_id || undefined,
-        })
-        ElMessage.success('测试已在后台启动，可在列表中查看实时进度')
-        this.resetForm()
-        this.loadTestRuns()
-      } catch {
-        /* axios 拦截器已处理 */
-      } finally {
-        this.creating = false
-      }
-    },
-
-    // ============ 创建测试任务：upload 模式 ============
-    async handleCreateUpload(): Promise<void> {
-      if (!this.form.upload_file_path) {
-        ElMessage.warning('请先上传代码文件')
-        return
-      }
-      this.creating = true
-      try {
-        await testRunApi.create({
-          mode: 'upload',
-          source_type: 'upload',
-          upload_file_path: this.form.upload_file_path,
-          project_id: this.form.project_id || undefined,
-        })
-        ElMessage.success('测试已在后台启动，可在列表中查看实时进度')
-        this.resetForm()
-        this.loadTestRuns()
-      } catch {
-        /* axios 拦截器已处理 */
-      } finally {
-        this.creating = false
-      }
-    },
-
     // ============ 创建测试任务：plan 模式 ============
     async handleExecutePlan(): Promise<void> {
       if (!this.selectedPlanId) {
@@ -778,27 +580,10 @@ export default defineComponent({
         ElMessage.success('测试计划已启动，可在列表中查看实时进度')
         this.selectedPlanId = ''
         this.loadTestRuns()
-        if (res?.data?.test_run_id) {
-          this.activeMode = 'auto'
-        }
       } catch {
         /* axios 拦截器已处理 */
       } finally {
         this.creating = false
-      }
-    },
-
-    async handleUpload(options: UploadRequestOptions): Promise<void> {
-      try {
-        const res: any = await uploadApi.upload(options.file as File)
-        this.form.upload_file_path = res?.data?.upload_file_path || ''
-        if (!this.form.upload_file_path) {
-          ElMessage.error('上传响应缺少压缩包路径，请重试或联系管理员')
-          return
-        }
-        ElMessage.success('文件上传成功')
-      } catch {
-        /* axios 拦截器已处理 */
       }
     },
 

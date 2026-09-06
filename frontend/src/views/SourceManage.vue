@@ -3,7 +3,7 @@
     <el-card shadow="hover">
       <template #header>
         <div class="card-header">
-          <span>数据源管理</span>
+          <span>仓库配置</span>
           <el-button
             v-if="activeTab !== 'upload'"
             type="primary"

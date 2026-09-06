@@ -10,7 +10,7 @@
         </el-form-item>
         <el-form-item>
           <el-button type="primary" plain :disabled="!projectId" @click="$router.push(`/case-library?project_id=${projectId}`)">
-            下一步：去用例库生成用例
+            下一步：去用例库管理用例
           </el-button>
         </el-form-item>
         <el-form-item label="文档">

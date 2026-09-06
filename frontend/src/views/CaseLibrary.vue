@@ -2,31 +2,14 @@
   <div class="case-library">
     <!-- 生成控制区 -->
     <el-card shadow="hover">
-      <template #header>AI 生成用例</template>
+      <template #header>用例库 —— 测试用例统一存储与管理</template>
       <el-form label-width="80px" :inline="true">
         <el-form-item label="项目" required>
           <el-select v-model="projectId" placeholder="选择项目" filterable style="width: 220px" @change="onProjectChange">
             <el-option v-for="p in projects" :key="p.id" :label="p.name" :value="p.id" />
           </el-select>
-          <el-button style="margin-left: 8px" @click="quickCreateVisible = true">+ 新建</el-button>
-        </el-form-item>
-        <el-form-item label="接口">
-          <el-select
-            v-model="selectedEndpointIds"
-            multiple
-            filterable
-            collapse-tags
-            placeholder="不选则按整项目生成"
-            style="width: 360px"
-            @visible-change="onEndpointVisible"
-          >
-            <el-option v-for="e in endpoints" :key="e.id" :label="`${e.method} ${e.path}`" :value="e.id" />
-          </el-select>
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" :loading="generating" :disabled="!projectId" @click="generate">
-            AI 生成用例
-          </el-button>
           <el-button :loading="batchAdopting" :disabled="!hasDraft" @click="batchAdopt">批量采纳</el-button>
           <el-button
             type="primary"
@@ -41,8 +24,8 @@
         </el-form-item>
       </el-form>
       <div class="kb-tip">
-        💡 提示：将<a href="/knowledge" @click.prevent="$router.push('/knowledge')">测试规范、历史缺陷</a>沉淀到知识库并重建后，
-        AI 生成用例与缺陷分析会自动参考团队经验，产出更贴合业务的用例。
+        用例来源：接口文档解析、需求文档解析、代码解析（测试流水线）AI 生成后自动汇聚于此；
+        在此评审采纳后即可「加入计划」执行。
       </div>
     </el-card>
 
@@ -242,9 +225,6 @@
         </el-button>
       </template>
     </el-dialog>
-
-    <!-- 快捷新建项目 -->
-    <ProjectQuickCreate :visible="quickCreateVisible" @update:visible="quickCreateVisible = $event" @created="onQuickCreated" />
   </div>
 </template>
 
@@ -253,15 +233,11 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Files } from '@element-plus/icons-vue'
-import { caseApi, docApi, planApi, projectApi } from '@/api'
-import ProjectQuickCreate from '@/components/ProjectQuickCreate.vue'
+import { caseApi, planApi, projectApi } from '@/api'
 
 const projects = ref<any[]>([])
 const projectId = ref<string>('')
-const endpoints = ref<any[]>([])
-const selectedEndpointIds = ref<string[]>([])
 
-const generating = ref(false)
 const listLoading = ref(false)
 const batchAdopting = ref(false)
 
@@ -283,22 +259,6 @@ const newPlanName = ref<string>('')
 const newPlanDesc = ref<string>('')
 
 // R1：快捷新建项目
-const quickCreateVisible = ref(false)
-
-async function onQuickCreated(project: any): Promise<void> {
-  try {
-    const res: any = await projectApi.getList()
-    const d = res?.data ?? res
-    projects.value = Array.isArray(d) ? d : d?.list || d?.items || []
-  } catch {
-    /* 保留旧列表 */
-  }
-  if (project?.id) {
-    projectId.value = project.id
-    onProjectChange()
-  }
-}
-
 const SOURCE_LABELS: Record<string, string> = {
   requirement: '需求生成',
   ai_generated: 'AI 生成',
@@ -380,31 +340,7 @@ async function loadProjects() {
 }
 
 async function onProjectChange() {
-  selectedEndpointIds.value = []
-  endpoints.value = []
-  await loadEndpoints()
   await loadCases()
-}
-
-async function onEndpointVisible(visible: boolean) {
-  if (visible) await loadEndpoints()
-}
-
-async function loadEndpoints() {
-  if (!projectId.value) {
-    endpoints.value = []
-    return
-  }
-  try {
-    const res: any = await docApi.listEndpoints({
-      project_id: projectId.value,
-      page: 1,
-      page_size: 200,
-    })
-    endpoints.value = res?.data?.items || []
-  } catch {
-    endpoints.value = []
-  }
 }
 
 async function loadCases() {
@@ -426,28 +362,6 @@ async function loadCases() {
     cases.value = []
   } finally {
     listLoading.value = false
-  }
-}
-
-async function generate() {
-  if (!projectId.value) {
-    ElMessage.warning('请先选择项目')
-    return
-  }
-  generating.value = true
-  try {
-    const payload: any = { project_id: projectId.value }
-    if (selectedEndpointIds.value.length) {
-      payload.endpoint_ids = selectedEndpointIds.value
-    }
-    const res: any = await caseApi.generate(payload)
-    const cnt = res?.data?.inserted ?? 0
-    ElMessage.success(`生成完成，新增 ${cnt} 条用例`)
-    await loadCases()
-  } catch (e: any) {
-    /* 拦截器已提示 */
-  } finally {
-    generating.value = false
   }
 }
 

@@ -30,7 +30,7 @@
             <el-icon><Cpu /></el-icon>
             <span>测试准备</span>
           </template>
-          <el-menu-item index="/sources">数据源管理</el-menu-item>
+          <el-menu-item index="/sources">仓库配置</el-menu-item>
           <el-menu-item index="/analysis">代码解析</el-menu-item>
           <el-menu-item index="/doc-parser">接口文档解析</el-menu-item>
           <el-menu-item index="/doc-review">接口文档评审</el-menu-item>

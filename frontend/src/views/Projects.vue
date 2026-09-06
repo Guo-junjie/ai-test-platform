@@ -122,7 +122,7 @@
             <el-button size="small" text type="primary" style="margin-left: 8px" @click="openEditSource">修改</el-button>
           </el-descriptions-item>
           <el-descriptions-item label="仓库配置">
-            <el-link type="primary" :underline="false" @click="$router.push('/sources')">在数据源管理中维护</el-link>
+            <el-link type="primary" :underline="false" @click="$router.push('/sources')">在仓库配置中维护</el-link>
           </el-descriptions-item>
         </el-descriptions>
 
