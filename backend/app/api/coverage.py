@@ -454,7 +454,7 @@ async def probe_coverage(
     """测试远程覆盖率探针（JaCoCo TCP / HTTP Dump）连通性。"""
     from app.modules.coverage.collector import probe_coverage_target
 
-    res = probe_coverage_target(
+    res = await probe_coverage_target(
         strategy=req.strategy,
         host=req.host or "",
         port=req.port or 6300,

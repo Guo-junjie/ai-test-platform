@@ -9,8 +9,7 @@ coverage/collector — 企业级代码覆盖率探针与采集引擎（能力11�
 5. 自动化测试执行覆盖率反推（基于测试执行结果与已解析 API 路由的多维度覆盖计算）
 """
 
-from __future__ import annotations
-
+import asyncio
 import io
 import json
 import os
@@ -25,6 +24,7 @@ import urllib.request
 import uuid
 from typing import Any, Optional
 
+import httpx
 from loguru import logger
 from sqlalchemy import select
 
@@ -213,29 +213,33 @@ def parse_jacoco_exec(data: bytes) -> dict[str, Any]:
 # ==================== 远程 HTTP 端点与工作空间扫描 ====================
 
 
-def fetch_http_coverage(dump_url: str, timeout: float = 8.0) -> Optional[tuple[str, str]]:
+async def fetch_http_coverage(dump_url: str, timeout: float = 8.0) -> Optional[tuple[str, str]]:
     """向被测服务 HTTP 接口请求覆盖率报告（支持 Actuator 或探针 HTTP 接口）。"""
-    try:
-        req = urllib.request.Request(
-            dump_url,
-            headers={"User-Agent": "AITP-CoverageCollector/2.0"},
-        )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = resp.read()
+    candidates = [dump_url]
+    if "://localhost" in dump_url:
+        candidates.append(dump_url.replace("://localhost", "://host.docker.internal", 1))
+    elif "://127.0.0.1" in dump_url:
+        candidates.append(dump_url.replace("://127.0.0.1", "://host.docker.internal", 1))
 
-        if data.startswith(b"\xc0\xc0"):
-            parsed = parse_jacoco_exec(data)
-            return "jacoco_binary", json.dumps(parsed)
+    for cand in candidates:
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=3.0), verify=False, follow_redirects=True) as client:
+                resp = await client.get(cand, headers={"User-Agent": "AITP-CoverageCollector/2.0"})
+                data = resp.content
 
-        raw_text = data.decode("utf-8", errors="ignore")
-        if "<report" in raw_text or "jacoco" in dump_url.lower():
-            return "jacoco", raw_text
-        if "<coverage" in raw_text:
-            return "cobertura", raw_text
-        return None
-    except Exception as e:
-        logger.warning(f"[coverage] fetch_http_coverage failed: {e}")
-        return None
+            if data.startswith(b"\xc0\xc0"):
+                parsed = parse_jacoco_exec(data)
+                return "jacoco_binary", json.dumps(parsed)
+
+            raw_text = data.decode("utf-8", errors="ignore")
+            if "<report" in raw_text or "jacoco" in cand.lower():
+                return "jacoco", raw_text
+            if "<coverage" in raw_text:
+                return "cobertura", raw_text
+        except Exception as e:
+            logger.debug(f"[coverage] candidate {cand} failed: {e}")
+            continue
+    return None
 
 
 def scan_workspace_coverage(repo_path: str) -> Optional[tuple[str, str]]:
@@ -365,7 +369,7 @@ def synthesize_api_coverage(
 # ==================== 连通性探测工具 ====================
 
 
-def probe_coverage_target(
+async def probe_coverage_target(
     strategy: str = "remote_tcp",
     host: str = "",
     port: int = 6300,
@@ -379,17 +383,22 @@ def probe_coverage_target(
     if strategy in ("remote_tcp", "jacoco_tcp", "tcp"):
         h = _resolve_probe_host(host)
         p = int(port or 6300)
-        try:
+
+        def _tcp_connect():
             with socket.create_connection((h, p), timeout=timeout) as s:
-                ms = round((time.time() - start) * 1000, 2)
-                return {
-                    "ok": True,
-                    "reachable": True,
-                    "strategy": "remote_tcp",
-                    "target": f"{h}:{p}",
-                    "response_time_ms": ms,
-                    "message": f"TCP 探针连通成功 ({h}:{p}, 耗时 {ms}ms)",
-                }
+                return True
+
+        try:
+            await asyncio.to_thread(_tcp_connect)
+            ms = round((time.time() - start) * 1000, 2)
+            return {
+                "ok": True,
+                "reachable": True,
+                "strategy": "remote_tcp",
+                "target": f"{h}:{p}",
+                "response_time_ms": ms,
+                "message": f"TCP 探针连通成功 ({h}:{p}, 耗时 {ms}ms)",
+            }
         except Exception as e:
             return {
                 "ok": False,
@@ -404,39 +413,40 @@ def probe_coverage_target(
         url = (dump_url or "").strip()
         if not url:
             return {"ok": False, "reachable": False, "error": "URL 不能为空", "message": "未配置 HTTP Dump 地址"}
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": "AITP-CoverageProbe/2.0"})
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                ms = round((time.time() - start) * 1000, 2)
-                return {
-                    "ok": True,
-                    "reachable": True,
-                    "strategy": "http_dump",
-                    "target": url,
-                    "status_code": resp.status,
-                    "response_time_ms": ms,
-                    "message": f"HTTP Dump 端点响应正常 (状态码 {resp.status}, 耗时 {ms}ms)",
-                }
-        except urllib.error.HTTPError as e:
-            ms = round((time.time() - start) * 1000, 2)
-            return {
-                "ok": True,
-                "reachable": True,
-                "strategy": "http_dump",
-                "target": url,
-                "status_code": e.code,
-                "response_time_ms": ms,
-                "message": f"服务可连通但返回 HTTP {e.code}",
-            }
-        except Exception as e:
-            return {
-                "ok": False,
-                "reachable": False,
-                "strategy": "http_dump",
-                "target": url,
-                "error": str(e),
-                "message": f"HTTP Dump 端点无法连接: {e}",
-            }
+        if not (url.startswith("http://") or url.startswith("https://")):
+            url = f"http://{url}"
+
+        candidates = [url]
+        if "://localhost" in url:
+            candidates.append(url.replace("://localhost", "://host.docker.internal", 1))
+        elif "://127.0.0.1" in url:
+            candidates.append(url.replace("://127.0.0.1", "://host.docker.internal", 1))
+
+        last_err = ""
+        for cand in candidates:
+            try:
+                async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=2.5), verify=False, follow_redirects=True) as client:
+                    resp = await client.get(cand, headers={"User-Agent": "AITP-CoverageProbe/2.0"})
+                    ms = round((time.time() - start) * 1000, 2)
+                    return {
+                        "ok": True,
+                        "reachable": True,
+                        "strategy": "http_dump",
+                        "target": cand,
+                        "status_code": resp.status_code,
+                        "response_time_ms": ms,
+                        "message": f"HTTP Dump 端点响应正常 (状态码 {resp.status_code}, 耗时 {ms}ms)",
+                    }
+            except Exception as e:
+                last_err = str(e)
+        return {
+            "ok": False,
+            "reachable": False,
+            "strategy": "http_dump",
+            "target": url,
+            "error": last_err,
+            "message": f"HTTP Dump 端点无法连接: {last_err}",
+        }
 
     return {"ok": False, "reachable": False, "message": f"未知策略: {strategy}"}
 
@@ -510,7 +520,7 @@ async def collect_coverage_for_run(
     if not parsed_result:
         dump_url = cov_cfg.get("dump_url") or src_cfg.get("coverage_dump_url")
         if dump_url:
-            http_res = fetch_http_coverage(dump_url)
+            http_res = await fetch_http_coverage(dump_url)
             if http_res:
                 t_name, text_or_json = http_res
                 if t_name == "jacoco_binary":
