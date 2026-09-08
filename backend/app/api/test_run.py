@@ -252,13 +252,31 @@ async def get_test_run(
     if run is None:
         raise HTTPException(404, f"Test run not found: {test_run_id}")
 
+    status_val = run.status.value if run.status else "pending"
+    progress_val = run.progress or 0
+    current_step_val = run.current_step or ""
+    try:
+        from app.modules.execution.engine import get_task_progress, get_task_status
+        live_status = await get_task_status(test_run_id)
+        live_prog = await get_task_progress(test_run_id)
+        if live_status and live_status.get("status"):
+            status_val = live_status["status"]
+        if live_prog:
+            if live_prog.get("progress") is not None:
+                progress_val = live_prog["progress"]
+            if live_prog.get("step"):
+                current_step_val = live_prog["step"]
+    except Exception:
+        pass
+
     return {
         "code": 0,
         "data": {
             "id": str(run.id),
             "project_id": str(run.project_id),
-            "status": run.status.value if run.status else "pending",
-            "progress": run.progress or 0,
+            "status": status_val,
+            "progress": progress_val,
+            "current_step": current_step_val,
             "source_type": run.source_type.value if run.source_type else None,
             "source_ref": run.source_ref,
             "branch": run.branch,

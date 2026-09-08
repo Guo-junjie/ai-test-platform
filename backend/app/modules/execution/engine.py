@@ -69,52 +69,59 @@ def _set_task_status_sync(task_id: str, status: str, extra: dict[str, Any] | Non
         json.dumps(data, ensure_ascii=False),
         ex=7 * 24 * 3600,
     )
-    # 落库（current_step 列，P0 解决 step=N/A）
+    # 落库（status, current_step 列，P0 解决 step=N/A 与状态不同步）
     step_text = (extra or {}).get("step") or status
+    valid_statuses = {
+        "pending", "pulling", "analyzing", "generating",
+        "executing", "analyzing_defects", "reporting",
+        "completed", "failed", "cancelled",
+    }
     try:
-        from sqlalchemy import update as _upd
-        from app.models.database import TestRun as _TR
-        from app.utils.database import SyncSessionLocal as _SL
-        with _SL() as s:
-            s.execute(_upd(_TR).where(_TR.id == uuid.UUID(task_id)).values(current_step=step_text[:50]))
-            s.commit()
+        import psycopg2
+        from app.config import settings as _s
+        _dsn = f"host={_s.POSTGRES_HOST} port={_s.POSTGRES_PORT} dbname={_s.POSTGRES_DB} user={_s.POSTGRES_USER} password={_s.POSTGRES_PASSWORD}"
+        with psycopg2.connect(_dsn) as _c, _c.cursor() as _cur:
+            if status in valid_statuses:
+                _cur.execute(
+                    "UPDATE test_runs SET status = %s::teststatus, current_step = %s WHERE id = %s",
+                    (status, step_text[:50], task_id),
+                )
+            else:
+                _cur.execute(
+                    "UPDATE test_runs SET current_step = %s WHERE id = %s",
+                    (step_text[:50], task_id),
+                )
+            _c.commit()
     except Exception:  # noqa: BLE001 - 落库失败不影响 Redis 进度
         pass
 
 
 def _set_task_progress_sync(task_id: str, progress: int, step: str = "") -> None:
-    """同步设置任务进度到 Redis + 同步落库 current_step。"""
+    """同步设置任务进度到 Redis + 同步落库 progress 和 current_step。"""
     _get_sync_redis().set(
         f"task:progress:{task_id}",
         json.dumps({"progress": progress, "step": step}, ensure_ascii=False),
         ex=7 * 24 * 3600,
     )
-    if step:
-        # current_step 同步落库：用 raw psycopg2 独立连接（绕开 ORM engine，
-        # 避免 worker 子进程里 SyncSessionLocal 拿不到 engine 的问题）
-        import logging as _lg
-        _log = _lg.getLogger(__name__)
-        _log.info(f"persist current_step task={task_id} step={step[:50]!r}")
-        try:
-            import psycopg2
-            from app.config import settings as _s
-            _dsn = f"host={_s.POSTGRES_HOST} port={_s.POSTGRES_PORT} dbname={_s.POSTGRES_DB} user={_s.POSTGRES_USER} password={_s.POSTGRES_PASSWORD}"
-            with psycopg2.connect(_dsn) as _c, _c.cursor() as _cur:
-                _cur.execute("UPDATE test_runs SET current_step = %s WHERE id = %s", (step[:50], task_id))
-                _c.commit()
-            _log.info("current_step raw OK")
-        except Exception as e:
-            _log.error(f"current_step raw failed: {type(e).__name__}: {e}", exc_info=True)
-        # 备用：尝试 ORM
-        try:
-            from sqlalchemy import update as _upd
-            from app.models.database import TestRun as _TR
-            from app.utils.database import SyncSessionLocal as _SL
-            with _SL() as s2:
-                s2.execute(_upd(_TR).where(_TR.id == uuid.UUID(task_id)).values(current_step=step[:50]))
-                s2.commit()
-        except Exception:  # noqa: BLE001
-            pass
+    # 同步落库：用 raw psycopg2 独立连接（绕开 ORM engine，避免 worker 子进程连接失效）
+    try:
+        import psycopg2
+        from app.config import settings as _s
+        _dsn = f"host={_s.POSTGRES_HOST} port={_s.POSTGRES_PORT} dbname={_s.POSTGRES_DB} user={_s.POSTGRES_USER} password={_s.POSTGRES_PASSWORD}"
+        with psycopg2.connect(_dsn) as _c, _c.cursor() as _cur:
+            if step:
+                _cur.execute(
+                    "UPDATE test_runs SET progress = %s, current_step = %s WHERE id = %s",
+                    (int(progress), step[:50], task_id),
+                )
+            else:
+                _cur.execute(
+                    "UPDATE test_runs SET progress = %s WHERE id = %s",
+                    (int(progress), task_id),
+                )
+            _c.commit()
+    except Exception:  # noqa: BLE001 - 落库失败不影响 Redis 进度
+        pass
 
 
 def _persist_test_results(test_run_id: str, test_results: list[dict[str, Any]]) -> int:
