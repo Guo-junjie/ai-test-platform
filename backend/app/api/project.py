@@ -36,6 +36,14 @@ router = APIRouter()
 def _project_to_dict(project: Project) -> dict:
     """将 Project ORM 对象序列化为前端可用的字典。"""
     cfg = project.source_config or {}
+    cov_cfg = cfg.get("coverage_config") or {
+        "enabled": bool(cfg.get("coverage_enabled", False)),
+        "tool": cfg.get("coverage_tool", "jacoco"),
+        "strategy": cfg.get("coverage_strategy", "remote_tcp"),
+        "probe_host": cfg.get("coverage_probe_host") or "",
+        "probe_port": cfg.get("coverage_probe_port") or 6300,
+        "dump_url": cfg.get("coverage_dump_url") or "",
+    }
     return {
         "id": str(project.id),
         "name": project.name,
@@ -43,6 +51,7 @@ def _project_to_dict(project: Project) -> dict:
         "owner_id": str(project.owner_id) if project.owner_id else None,
         "source_type": project.source_type.value if project.source_type else None,
         "target_service_url": cfg.get("target_service_url"),
+        "coverage_config": cov_cfg,
         "is_active": bool(project.is_active),
         "created_at": project.created_at.isoformat() if project.created_at else None,
         "updated_at": project.updated_at.isoformat() if project.updated_at else None,

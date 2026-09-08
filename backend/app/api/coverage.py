@@ -434,3 +434,95 @@ async def coverage_source(
         },
         "message": "success",
     }
+
+
+# ==================== 探针探测、即时采集与项目配置 ====================
+
+
+class ProbeCoverageRequest(BaseModel):
+    strategy: str = "remote_tcp"  # remote_tcp | http_dump
+    host: str | None = None
+    port: int | None = 6300
+    dump_url: str | None = None
+
+
+@router.post("/probe")
+async def probe_coverage(
+    req: ProbeCoverageRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """测试远程覆盖率探针（JaCoCo TCP / HTTP Dump）连通性。"""
+    from app.modules.coverage.collector import probe_coverage_target
+
+    res = probe_coverage_target(
+        strategy=req.strategy,
+        host=req.host or "",
+        port=req.port or 6300,
+        dump_url=req.dump_url or "",
+    )
+    return {"code": 0, "data": res, "message": "success"}
+
+
+class CollectCoverageRequest(BaseModel):
+    project_id: str
+    test_run_id: str | None = None
+
+
+@router.post("/collect")
+async def trigger_collect_coverage(
+    req: CollectCoverageRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """即时触发项目的代码覆盖率采集。"""
+    from app.modules.coverage.collector import collect_coverage_for_run
+
+    report_id = await collect_coverage_for_run(
+        test_run_id=req.test_run_id or "",
+        project_id=req.project_id,
+    )
+    if not report_id:
+        raise HTTPException(500, "覆盖率采集失败，请检查项目探针配置或被测环境状态")
+    return {
+        "code": 0,
+        "data": {"report_id": report_id},
+        "message": "覆盖率采集成功并已生成最新报告",
+    }
+
+
+class UpdateCoverageConfigRequest(BaseModel):
+    enabled: bool = True
+    tool: str = "jacoco"
+    strategy: str = "remote_tcp"
+    probe_host: str | None = None
+    probe_port: int | None = 6300
+    dump_url: str | None = None
+
+
+@router.put("/projects/{project_id}/config")
+async def update_project_coverage_config(
+    project_id: str,
+    req: UpdateCoverageConfigRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """更新项目的覆盖率探针配置。"""
+    try:
+        p_uuid = uuid.UUID(project_id)
+    except ValueError:
+        raise HTTPException(400, "Invalid project_id")
+
+    proj = (await db.execute(select(Project).where(Project.id == p_uuid))).scalar_one_or_none()
+    if not proj:
+        raise HTTPException(404, "项目不存在")
+
+    cfg = dict(proj.source_config or {})
+    cfg["coverage_config"] = req.model_dump()
+    cfg["coverage_enabled"] = req.enabled
+    proj.source_config = cfg
+    await db.commit()
+    return {
+        "code": 0,
+        "data": cfg["coverage_config"],
+        "message": "覆盖率配置已更新",
+    }

@@ -749,28 +749,17 @@ def aggregate_results(
         f"failed={summary['total_failed']}"
     )
 
-    # 能力11：若启用自动覆盖率，测试完成后采集并入库
+    # 能力11：测试完成后自动采集覆盖率并入库（支持远程探针、HTTP Dump、仓库扫描与用例执行反推）
     try:
         import asyncio
-        import json as _json
+        from app.modules.coverage.collector import collect_coverage_for_run
 
-        cov_meta_raw = _get_sync_redis().get(f"coverage:meta:{test_run_id}")
-        if cov_meta_raw:
-            meta = _json.loads(cov_meta_raw)
-            _get_sync_redis().delete(f"coverage:meta:{test_run_id}")
-            pid = meta.get("project_id")
-            if pid:
-                from app.modules.coverage.collector import collect_and_store
-
-                rid = asyncio.run(collect_and_store(test_run_id, meta, pid))
-                if rid:
-                    logger.info(f"[{test_run_id}] auto coverage report {rid} stored")
-                else:
-                    logger.warning(
-                        f"[{test_run_id}] auto coverage collect failed; 请改用手动上传报告"
-                    )
+        _get_sync_redis().delete(f"coverage:meta:{test_run_id}")
+        rid = asyncio.run(collect_coverage_for_run(test_run_id, summary_data=summary))
+        if rid:
+            logger.info(f"[{test_run_id}] auto coverage report {rid} collected and stored")
     except Exception as e:  # noqa: BLE001
-        logger.warning(f"[coverage] aggregate auto-collect error: {e}")
+        logger.warning(f"[{test_run_id}] aggregate auto-collect error (non-fatal): {e}")
 
     # 自动生成测试报告（有结果才生成；异步任务，不阻塞本阶段）
     if summary.get("total_tests", 0) > 0:

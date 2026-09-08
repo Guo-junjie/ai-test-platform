@@ -144,6 +144,16 @@
               </div>
             </div>
           </el-descriptions-item>
+          <el-descriptions-item label="覆盖率探针">
+            <div style="display: flex; align-items: center; justify-content: space-between">
+              <span class="mono-text">
+                {{ formatCoverageInfo(current) }}
+              </span>
+              <el-button size="small" type="success" plain @click="$router.push(`/coverage?project_id=${current.id}`)">
+                看板 / 探针配置
+              </el-button>
+            </div>
+          </el-descriptions-item>
         </el-descriptions>
 
         <div class="section-header">
@@ -525,6 +535,18 @@ export default defineComponent({
       this.current = row
       this.detailVisible = true
       this.loadVersions()
+    },
+    formatCoverageInfo(project: any): string {
+      const cfg = project?.coverage_config || project?.source_config?.coverage_config
+      if (!cfg) return '未单独配置（将使用被测服务或自动推断）'
+      if (cfg.enabled === false) return '已禁用自动采集'
+      if (cfg.strategy === 'remote_tcp') {
+        return `JaCoCo TCP (${cfg.probe_host || '默认'}:${cfg.probe_port || 6300})`
+      }
+      if (cfg.strategy === 'http_dump') {
+        return `HTTP Dump (${cfg.dump_url || '未填URL'})`
+      }
+      return `${cfg.tool || 'jacoco'} (${cfg.strategy || '自动扫描'})`
     },
     async openEditSource(): Promise<void> {
       if (!this.current) return

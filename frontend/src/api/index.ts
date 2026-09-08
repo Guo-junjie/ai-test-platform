@@ -331,6 +331,12 @@ export const coverageApi = {
     api.get(`/coverage/files/${reportId}`, { params }),
   source: (reportId: string, filePath: string) =>
     api.get(`/coverage/source/${reportId}`, { params: { file: filePath } }),
+  probe: (data: { strategy?: string; host?: string; port?: number; dump_url?: string }) =>
+    api.post('/coverage/probe', data),
+  collect: (data: { project_id: string; test_run_id?: string }) =>
+    api.post('/coverage/collect', data, { timeout: 60000 }),
+  updateConfig: (projectId: string, data: any) =>
+    api.put(`/coverage/projects/${projectId}/config`, data),
 }
 
 // ============ 质量门禁 ============

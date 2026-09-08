@@ -48,6 +48,8 @@
           </div>
         </el-tooltip>
         <el-button :disabled="!projectId" @click="refreshAll">刷新</el-button>
+        <el-button type="success" :icon="Odometer" :loading="collecting" :disabled="!projectId" @click="handleCollectNow">立即采集</el-button>
+        <el-button :icon="Setting" :disabled="!projectId" @click="openProbeConfigDrawer">探针配置</el-button>
         <el-button type="primary" :icon="UploadFilled" :disabled="!projectId" @click="openUploadDialog">上传报告</el-button>
       </div>
     </el-card>
@@ -68,6 +70,24 @@
     </template>
 
     <template v-else>
+      <!-- 报告元数据条 -->
+      <div v-if="dashboard?.latest" class="report-meta-bar">
+        <el-tag :type="dashboard.latest.source === 'auto' ? 'success' : 'info'" size="small" effect="dark">
+          {{ dashboard.latest.source === 'auto' ? '探针自动采集' : '手动上传' }}
+        </el-tag>
+        <span class="meta-item">工具: <b>{{ dashboard.latest.tool }}</b></span>
+        <span class="meta-item" v-if="dashboard.latest.language">语言: {{ dashboard.latest.language }}</span>
+        <span class="meta-item" v-if="dashboard.latest.test_run_id">
+          关联测试任务:
+          <el-link type="primary" :href="`/#/test-run`" target="_blank">
+            {{ String(dashboard.latest.test_run_id).substring(0, 8) }}
+          </el-link>
+        </span>
+        <span class="meta-item" v-if="dashboard.latest.created_at">
+          采集时间: {{ String(dashboard.latest.created_at).slice(0, 19).replace('T', ' ') }}
+        </span>
+      </div>
+
       <!-- 4 张指标卡 -->
       <el-row :gutter="16" class="metric-row">
         <el-col :xs="12" :sm="6">
@@ -337,6 +357,51 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <!-- 探针配置抽屉 -->
+    <el-drawer v-model="probeDrawerVisible" title="代码覆盖率探针配置" size="480px">
+      <el-form label-width="110px" label-position="left">
+        <el-form-item label="自动采集">
+          <el-switch v-model="probeForm.enabled" active-text="测试完成后自动采集" />
+        </el-form-item>
+        <el-form-item label="覆盖率工具">
+          <el-radio-group v-model="probeForm.tool">
+            <el-radio-button value="jacoco">JaCoCo</el-radio-button>
+            <el-radio-button value="coverage.py">coverage.py</el-radio-button>
+            <el-radio-button value="cobertura">Cobertura</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="采集策略">
+          <el-select v-model="probeForm.strategy" style="width: 100%">
+            <el-option label="远程 JaCoCo TCP 探针 (6300)" value="remote_tcp" />
+            <el-option label="远程 HTTP Dump 端点 (如 Actuator)" value="http_dump" />
+            <el-option label="代码仓库构建产物自动扫描" value="repo_file" />
+          </el-select>
+        </el-form-item>
+        <template v-if="probeForm.strategy === 'remote_tcp'">
+          <el-form-item label="探针主机 IP">
+            <el-input v-model="probeForm.probe_host" placeholder="如 192.168.125.128 或被测服务 IP" />
+          </el-form-item>
+          <el-form-item label="探针 TCP 端口">
+            <el-input-number v-model="probeForm.probe_port" :min="1" :max="65535" style="width: 100%" />
+          </el-form-item>
+        </template>
+        <template v-if="probeForm.strategy === 'http_dump'">
+          <el-form-item label="Dump 完整 URL">
+            <el-input v-model="probeForm.dump_url" placeholder="如 http://192.168.125.128:8080/actuator/jacoco" />
+          </el-form-item>
+        </template>
+        <el-form-item>
+          <el-button type="info" plain :loading="probing" @click="testProbeConnectivity">
+            测试探针连通性
+          </el-button>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="probeDrawerVisible = false">取消</el-button>
+        <el-button type="primary" :loading="savingConfig" @click="saveProbeConfig">保存配置</el-button>
+      </template>
+    </el-drawer>
   </div>
 </template>
 
@@ -344,7 +409,7 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { UploadFilled } from '@element-plus/icons-vue'
+import { UploadFilled, Odometer, Setting } from '@element-plus/icons-vue'
 import { coverageApi, projectApi, projectConfigApi } from '@/api'
 import { useAuthStore } from '@/stores'
 import TrendChart from '@/components/TrendChart.vue'
@@ -427,6 +492,112 @@ const uploadForm = ref<{
   language: '',
   file: null,
 })
+
+// 探针即时采集与配置
+const collecting = ref(false)
+const probeDrawerVisible = ref(false)
+const probing = ref(false)
+const savingConfig = ref(false)
+const probeForm = ref<{
+  enabled: boolean
+  tool: string
+  strategy: string
+  probe_host: string
+  probe_port: number
+  dump_url: string
+}>({
+  enabled: true,
+  tool: 'jacoco',
+  strategy: 'remote_tcp',
+  probe_host: '',
+  probe_port: 6300,
+  dump_url: '',
+})
+
+function openProbeConfigDrawer() {
+  if (!projectId.value) {
+    ElMessage.warning('请先选择项目')
+    return
+  }
+  const curProj = projects.value.find((p) => p.id === projectId.value)
+  const cfg = curProj?.coverage_config || curProj?.source_config?.coverage_config || {}
+  probeForm.value = {
+    enabled: cfg.enabled !== false,
+    tool: cfg.tool || 'jacoco',
+    strategy: cfg.strategy || 'remote_tcp',
+    probe_host: cfg.probe_host || curProj?.target_service_url?.replace(/^https?:\/\//, '').split(':')[0] || '',
+    probe_port: cfg.probe_port || 6300,
+    dump_url: cfg.dump_url || '',
+  }
+  probeDrawerVisible.value = true
+}
+
+async function testProbeConnectivity() {
+  probing.value = true
+  try {
+    const res: any = await coverageApi.probe({
+      strategy: probeForm.value.strategy,
+      host: probeForm.value.probe_host,
+      port: probeForm.value.probe_port,
+      dump_url: probeForm.value.dump_url,
+    })
+    const d = res?.data || {}
+    if (d.ok) {
+      ElMessage.success(`探针连接成功！${d.message || ''}`)
+    } else {
+      ElMessage.error(`探针连接失败：${d.message || '网络或端口不可达'}`)
+    }
+  } catch (e: any) {
+    ElMessage.error(`测试失败：${e?.message || '请求异常'}`)
+  } finally {
+    probing.value = false
+  }
+}
+
+async function saveProbeConfig() {
+  if (!projectId.value) return
+  savingConfig.value = true
+  try {
+    const res: any = await coverageApi.updateConfig(projectId.value, probeForm.value)
+    if (res?.code === 0) {
+      ElMessage.success('探针配置已保存')
+      const curProj = projects.value.find((p) => p.id === projectId.value)
+      if (curProj) {
+        curProj.coverage_config = { ...probeForm.value }
+        if (!curProj.source_config) curProj.source_config = {}
+        curProj.source_config.coverage_config = { ...probeForm.value }
+      }
+      probeDrawerVisible.value = false
+    } else {
+      ElMessage.error(res?.message || '保存失败')
+    }
+  } catch (e: any) {
+    ElMessage.error(e?.message || '保存配置失败')
+  } finally {
+    savingConfig.value = false
+  }
+}
+
+async function handleCollectNow() {
+  if (!projectId.value) {
+    ElMessage.warning('请先选择项目')
+    return
+  }
+  collecting.value = true
+  try {
+    const res: any = await coverageApi.collect({ project_id: projectId.value })
+    if (res?.code === 0) {
+      ElMessage.success(res.message || '采集成功！已生成最新覆盖率报告')
+      await refreshAll()
+    } else {
+      ElMessage.error(res?.message || '采集失败')
+    }
+  } catch (e: any) {
+    ElMessage.error(e?.message || '采集异常')
+  } finally {
+    collecting.value = false
+  }
+}
 
 // ====== 工具 ======
 function fmt(v: any): string {
@@ -652,15 +823,20 @@ watch(projectId, (val) => {
   }
 })
 
-onMounted(() => {
-  // R2：支持从报告页跳转 ?test_run_id=xxx，按任务直达覆盖率列表
+onMounted(async () => {
   const route = useRoute()
+  await loadProjects()
+  const pid = (route.query.project_id as string) || ''
   const rid = (route.query.test_run_id as string) || ''
-  if (rid) {
+  if (pid) {
+    projectId.value = pid
+    await onProjectChange()
+  } else if (rid) {
     runFilter.value = rid
-    void loadReports()
-  } else {
-    loadProjects()
+    await loadReports()
+  } else if (projects.value.length > 0) {
+    projectId.value = projects.value[0].id
+    await onProjectChange()
   }
 })
 </script>
@@ -670,6 +846,22 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+.report-meta-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 16px;
+  background: #f4f6f8;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #606266;
+  flex-wrap: wrap;
+}
+.meta-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 .filter-card .filter-row {
   display: flex;
