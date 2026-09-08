@@ -128,11 +128,14 @@ class EnvironmentAdapter(ABC):
                 logger.info(f"[coverage] SUT launched with probe; container={container.id}")
             return service_url_final
         except Exception as e:
-            logger.warning(
-                f"Docker startup failed for {image_tag}: {e}. "
-                f"Falling back to localhost:{port}"
+            logger.error(
+                f"Docker startup failed for {image_tag}: {e}"
             )
-        return f"http://localhost:{port}"
+            raise RuntimeError(
+                f"本地 Docker 构建/启动被测服务容器失败: {e}。"
+                f"对于企业级应用，强烈建议在项目管理中配置「被测服务 URL (Target Service URL)」，"
+                f"直接对准已部署的测试环境或开发容器执行测试。"
+            ) from e
 
     def wait_for_ready(
         self, url: str, timeout: int = _DEFAULT_READY_TIMEOUT

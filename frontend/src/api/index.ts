@@ -174,6 +174,8 @@ export const projectApi = {
   get: (id: string) => api.get(`/projects/${id}`),
   /** 更新项目（代码来源可修改；source_config 合并语义，token 留空保持不变） */
   update: (id: string, data: any) => api.put(`/projects/${id}`, data),
+  /** 探测目标被测服务 URL 连通性 */
+  probeUrl: (url: string) => api.post('/projects/probe-url', { url }),
 }
 
 // ============ 项目代码版本（R1：代码是项目的属性） ============
@@ -380,7 +382,7 @@ export const planApi = {
   toggleCase: (id: string, case_id: string, enabled: boolean) => api.put(`/plans/${id}/cases/${case_id}`, { enabled }),
   bulkAdd: (id: string, data: any) => api.post(`/plans/${id}/cases/bulk-add`, data),
   listExecutions: (id: string, params: any) => api.get(`/plans/${id}/executions`, { params }),
-  execute: (id: string) => api.post(`/plans/${id}/execute`),
+  execute: (id: string, data?: any) => api.post(`/plans/${id}/execute`, data ?? {}),
 }
 
 // ============ 场景编排（能力4：AI 编排测试场景） ============

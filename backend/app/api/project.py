@@ -35,12 +35,14 @@ router = APIRouter()
 
 def _project_to_dict(project: Project) -> dict:
     """将 Project ORM 对象序列化为前端可用的字典。"""
+    cfg = project.source_config or {}
     return {
         "id": str(project.id),
         "name": project.name,
         "description": project.description,
         "owner_id": str(project.owner_id) if project.owner_id else None,
         "source_type": project.source_type.value if project.source_type else None,
+        "target_service_url": cfg.get("target_service_url"),
         "is_active": bool(project.is_active),
         "created_at": project.created_at.isoformat() if project.created_at else None,
         "updated_at": project.updated_at.isoformat() if project.updated_at else None,
@@ -347,3 +349,60 @@ async def rotate_ci_token(
         "data": {"project_id": project_id, "token": plain},
         "message": "token 已生成，请立即保存（仅本次可见）",
     }
+
+
+# ==================== 目标环境连通性探针 ====================
+
+
+class ProbeUrlRequest(BaseModel):
+    """测试目标服务连通性请求。"""
+    url: str
+
+
+@router.post("/probe-url")
+async def probe_url(
+    req: ProbeUrlRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """测试指定被测服务 URL 是否可从测试平台访问。"""
+    import time
+    import httpx
+
+    target = (req.url or "").strip()
+    if not target:
+        raise HTTPException(400, "URL 不能为空")
+    if not (target.startswith("http://") or target.startswith("https://")):
+        target = f"http://{target}"
+
+    start_t = time.time()
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=3.0), verify=False, follow_redirects=True) as client:
+            resp = await client.get(target)
+            elapsed_ms = round((time.time() - start_t) * 1000, 2)
+            return {
+                "code": 0,
+                "data": {
+                    "reachable": True,
+                    "target_url": target,
+                    "status_code": resp.status_code,
+                    "response_time_ms": elapsed_ms,
+                    "message": f"连接成功 (HTTP {resp.status_code}, 耗时 {elapsed_ms}ms)",
+                },
+                "message": "success",
+            }
+    except Exception as e:
+        elapsed_ms = round((time.time() - start_t) * 1000, 2)
+        err_msg = str(e)
+        return {
+            "code": 0,
+            "data": {
+                "reachable": False,
+                "target_url": target,
+                "status_code": None,
+                "response_time_ms": elapsed_ms,
+                "error": err_msg,
+                "message": f"连接失败: {err_msg}",
+            },
+            "message": "probe failed",
+        }
+

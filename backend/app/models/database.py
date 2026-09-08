@@ -284,6 +284,8 @@ class TestRun(Base):
 
     # 代码分析结果（JSON）
     analysis_result = Column(JSONB, default={})
+    # 被测目标服务地址（真实环境 URL）
+    target_service_url = Column(String(500), nullable=True)
     # 快照 ID
     snapshot_id = Column(String(64))
 

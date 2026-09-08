@@ -43,6 +43,10 @@ DEFECT_CATEGORIES: dict[str, dict[str, Any]] = {
         "description": "安全漏洞 — 认证缺失或敏感信息泄露",
         "severity_base": "P0",
     },
+    "infrastructure_error": {
+        "description": "基础设施故障 — 目标环境不可达、网络中断或连接拒绝",
+        "severity_base": "P0",
+    },
 }
 
 # 严重等级规则
@@ -175,6 +179,12 @@ class DefectAnalyzer:
         actual_response = result.get("actual_response")
         request_data = result.get("request", {})
         expected = result.get("expected", {})
+
+        # 守卫：环境不可达/网络异常防脑补（跳过 LLM，直接生成基础设施缺陷）
+        is_infra, infra_reason = self._is_infrastructure_error(error_message, actual_status)
+        if is_infra:
+            logger.info(f"API failure for {case_name} classified as infrastructure_error: {infra_reason}")
+            return self._make_infrastructure_defect(case_name, infra_reason, result, "api")
 
         # 能力12：注入历史相似缺陷（开关关闭/异常自动为空，不改主流程）
         error_summary = f"{case_name} {case_type} {actual_status} {error_message}"
@@ -330,6 +340,12 @@ class DefectAnalyzer:
         total_steps = result.get("total_steps", 0)
         executed_steps = result.get("executed_steps", 0)
         step_results = result.get("step_results", [])
+
+        # 守卫：环境不可达/网络异常防脑补
+        is_infra, infra_reason = self._is_infrastructure_error(failure_reason, 500 if failure_reason else None)
+        if is_infra:
+            logger.info(f"Integration failure for {case_name} classified as infrastructure_error: {infra_reason}")
+            return self._make_infrastructure_defect(case_name, infra_reason, result, "integration")
 
         # 能力12：注入历史相似集成缺陷（开关关闭/异常自动为空，不改主流程）
         error_summary = f"{case_name} 第{failure_step}步 {failure_reason}"
@@ -502,6 +518,56 @@ class DefectAnalyzer:
             "raw_result": {
                 "actual_status_code": result.get("actual_status_code"),
                 "error_message": result.get("error_message", ""),
+                "response_time_ms": result.get("response_time_ms"),
+            },
+        }
+
+    def _is_infrastructure_error(
+        self, error_message: str | None, status_code: int | None
+    ) -> tuple[bool, str]:
+        """检查错误是否为目标环境不可达或网络中断等基础设施故障。"""
+        if status_code is None:
+            return True, "未能获取 HTTP 响应（目标服务未响应或网络中断）"
+        err_lower = (error_message or "").lower()
+        infra_keywords = [
+            "connection refused", "connecterror", "connection reset",
+            "request timeout", "timeout", "network is unreachable",
+            "all connection attempts failed", "max retries exceeded",
+            "getaddrinfo failed", "name or service not known",
+            "failed to connect", "errno 111", "errno 113",
+        ]
+        for kw in infra_keywords:
+            if kw in err_lower:
+                return True, f"网络连接异常: {error_message}"
+        return False, ""
+
+    def _make_infrastructure_defect(
+        self,
+        case_name: str,
+        reason: str,
+        result: dict[str, Any],
+        defect_type: str = "api",
+    ) -> dict[str, Any]:
+        """构建基础设施/环境异常缺陷，跳过 LLM 业务缺陷捏造。"""
+        req = result.get("request") or {}
+        return {
+            "defect_id": f"defect_{uuid.uuid4().hex[:8]}",
+            "case_id": result.get("case_id", ""),
+            "case_name": case_name,
+            "test_type": defect_type,
+            "title": f"[环境故障] {case_name}: 目标服务不可达",
+            "category": "infrastructure_error",
+            "severity": "P0",
+            "root_cause": f"与目标测试环境建立连接失败（{reason}）。可能原因：1. 被测服务未启动；2. 目标端口未监听或存在防火墙策略拦截；3. 目标服务地址配置错误。",
+            "fix_suggestion": "1. 检查被测环境服务进程及容器状态；2. 确认测试平台与被测服务之间的网络连通性；3. 验证被测服务地址 (Target Service URL) 是否准确。",
+            "reproduction_steps": [
+                f"1. 尝试向目标服务发起请求: {req.get('method', 'GET')} {req.get('url', '/')}",
+                f"2. 观察连接状态: 抛出网络异常 ({reason})",
+            ],
+            "related_cases": [],
+            "raw_result": {
+                "actual_status_code": result.get("actual_status_code"),
+                "error_message": result.get("error_message", reason),
                 "response_time_ms": result.get("response_time_ms"),
             },
         }

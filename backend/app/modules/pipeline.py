@@ -351,6 +351,26 @@ def run_test_pipeline(self, test_run_id: str, req_dict: dict[str, Any]) -> dict[
                     "api_analyses": [],
                 }
 
+        target_service_url = (req_dict.get("target_service_url") or "").strip() or None
+        if not target_service_url:
+            # 尝试从项目配置读取
+            try:
+                from app.utils.database import AsyncSessionLocal
+                from app.models.database import Project as _Proj, TestRun as _TR
+
+                async def _get_proj_url():
+                    async with AsyncSessionLocal() as s:
+                        r = (await s.execute(select(_TR.project_id).where(_TR.id == uuid.UUID(test_run_id)))).scalar_one_or_none()
+                        if r:
+                            p = (await s.execute(select(_Proj).where(_Proj.id == r))).scalar_one_or_none()
+                            if p and p.source_config:
+                                return p.source_config.get("target_service_url")
+                        return None
+
+                target_service_url = asyncio.run(_get_proj_url())
+            except Exception as e:
+                logger.warning(f"[{test_run_id}] failed to load project target_service_url: {e}")
+
         analysis_result: dict[str, Any] = {
             "tech_stack": stack_info,
             "apis": apis,
@@ -358,7 +378,11 @@ def run_test_pipeline(self, test_run_id: str, req_dict: dict[str, Any]) -> dict[
             "total_apis": len(apis),
             "repo_path": local_path,
             "snapshot_id": snapshot_id,
+            "target_service_url": target_service_url,
         }
+        if target_service_url:
+            analysis_result["service_url_override"] = target_service_url
+            logger.info(f"[{test_run_id}] Configured target_service_url: {target_service_url}")
         # plan 模式补充上下文（让报告/缺陷知道这次跑的是哪个计划）
         if plan_cases:
             analysis_result["plan_id"] = plan_id_for_result
@@ -410,9 +434,8 @@ def run_test_pipeline(self, test_run_id: str, req_dict: dict[str, Any]) -> dict[
         from app.modules.execution.engine import TestExecutionEngine
 
         engine = TestExecutionEngine()
-        # plan 模式无 SUT：传占位 service_url 让 prepare_environment 跳过启动
-        # （性能测试在无目标 URL 时熔断保护下自然 0 用例返回）
-        if plan_cases:
+        # plan 模式无 SUT 时传占位，若指定了真实 target_service_url 则使用真实 URL
+        if plan_cases and not analysis_result.get("service_url_override"):
             analysis_result["service_url_override"] = "http://plan-mode-no-sut"
         engine.execute_all(test_run_id, analysis_result, test_cases)
 

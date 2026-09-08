@@ -96,6 +96,16 @@
             </el-upload>
           </el-form-item>
         </template>
+        <el-form-item label="被测服务 URL">
+          <el-input
+            v-model="createForm.target_service_url"
+            placeholder="http://192.168.1.100:8080（真实被测服务地址，选填）"
+          >
+            <template #append>
+              <el-button :loading="probing" @click="handleProbeUrl(createForm.target_service_url)">连通测试</el-button>
+            </template>
+          </el-input>
+        </el-form-item>
         <el-alert
           type="info"
           :closable="false"
@@ -123,6 +133,16 @@
           </el-descriptions-item>
           <el-descriptions-item label="仓库配置">
             <el-link type="primary" :underline="false" @click="$router.push('/sources')">在仓库配置中维护</el-link>
+          </el-descriptions-item>
+          <el-descriptions-item label="被测服务 URL">
+            <div style="display: flex; align-items: center; justify-content: space-between">
+              <span class="mono-text" style="color: var(--el-color-primary)">
+                {{ current.target_service_url || (current.source_config && current.source_config.target_service_url) || '未配置（将尝试本地 Docker 构建）' }}
+              </span>
+              <div v-if="current.target_service_url || (current.source_config && current.source_config.target_service_url)">
+                <el-button size="small" type="primary" plain :loading="probing" @click="handleProbeUrl(current.target_service_url || current.source_config.target_service_url)">连通测试</el-button>
+              </div>
+            </div>
           </el-descriptions-item>
         </el-descriptions>
 
@@ -231,6 +251,16 @@
             title="本地上传模式无需仓库配置，代码通过详情页「上传代码」按钮进入项目"
           />
         </template>
+        <el-form-item label="被测服务 URL">
+          <el-input
+            v-model="editForm.target_service_url"
+            placeholder="http://192.168.1.100:8080（真实环境地址）"
+          >
+            <template #append>
+              <el-button :loading="probing" @click="handleProbeUrl(editForm.target_service_url)">连通测试</el-button>
+            </template>
+          </el-input>
+        </el-form-item>
         <el-alert
           type="info"
           :closable="false"
@@ -241,6 +271,35 @@
       <template #footer>
         <el-button @click="editSourceVisible = false">取消</el-button>
         <el-button type="primary" :loading="savingSource" @click="submitEditSource">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 启动测试确认对话框 -->
+    <el-dialog v-model="runDialogVisible" title="启动自动化测试" width="560px" :close-on-click-modal="false">
+      <el-form label-width="110px">
+        <el-form-item label="代码版本">
+          <span class="mono-text">{{ runDialogForm.versionName }}</span>
+        </el-form-item>
+        <el-form-item label="被测目标环境">
+          <el-input
+            v-model="runDialogForm.targetUrl"
+            placeholder="http://192.168.1.100:8080（真实被测服务地址）"
+          >
+            <template #append>
+              <el-button :loading="probing" @click="handleProbeUrl(runDialogForm.targetUrl)">连通测试</el-button>
+            </template>
+          </el-input>
+          <div style="font-size: 12px; color: var(--el-text-color-secondary); margin-top: 4px">
+            强烈建议配置真实服务地址。若留空，测试平台将尝试通过本地 Docker 容器启动。
+          </div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="runDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="executing" @click="confirmRunTest">
+          <el-icon><VideoPlay /></el-icon>
+          确认启动测试
+        </el-button>
       </template>
     </el-dialog>
   </div>
@@ -256,7 +315,7 @@
  * 实现注意：Options API（vue-tsc 4.x 对大块 script setup 有已知 bug）。
  */
 import { defineComponent } from 'vue'
-import { Plus, UploadFilled, Refresh } from '@element-plus/icons-vue'
+import { Plus, UploadFilled, Refresh, VideoPlay } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import type { UploadRequestOptions } from 'element-plus'
 import { projectApi, projectCodeApi, testRunApi } from '@/api'
@@ -269,7 +328,7 @@ const SOURCE_LABELS: Record<string, string> = {
 
 export default defineComponent({
   name: 'ProjectsView',
-  components: { Plus, UploadFilled, Refresh },
+  components: { Plus, UploadFilled, Refresh, VideoPlay },
   data() {
     return {
       loading: false,
@@ -281,6 +340,7 @@ export default defineComponent({
         name: '',
         description: '',
         source_type: 'github',
+        target_service_url: '',
         repo_url: '',
         github_token: '',
         branch: 'main',
@@ -299,12 +359,23 @@ export default defineComponent({
       uploading: false,
       fetching: false,
       executing: false,
+      probing: false,
+
+      // 启动测试弹窗
+      runDialogVisible: false,
+      runDialogForm: {
+        versionId: '',
+        versionName: '',
+        targetUrl: '',
+        sourceType: 'upload',
+      },
 
       // 修改代码来源
       editSourceVisible: false,
       savingSource: false,
       editForm: {
         source_type: 'github',
+        target_service_url: '',
         repo_url: '',
         github_token: '',
         branch: 'main',
@@ -331,6 +402,7 @@ export default defineComponent({
         name: '',
         description: '',
         source_type: 'github',
+        target_service_url: '',
         repo_url: '',
         github_token: '',
         branch: 'main',
@@ -340,6 +412,27 @@ export default defineComponent({
       }
       this.createUploadFile = null
       this.createFileList = []
+    },
+    async handleProbeUrl(url?: string): Promise<void> {
+      const target = (url || '').trim()
+      if (!target) {
+        ElMessage.warning('请先输入被测服务 URL')
+        return
+      }
+      this.probing = true
+      try {
+        const res: any = await projectApi.probeUrl(target)
+        const d = res?.data || {}
+        if (d.reachable) {
+          ElMessage.success(d.message || `连接成功: HTTP ${d.status_code} (${d.response_time_ms}ms)`)
+        } else {
+          ElMessage.error(d.message || `连接失败: ${d.error || '无法访问'}`)
+        }
+      } catch (err: any) {
+        ElMessage.error(err?.message || '探测请求失败')
+      } finally {
+        this.probing = false
+      }
     },
     onCreateFileChange(uploadFile: any): void {
       const f: File | undefined = uploadFile?.raw
@@ -383,16 +476,22 @@ export default defineComponent({
           name,
           description: this.createForm.description.trim() || undefined,
           source_type: this.createForm.source_type,
+          source_config: {},
+        }
+        if (this.createForm.target_service_url?.trim()) {
+          payload.source_config.target_service_url = this.createForm.target_service_url.trim()
         }
         // 仓库配置随项目一起写入 source_config（后续「从仓库拉取」直接用）
         if (this.createForm.source_type === 'github' && this.createForm.repo_url) {
           payload.source_config = {
+            ...payload.source_config,
             repo_url: this.createForm.repo_url,
             github_token: this.createForm.github_token || '',
             branch: this.createForm.branch || 'main',
           }
         } else if (this.createForm.source_type === 'svn' && this.createForm.svn_url) {
           payload.source_config = {
+            ...payload.source_config,
             svn_url: this.createForm.svn_url,
             svn_username: this.createForm.svn_username || '',
             svn_password: this.createForm.svn_password || '',
@@ -436,6 +535,7 @@ export default defineComponent({
         const cfg = d.source_config || {}
         this.editForm = {
           source_type: d.source_type || 'upload',
+          target_service_url: cfg.target_service_url || d.target_service_url || '',
           repo_url: cfg.repo_url || '',
           github_token: '',
           branch: cfg.branch || 'main',
@@ -460,22 +560,27 @@ export default defineComponent({
       }
       this.savingSource = true
       try {
-        const payload: any = { source_type: this.editForm.source_type }
+        const payload: any = { source_type: this.editForm.source_type, source_config: {} }
+        if (this.editForm.target_service_url !== undefined) {
+          payload.source_config.target_service_url = this.editForm.target_service_url.trim()
+        }
         if (this.editForm.source_type === 'github') {
           payload.source_config = {
+            ...payload.source_config,
             repo_url: this.editForm.repo_url,
             github_token: this.editForm.github_token || '',
             branch: this.editForm.branch || 'main',
           }
         } else if (this.editForm.source_type === 'svn') {
           payload.source_config = {
+            ...payload.source_config,
             svn_url: this.editForm.svn_url,
             svn_username: this.editForm.svn_username || '',
             svn_password: this.editForm.svn_password || '',
           }
         }
         await projectApi.update(this.current.id, payload)
-        ElMessage.success('代码来源已更新')
+        ElMessage.success('项目配置已更新')
         this.editSourceVisible = false
         await this.loadProjects()
         const updated = this.projects.find((p: any) => p.id === this.current.id)
@@ -524,17 +629,30 @@ export default defineComponent({
         this.fetching = false
       }
     },
-    async runOnVersion(row: any): Promise<void> {
+    runOnVersion(row: any): void {
+      if (!this.current) return
+      const defaultUrl = this.current.target_service_url || (this.current.source_config && this.current.source_config.target_service_url) || ''
+      this.runDialogForm = {
+        versionId: row.id,
+        versionName: row.note || row.version_id?.substring(0, 12) || '当前版本',
+        targetUrl: defaultUrl,
+        sourceType: row.source_type || 'upload',
+      }
+      this.runDialogVisible = true
+    },
+    async confirmRunTest(): Promise<void> {
       if (!this.current) return
       this.executing = true
       try {
         await testRunApi.create({
           mode: 'auto',
-          source_type: row.source_type || 'upload',
+          source_type: this.runDialogForm.sourceType || 'upload',
           project_id: this.current.id,
-          code_version_id: row.id,
+          code_version_id: this.runDialogForm.versionId,
+          target_service_url: this.runDialogForm.targetUrl?.trim() || undefined,
         })
-        ElMessage.success('测试任务已启动（引用该代码版本），可在「测试任务」页查看进度')
+        ElMessage.success('测试任务已启动，可在「测试任务」页查看实时执行与真实环境结果')
+        this.runDialogVisible = false
         this.detailVisible = false
       } catch {
         /* 拦截器已提示 */

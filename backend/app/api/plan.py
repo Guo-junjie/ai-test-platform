@@ -607,17 +607,21 @@ async def list_plan_executions(
     }
 
 
+class ExecutePlanRequest(BaseModel):
+    target_service_url: str | None = None
+
+
 @router.post("/{plan_id}/execute")
 async def execute_plan(
     plan_id: str,
+    req: ExecutePlanRequest = ExecutePlanRequest(),
     current_user: User = Depends(require_role(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.TEST_MANAGER, UserRole.TESTER)),
     db: AsyncSession = Depends(get_db_session),
 ):
     """触发执行测试计划：建 TestRun(plan_id=this)，派发完整流水线。
 
     用例来源从 test_plan_cases 读取：仅 enabled=True 的 case_asset_id。
-    同一测试任务的流水线（pipeline.run_test_pipeline）兼容 plan 模式将在阶段3实现；
-    本阶段先做"建 TestRun + 写快照"骨架，阶段3再接完整执行。
+    支持在执行计划时指定真实被测环境 URL（或继承项目默认配置）。
     """
     plan = await _require_plan(plan_id, db)
     if plan.status != "active":
@@ -635,6 +639,14 @@ async def execute_plan(
     if not case_ids:
         raise HTTPException(400, "计划内无启用用例，请先加入用例")
 
+    # 解析目标环境 URL（优先显式传参，其次读项目 source_config）
+    target_url = (req.target_service_url or "").strip() or None
+    if not target_url and plan.project_id:
+        from app.models.database import Project as _Proj
+        p_row = (await db.execute(select(_Proj).where(_Proj.id == plan.project_id))).scalar_one_or_none()
+        if p_row and p_row.source_config:
+            target_url = p_row.source_config.get("target_service_url")
+
     # 创建 TestRun（plan_id 标记新模式，source_type=upload 兼容老链路）
     run = TestRun(
         id=uuid.uuid4(),
@@ -646,6 +658,7 @@ async def execute_plan(
         progress=0,
         plan_id=plan.id,
         current_step="pending",
+        target_service_url=target_url,
     )
     db.add(run)
     await db.commit()
@@ -662,6 +675,7 @@ async def execute_plan(
             "plan_id": str(plan.id),
             "case_asset_ids": [str(c) for c in case_ids],
             "project_id": str(plan.project_id),
+            "target_service_url": target_url,
         }],
     )
     try:

@@ -65,6 +65,17 @@
                 </el-descriptions-item>
               </el-descriptions>
             </el-form-item>
+
+            <el-form-item label="被测目标 URL">
+              <el-input
+                v-model="planTargetUrl"
+                placeholder="http://192.168.1.100:8080（选填，真实服务地址；留空使用离线模式）"
+              >
+                <template #append>
+                  <el-button :loading="probing" @click="handleProbeUrl(planTargetUrl)">连通测试</el-button>
+                </template>
+              </el-input>
+            </el-form-item>
           </el-form>
           <div class="form-actions">
             <el-button :disabled="!selectedPlanId" @click="selectedPlanId = ''">清空选择</el-button>
@@ -141,6 +152,14 @@
             <span class="mono-text source-text">{{ row.source_ref || (row.plan_id ? '测试计划' : '—') }}</span>
           </template>
         </el-table-column>
+        <el-table-column label="目标服务" min-width="160" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span v-if="row.target_service_url" class="mono-text" style="color: var(--el-color-primary)">
+              {{ row.target_service_url }}
+            </span>
+            <span v-else style="color: var(--el-text-color-placeholder)">—</span>
+          </template>
+        </el-table-column>
         <el-table-column label="创建时间" width="170">
           <template #default="{ row }">
             <span class="time-text">{{ formatTime(row.created_at) }}</span>
@@ -189,6 +208,12 @@
           </el-descriptions-item>
           <el-descriptions-item label="Commit">
             <span class="mono-text">{{ selectedRun.commit_sha?.substring(0, 12) || '-' }}</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="目标服务" :span="2">
+            <span v-if="selectedRun.target_service_url" class="mono-text" style="color: var(--el-color-primary)">
+              {{ selectedRun.target_service_url }}
+            </span>
+            <span v-else style="color: var(--el-text-color-placeholder)">未指定（本地容器启动或离线无 SUT 模式）</span>
           </el-descriptions-item>
           <el-descriptions-item v-if="selectedRun.error_message" label="错误信息" :span="2">
             <span class="error-text">{{ selectedRun.error_message }}</span>
@@ -379,16 +404,15 @@ export default defineComponent({
       filterMode: '' as '' | 'auto' | 'plan' | 'upload',
       filterStatus: '',
 
-      // R2：计划管理抽屉
+      planTargetUrl: '',
+      probing: false,
+      selectedPlanId: '' as string,
       planDrawerVisible: false,
       planDetail: null as any,
       planCases: [] as any[],
       planCasesLoading: false,
       planExecs: [] as any[],
       planExecsLoading: false,
-
-      selectedPlanId: '' as string,
-
 
       STATUS_OPTIONS,
       STEP_TIMELINE,
@@ -568,6 +592,27 @@ export default defineComponent({
     },
 
     // ============ 创建测试任务：plan 模式 ============
+    async handleProbeUrl(url?: string): Promise<void> {
+      const target = (url || '').trim()
+      if (!target) {
+        ElMessage.warning('请先输入被测服务 URL')
+        return
+      }
+      this.probing = true
+      try {
+        const res: any = await projectApi.probeUrl(target)
+        const d = res?.data || {}
+        if (d.reachable) {
+          ElMessage.success(d.message || `连接成功: HTTP ${d.status_code} (${d.response_time_ms}ms)`)
+        } else {
+          ElMessage.error(d.message || `连接失败: ${d.error || '无法访问'}`)
+        }
+      } catch (err: any) {
+        ElMessage.error(err?.message || '探测请求失败')
+      } finally {
+        this.probing = false
+      }
+    },
     async handleExecutePlan(): Promise<void> {
       if (!this.selectedPlanId) {
         ElMessage.warning('请先选择测试计划')
@@ -576,9 +621,14 @@ export default defineComponent({
       this.creating = true
       try {
         // 直接调 planApi.execute：后端会在内部创建 TestRun 并触发 pipeline（mode=plan）
-        const res: any = await planApi.execute(this.selectedPlanId)
+        const payload: any = {}
+        if (this.planTargetUrl?.trim()) {
+          payload.target_service_url = this.planTargetUrl.trim()
+        }
+        const res: any = await planApi.execute(this.selectedPlanId, payload)
         ElMessage.success('测试计划已启动，可在列表中查看实时进度')
         this.selectedPlanId = ''
+        this.planTargetUrl = ''
         this.loadTestRuns()
       } catch {
         /* axios 拦截器已处理 */

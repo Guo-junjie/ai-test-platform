@@ -311,6 +311,21 @@ class TestExecutionEngine:
         return result.id
 
 
+def _probe_service_url(url: str, timeout: float = 5.0) -> tuple[bool, str]:
+    """探测目标服务 URL 连通性。返回 (is_reachable, detail_msg)。"""
+    import httpx
+
+    target = url.strip().rstrip('/')
+    if not (target.startswith("http://") or target.startswith("https://")):
+        target = f"http://{target}"
+    try:
+        with httpx.Client(timeout=httpx.Timeout(timeout, connect=3.0), verify=False, follow_redirects=True) as client:
+            resp = client.get(target)
+            return True, f"HTTP {resp.status_code}"
+    except Exception as e:
+        return False, str(e)
+
+
 # ==================== Celery 任务定义 ====================
 
 
@@ -321,7 +336,7 @@ def prepare_environment(
     analysis_result: dict[str, Any],
 ) -> dict[str, Any]:
     """
-    准备测试环境 — 根据技术栈启动被测服务。
+    准备测试环境 — 优先连接指定的目标被测服务地址，未配置时尝试本地容器启动。
 
     Args:
         test_run_id: 测试任务 ID。
@@ -337,13 +352,39 @@ def prepare_environment(
         return {"service_url": "", "analysis_result": analysis_result, "cancelled": True}
 
     _set_task_status_sync(test_run_id, "executing", {"step": "preparing_environment"})
-    _set_task_progress_sync(test_run_id, 55, "启动被测服务")
+    _set_task_progress_sync(test_run_id, 55, "准备被测环境")
 
-    # P0 plan 模式：无 SUT，直接用 plan 模式传的 service_url_override 短路启动
-    if analysis_result.get("service_url_override"):
-        logger.info(f"[{test_run_id}] plan mode: skip SUT launch, use placeholder URL")
+    # 1. 真实被测环境 URL / 计划占位 URL 处理
+    override_url = analysis_result.get("service_url_override") or analysis_result.get("target_service_url")
+    if override_url:
+        if override_url == "http://plan-mode-no-sut":
+            logger.info(f"[{test_run_id}] plan mode without SUT: skip SUT launch, use placeholder URL")
+            return {
+                "service_url": override_url,
+                "analysis_result": analysis_result,
+            }
+
+        # 真实被测环境 URL：执行预检探针守卫
+        logger.info(f"[{test_run_id}] Target service URL configured: {override_url}, probing connectivity...")
+        _set_task_progress_sync(test_run_id, 55, f"连通性预检: {override_url}")
+        ok, msg = _probe_service_url(override_url, timeout=5.0)
+        if not ok:
+            err_text = (
+                f"目标被测服务无法连接 ({override_url}): {msg}。"
+                f"请检查被测服务是否正常启动且测试平台内网可达。"
+                f"已终止测试执行，避免产生无效执行与虚假缺陷。"
+            )
+            logger.error(f"[{test_run_id}] {err_text}")
+            _set_task_status_sync(test_run_id, "failed", {"error": err_text})
+            _set_task_progress_sync(test_run_id, 0, "失败: 目标服务不可达")
+            from app.modules.pipeline import _mark_run_failed
+            _mark_run_failed(test_run_id, err_text)
+            raise RuntimeError(err_text)
+
+        logger.info(f"[{test_run_id}] Target service ready: {override_url} ({msg})")
+        _set_task_progress_sync(test_run_id, 60, f"被测环境就绪 ({msg})")
         return {
-            "service_url": analysis_result["service_url_override"],
+            "service_url": override_url.rstrip("/"),
             "analysis_result": analysis_result,
         }
 

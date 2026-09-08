@@ -56,6 +56,8 @@ class CreateTestRunRequest(BaseModel):
     upload_file_path: str | None = None
     github_token: str | None = None
     project_id: str | None = None
+    # 真实被测环境 URL（例如 http://192.168.1.100:8080），留空则尝试继承项目配置或本地启动
+    target_service_url: str | None = None
     # 已废弃：任务归属方一律取自 JWT 中的当前登录用户（current_user.id），
     # 保留字段仅为兼容旧前端传参，后端不再将其用作外键。
     owner_id: str | None = None
@@ -113,6 +115,7 @@ async def list_test_runs(
                     "created_at": run.created_at.isoformat() if run.created_at else None,
                     "plan_id": str(run.plan_id) if run.plan_id else None,
                     "current_step": run.current_step or "pending",
+                    "target_service_url": getattr(run, "target_service_url", None),
                 }
                 for run, project in rows
             ],
@@ -180,6 +183,12 @@ async def create_test_run(
         await db.flush()
 
     # 3. 创建 TestRun 记录
+    target_url = (req.target_service_url or "").strip() or None
+    if not target_url and req.project_id:
+        proj_row = (await db.execute(select(Project).where(Project.id == project_id))).scalar_one_or_none()
+        if proj_row and proj_row.source_config:
+            target_url = proj_row.source_config.get("target_service_url")
+
     test_run = TestRun(
         id=uuid.uuid4(),
         project_id=project_id,
@@ -190,18 +199,21 @@ async def create_test_run(
         commit_sha=req.commit_sha,
         status=TestStatus.PULLING,
         progress=0,
+        target_service_url=target_url,
         started_at=datetime.utcnow(),
     )
     db.add(test_run)
     await db.flush()
 
     test_run_id = str(test_run.id)
-    logger.info(f"TestRun created: {test_run_id}")
+    logger.info(f"TestRun created: {test_run_id}, target_service_url={target_url}")
 
     # 4. 派发到 Celery worker 执行完整流程（API 进程立即返回，不阻塞事件循环）
     from app.modules.pipeline import run_test_pipeline
 
-    async_result = run_test_pipeline.delay(test_run_id, req.model_dump())
+    req_payload = req.model_dump()
+    req_payload["target_service_url"] = target_url
+    async_result = run_test_pipeline.delay(test_run_id, req_payload)
 
     # 记录根任务 ID（取消时 revoke 用）；7 天过期与任务状态键一致
     from app.utils.redis_client import get_async_redis
@@ -255,6 +267,7 @@ async def get_test_run(
             "error_message": run.error_message,
             "analysis_result": run.analysis_result,
             "snapshot_id": run.snapshot_id,
+            "target_service_url": getattr(run, "target_service_url", None),
             "started_at": run.started_at.isoformat() if run.started_at else None,
             "completed_at": run.completed_at.isoformat() if run.completed_at else None,
             "created_at": run.created_at.isoformat() if run.created_at else None,
