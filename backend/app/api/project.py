@@ -374,35 +374,44 @@ async def probe_url(
     if not (target.startswith("http://") or target.startswith("https://")):
         target = f"http://{target}"
 
+    candidates = [target]
+    if "://localhost" in target:
+        candidates.append(target.replace("://localhost", "://host.docker.internal", 1))
+    elif "://127.0.0.1" in target:
+        candidates.append(target.replace("://127.0.0.1", "://host.docker.internal", 1))
+
     start_t = time.time()
-    try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=3.0), verify=False, follow_redirects=True) as client:
-            resp = await client.get(target)
-            elapsed_ms = round((time.time() - start_t) * 1000, 2)
-            return {
-                "code": 0,
-                "data": {
-                    "reachable": True,
-                    "target_url": target,
-                    "status_code": resp.status_code,
-                    "response_time_ms": elapsed_ms,
-                    "message": f"连接成功 (HTTP {resp.status_code}, 耗时 {elapsed_ms}ms)",
-                },
-                "message": "success",
-            }
-    except Exception as e:
-        elapsed_ms = round((time.time() - start_t) * 1000, 2)
-        err_msg = str(e)
-        return {
-            "code": 0,
-            "data": {
-                "reachable": False,
-                "target_url": target,
-                "status_code": None,
-                "response_time_ms": elapsed_ms,
-                "error": err_msg,
-                "message": f"连接失败: {err_msg}",
-            },
-            "message": "probe failed",
-        }
+    last_err = ""
+    for cand in candidates:
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=3.0), verify=False, follow_redirects=True) as client:
+                resp = await client.get(cand)
+                elapsed_ms = round((time.time() - start_t) * 1000, 2)
+                return {
+                    "code": 0,
+                    "data": {
+                        "reachable": True,
+                        "target_url": cand,
+                        "status_code": resp.status_code,
+                        "response_time_ms": elapsed_ms,
+                        "message": f"连接成功 (HTTP {resp.status_code}, 耗时 {elapsed_ms}ms)",
+                    },
+                    "message": "success",
+                }
+        except Exception as e:
+            last_err = str(e)
+
+    elapsed_ms = round((time.time() - start_t) * 1000, 2)
+    return {
+        "code": 0,
+        "data": {
+            "reachable": False,
+            "target_url": target,
+            "status_code": None,
+            "response_time_ms": elapsed_ms,
+            "error": last_err,
+            "message": f"连接失败: {last_err}",
+        },
+        "message": "probe failed",
+    }
 

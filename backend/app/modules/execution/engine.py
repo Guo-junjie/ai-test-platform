@@ -311,19 +311,30 @@ class TestExecutionEngine:
         return result.id
 
 
-def _probe_service_url(url: str, timeout: float = 5.0) -> tuple[bool, str]:
-    """探测目标服务 URL 连通性。返回 (is_reachable, detail_msg)。"""
+def _probe_service_url(url: str, timeout: float = 5.0) -> tuple[bool, str, str]:
+    """探测目标服务 URL 连通性。返回 (is_reachable, detail_msg, effective_url)。"""
     import httpx
 
     target = url.strip().rstrip('/')
     if not (target.startswith("http://") or target.startswith("https://")):
         target = f"http://{target}"
-    try:
-        with httpx.Client(timeout=httpx.Timeout(timeout, connect=3.0), verify=False, follow_redirects=True) as client:
-            resp = client.get(target)
-            return True, f"HTTP {resp.status_code}"
-    except Exception as e:
-        return False, str(e)
+
+    candidates = [target]
+    if "://localhost" in target:
+        candidates.append(target.replace("://localhost", "://host.docker.internal", 1))
+    elif "://127.0.0.1" in target:
+        candidates.append(target.replace("://127.0.0.1", "://host.docker.internal", 1))
+
+    last_err = ""
+    for cand in candidates:
+        try:
+            with httpx.Client(timeout=httpx.Timeout(timeout, connect=3.0), verify=False, follow_redirects=True) as client:
+                resp = client.get(cand)
+                return True, f"HTTP {resp.status_code}", cand
+        except Exception as e:
+            last_err = str(e)
+
+    return False, last_err, target
 
 
 # ==================== Celery 任务定义 ====================
@@ -367,7 +378,7 @@ def prepare_environment(
         # 真实被测环境 URL：执行预检探针守卫
         logger.info(f"[{test_run_id}] Target service URL configured: {override_url}, probing connectivity...")
         _set_task_progress_sync(test_run_id, 55, f"连通性预检: {override_url}")
-        ok, msg = _probe_service_url(override_url, timeout=5.0)
+        ok, msg, effective_url = _probe_service_url(override_url, timeout=5.0)
         if not ok:
             err_text = (
                 f"目标被测服务无法连接 ({override_url}): {msg}。"
@@ -381,10 +392,10 @@ def prepare_environment(
             _mark_run_failed(test_run_id, err_text)
             raise RuntimeError(err_text)
 
-        logger.info(f"[{test_run_id}] Target service ready: {override_url} ({msg})")
+        logger.info(f"[{test_run_id}] Target service ready: {effective_url} ({msg})")
         _set_task_progress_sync(test_run_id, 60, f"被测环境就绪 ({msg})")
         return {
-            "service_url": override_url.rstrip("/"),
+            "service_url": effective_url.rstrip("/"),
             "analysis_result": analysis_result,
         }
 
