@@ -383,6 +383,7 @@ def probe_coverage_target(
             with socket.create_connection((h, p), timeout=timeout) as s:
                 ms = round((time.time() - start) * 1000, 2)
                 return {
+                    "ok": True,
                     "reachable": True,
                     "strategy": "remote_tcp",
                     "target": f"{h}:{p}",
@@ -391,6 +392,7 @@ def probe_coverage_target(
                 }
         except Exception as e:
             return {
+                "ok": False,
                 "reachable": False,
                 "strategy": "remote_tcp",
                 "target": f"{h}:{p}",
@@ -401,12 +403,13 @@ def probe_coverage_target(
     if strategy in ("http_dump", "http", "actuator"):
         url = (dump_url or "").strip()
         if not url:
-            return {"reachable": False, "error": "URL 不能为空", "message": "未配置 HTTP Dump 地址"}
+            return {"ok": False, "reachable": False, "error": "URL 不能为空", "message": "未配置 HTTP Dump 地址"}
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "AITP-CoverageProbe/2.0"})
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 ms = round((time.time() - start) * 1000, 2)
                 return {
+                    "ok": True,
                     "reachable": True,
                     "strategy": "http_dump",
                     "target": url,
@@ -417,6 +420,7 @@ def probe_coverage_target(
         except urllib.error.HTTPError as e:
             ms = round((time.time() - start) * 1000, 2)
             return {
+                "ok": True,
                 "reachable": True,
                 "strategy": "http_dump",
                 "target": url,
@@ -426,6 +430,7 @@ def probe_coverage_target(
             }
         except Exception as e:
             return {
+                "ok": False,
                 "reachable": False,
                 "strategy": "http_dump",
                 "target": url,
@@ -433,7 +438,7 @@ def probe_coverage_target(
                 "message": f"HTTP Dump 端点无法连接: {e}",
             }
 
-    return {"reachable": False, "message": f"未知策略: {strategy}"}
+    return {"ok": False, "reachable": False, "message": f"未知策略: {strategy}"}
 
 
 # ==================== 统一采集与落库调度器 ====================
