@@ -15,6 +15,15 @@
         </div>
       </template>
 
+      <el-alert
+        type="info"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 16px"
+        title="平台代码仓库与凭据管理"
+        description="在此集中维护平台各项目的代码仓库源（GitHub / SVN / 上传包）及访问凭据。每个配置项与项目管理互相联动，点击「进入项目」可直接管理其代码版本与测试计划。"
+      />
+
       <el-tabs v-model="activeTab" @tab-change="handleTabChange">
         <!-- ==================== GitHub Tab ==================== -->
         <el-tab-pane label="GitHub 仓库" name="github">
@@ -42,8 +51,16 @@
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="280" fixed="right">
+            <el-table-column label="操作" width="340" fixed="right">
               <template #default="{ row }">
+                <el-button
+                  size="small"
+                  type="success"
+                  plain
+                  @click="goToProject(row.id)"
+                >
+                  进入项目
+                </el-button>
                 <el-button
                   size="small"
                   @click="handleEdit(row)"
@@ -100,8 +117,16 @@
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="280" fixed="right">
+            <el-table-column label="操作" width="340" fixed="right">
               <template #default="{ row }">
+                <el-button
+                  size="small"
+                  type="success"
+                  plain
+                  @click="goToProject(row.id)"
+                >
+                  进入项目
+                </el-button>
                 <el-button
                   size="small"
                   @click="handleEdit(row)"
@@ -281,11 +306,14 @@ curl -X POST 平台地址/api/webhook/trigger -H 'X-CI-Token: <Token>' -d '{&quo
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { UploadRequestOptions } from 'element-plus'
 import { sourceApi, uploadApi, projectApi, projectConfigApi } from '@/api'
 import { useAuthStore } from '@/stores'
 import SourceForm from '@/components/SourceForm.vue'
+
+const router = useRouter()
 
 // ==================== State ====================
 
@@ -333,6 +361,10 @@ function handleTabChange() {
 function openForm() {
   editingSource.value = null  // 添加模式
   formVisible.value = true
+}
+
+function goToProject(projectId: string) {
+  router.push({ path: '/projects', query: { id: projectId } })
 }
 
 function handleEdit(row: any) {

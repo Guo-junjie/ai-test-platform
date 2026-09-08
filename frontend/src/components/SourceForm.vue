@@ -29,7 +29,7 @@
             v-model="formData.github_token"
             type="password"
             show-password
-            :placeholder="isEdit ? '留空则保持原 Token 不变；如需更换请输入新 Token' : 'ghp_xxxxxxxxxxxx'"
+            :placeholder="isEdit ? '留空则保持原 Token 不变；如需更换请输入新 Token' : '私有仓库必填访问 Token；公开开源仓库可留空'"
           />
         </el-form-item>
         <el-form-item label="分支" prop="branch">
@@ -140,10 +140,8 @@ const formRules = computed<FormRules>(() => {
     return {
       name: [{ required: true, message: '请输入仓库名称', trigger: 'blur' }],
       repo_url: [{ required: true, message: '请输入仓库 URL', trigger: 'blur' }],
-      // 编辑模式下 Token 留空 = 保持不变，不强制必填
-      github_token: isEdit.value
-        ? []
-        : [{ required: true, message: '请输入 GitHub Token', trigger: 'blur' }],
+      // 公开开源仓库无需 Token；私有仓库才需要 Token
+      github_token: [],
     }
   }
   return {

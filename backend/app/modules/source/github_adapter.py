@@ -168,11 +168,15 @@ class GitHubAdapter(CodeSourceAdapter):
                 "或联系运维开通出网权限。"
             )
 
-        # Token 注入 URL
-        authed_url = config.repo_url.replace(
-            "https://github.com",
-            f"https://{config.github_token}@github.com",
-        )
+        # Token 注入 URL：若提供了 token 则注入；公开仓库未配置 token 时直接使用原始 URL
+        token = (config.github_token or "").strip()
+        if token:
+            authed_url = config.repo_url.replace(
+                "https://github.com",
+                f"https://{token}@github.com",
+            )
+        else:
+            authed_url = config.repo_url
 
         local_path.parent.mkdir(parents=True, exist_ok=True)
 

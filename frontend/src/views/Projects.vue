@@ -543,8 +543,15 @@ export default defineComponent({
       }
     },
   },
-  mounted() {
-    this.loadProjects()
+  async mounted() {
+    await this.loadProjects()
+    const targetId = this.$route.query.id as string
+    if (targetId) {
+      const match = this.projects.find((p: any) => p.id === targetId)
+      if (match) {
+        this.openDetail(match)
+      }
+    }
   },
 })
 </script>

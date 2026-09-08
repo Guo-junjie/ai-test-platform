@@ -12,6 +12,7 @@ v1.3 改进：
 - 抽 `do_analyze` 公共函数：/run 与 /upload 共享同一份栈识别+接口提取+AI 语义逻辑
 """
 
+import asyncio
 import io
 import os
 import shutil
@@ -46,6 +47,21 @@ class AnalysisRequest(BaseModel):
 
     local_path: str
     test_run_id: str | None = None  # 可选，关联测试任务
+
+
+class RemoteAnalysisRequest(BaseModel):
+    """远程仓库代码解析请求（Git / SVN）"""
+
+    source_type: str = "github"  # github / svn
+    repo_url: str | None = None
+    branch: str = "main"
+    commit_sha: str | None = None
+    github_token: str | None = None
+    svn_url: str | None = None
+    svn_username: str | None = None
+    svn_password: str | None = None
+    svn_revision: str | None = None
+    test_run_id: str | None = None
 
 
 # ==================== 公共分析函数 ====================
@@ -228,6 +244,176 @@ async def upload_analysis(
         "code": 0,
         "data": await do_analyze(str(target), db, test_run_id),
         "message": f"Analysis completed (uploaded to {target.name})",
+    }
+
+
+@router.post("/remote")
+async def remote_analysis(
+    req: RemoteAnalysisRequest,
+    db: AsyncSession = Depends(get_db_session),
+):
+    """
+    通过远程 Git / SVN 仓库执行代码解析。
+
+    在后端自动拉取代码至临时分析目录，并执行完整栈识别 + 接口提取 + AI 分析。
+    """
+    from app.modules.source import SourceAdapterFactory, SourceConfig, SourceType
+
+    try:
+        st = SourceType(req.source_type)
+    except ValueError:
+        raise HTTPException(
+            400,
+            f"Unsupported source_type: {req.source_type}. Supported: github, svn",
+        )
+
+    if st == SourceType.GITHUB and not req.repo_url:
+        raise HTTPException(400, "repo_url is required for GitHub source")
+    if st == SourceType.SVN and not req.svn_url:
+        raise HTTPException(400, "svn_url is required for SVN source")
+
+    # 临时工作目录
+    temp_target = Path(CODE_ANALYSIS_DIR) / str(uuid.uuid4())
+    temp_target.mkdir(parents=True, exist_ok=True)
+
+    source_config = SourceConfig(
+        source_type=st,
+        repo_url=req.repo_url.strip() if req.repo_url else None,
+        branch=req.branch.strip() if req.branch else "main",
+        commit_sha=req.commit_sha.strip() if req.commit_sha else None,
+        github_token=req.github_token.strip() if req.github_token else None,
+        svn_url=req.svn_url.strip() if req.svn_url else None,
+        svn_username=req.svn_username.strip() if req.svn_username else None,
+        svn_password=req.svn_password.strip() if req.svn_password else None,
+        svn_revision=req.svn_revision.strip() if req.svn_revision else None,
+        workspace_dir=str(temp_target),
+        incremental=False,
+    )
+
+    try:
+        # fetch_code 是同步阻塞调用，在线程池中执行避免阻塞事件循环
+        fetch_result = await asyncio.to_thread(SourceAdapterFactory.fetch_code, source_config)
+        local_path = fetch_result.get("local_path", str(temp_target))
+        logger.info(f"Remote source fetched successfully to {local_path}")
+    except Exception as exc:
+        logger.error(f"Remote fetch failed: {exc}", exc_info=True)
+        raise HTTPException(400, f"代码拉取失败: {exc}")
+
+    result = await do_analyze(local_path, db, req.test_run_id)
+    return {
+        "code": 0,
+        "data": result,
+        "meta": {
+            "source_type": req.source_type,
+            "repo_url": req.repo_url or req.svn_url,
+            "branch": req.branch,
+            "commit_sha": fetch_result.get("version_id"),
+            "total_files": fetch_result.get("total_files", 0),
+        },
+        "message": "Remote analysis completed successfully",
+    }
+
+
+@router.post("/project/{project_id}")
+async def project_analysis(
+    project_id: str,
+    db: AsyncSession = Depends(get_db_session),
+):
+    """
+    针对系统内已有项目执行代码解析。
+
+    - 若该项目已有拉取过的有效代码版本（ProjectCodeVersion），直接基于已落地的 local_path 秒级解析；
+    - 若该项目尚未拉取代码，则自动使用该项目绑定的 source_config 拉取最新代码并解析。
+    """
+    from app.models.database import Project, ProjectCodeVersion
+    from app.modules.source import SourceAdapterFactory, SourceConfig, SourceType
+    from app.utils.crypto import decrypt_dict
+
+    try:
+        pid = uuid.UUID(project_id)
+    except ValueError:
+        raise HTTPException(400, f"Invalid project_id: {project_id}")
+
+    project = (await db.execute(select(Project).where(Project.id == pid))).scalar_one_or_none()
+    if not project:
+        raise HTTPException(404, f"Project not found: {project_id}")
+
+    # 1. 优先寻找已有且目录存在的代码版本
+    versions = (
+        await db.execute(
+            select(ProjectCodeVersion)
+            .where(ProjectCodeVersion.project_id == pid)
+            .order_by(ProjectCodeVersion.created_at.desc())
+        )
+    ).scalars().all()
+
+    chosen_path: str | None = None
+    matched_version = None
+    for v in versions:
+        if v.local_path and os.path.exists(v.local_path):
+            chosen_path = v.local_path
+            matched_version = v
+            break
+
+    # 2. 若没有现成版本，且项目有仓库配置，则自动拉取
+    if not chosen_path:
+        source_config_dict = decrypt_dict(project.source_config or {})
+        st_val = (
+            project.source_type.value
+            if hasattr(project.source_type, "value")
+            else str(project.source_type)
+        )
+        if st_val == "upload" and not source_config_dict.get("upload_file_path"):
+            raise HTTPException(
+                400,
+                "该项目为本地上传类型，但尚未上传任何代码包，请先在「项目管理」上传代码包。",
+            )
+
+        try:
+            st = SourceType(st_val)
+        except ValueError:
+            raise HTTPException(400, f"项目数据源类型无效: {st_val}")
+
+        source_cfg = SourceConfig(
+            source_type=st,
+            repo_url=source_config_dict.get("repo_url"),
+            branch=source_config_dict.get("branch") or "main",
+            commit_sha=source_config_dict.get("commit_sha"),
+            github_token=source_config_dict.get("github_token"),
+            svn_url=source_config_dict.get("svn_url"),
+            svn_username=source_config_dict.get("svn_username"),
+            svn_password=source_config_dict.get("svn_password"),
+            svn_revision=source_config_dict.get("svn_revision"),
+            upload_file_path=source_config_dict.get("upload_file_path"),
+            workspace_dir=f"/app/data/repos/{project.id}",
+            incremental=True,
+        )
+
+        try:
+            fetch_res = await asyncio.to_thread(SourceAdapterFactory.fetch_code, source_cfg)
+            chosen_path = fetch_res.get("local_path", "")
+        except Exception as exc:
+            raise HTTPException(400, f"自动拉取项目代码失败: {exc}")
+
+    if not chosen_path or not os.path.exists(chosen_path):
+        raise HTTPException(400, "未能找到或拉取到有效的项目代码目录")
+
+    result = await do_analyze(chosen_path, db, test_run_id=None)
+    return {
+        "code": 0,
+        "data": result,
+        "meta": {
+            "project_id": str(project.id),
+            "project_name": project.name,
+            "source_type": (
+                project.source_type.value
+                if hasattr(project.source_type, "value")
+                else str(project.source_type)
+            ),
+            "version_id": matched_version.version_id if matched_version else "latest",
+            "local_path": chosen_path,
+        },
+        "message": f"Project {project.name} analysis completed successfully",
     }
 
 

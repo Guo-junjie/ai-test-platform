@@ -2,28 +2,126 @@
   <div class="analysis-page">
     <!-- Top action bar -->
     <el-card shadow="hover" class="action-card">
-      <el-radio-group v-model="inputMode" style="margin-bottom: 12px">
-        <el-radio-button value="path">输入路径</el-radio-button>
-        <el-radio-button value="files">上传文件 / Zip</el-radio-button>
+      <el-radio-group v-model="inputMode" style="margin-bottom: 16px">
+        <el-radio-button value="project">已有项目代码（推荐）</el-radio-button>
+        <el-radio-button value="remote">Git / SVN 远程仓库</el-radio-button>
+        <el-radio-button value="files">本地文件 / Zip 包</el-radio-button>
       </el-radio-group>
 
       <div class="action-bar">
         <div class="left-section">
-          <!-- 模式 1：手动路径 -->
-          <template v-if="inputMode === 'path'">
-            <el-input
-              v-model="localPath"
-              placeholder="输入代码本地路径，如 /app/data/repos/my-project（容器内路径）"
-              style="width: 400px"
-              clearable
-            />
-            <el-button type="primary" :loading="analyzing" @click="runAnalysis">
-              <el-icon><Search /></el-icon>
-              发起解析
-            </el-button>
+          <!-- 模式 1：已有项目代码 -->
+          <template v-if="inputMode === 'project'">
+            <div style="display: flex; flex-direction: column; gap: 8px">
+              <div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap">
+                <el-select
+                  v-model="selectedProjectId"
+                  placeholder="请选择已有项目"
+                  style="width: 320px"
+                  filterable
+                >
+                  <el-option
+                    v-for="p in projectList"
+                    :key="p.id"
+                    :label="p.name"
+                    :value="p.id"
+                  >
+                    <span style="float: left">{{ p.name }}</span>
+                    <span style="float: right; color: #8492a6; font-size: 12px; margin-left: 12px">
+                      {{ p.source_type?.toUpperCase() || '' }}
+                    </span>
+                  </el-option>
+                </el-select>
+                <el-tag v-if="selectedProject" :type="selectedProject.source_type === 'github' ? 'success' : 'warning'">
+                  {{ selectedProject.source_type?.toUpperCase() }}
+                </el-tag>
+                <el-button
+                  type="primary"
+                  :loading="analyzing"
+                  :disabled="!selectedProjectId"
+                  @click="runProjectAnalysis"
+                >
+                  <el-icon><Search /></el-icon>
+                  解析项目代码
+                </el-button>
+              </div>
+              <div v-if="selectedProjectRepoUrl" style="font-size: 13px; color: #606266">
+                关联仓库: <code class="mono-text">{{ selectedProjectRepoUrl }}</code>
+              </div>
+            </div>
           </template>
 
-          <!-- 模式 2：文件 / Zip 上传 -->
+          <!-- 模式 2：Git / SVN 远程仓库 -->
+          <template v-else-if="inputMode === 'remote'">
+            <div style="display: flex; flex-direction: column; gap: 10px; width: 100%">
+              <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap">
+                <el-select v-model="remoteForm.source_type" style="width: 110px">
+                  <el-option label="GitHub" value="github" />
+                  <el-option label="SVN" value="svn" />
+                </el-select>
+                <el-input
+                  v-if="remoteForm.source_type === 'github'"
+                  v-model="remoteForm.repo_url"
+                  placeholder="https://github.com/owner/repo"
+                  style="width: 320px"
+                  clearable
+                />
+                <el-input
+                  v-else
+                  v-model="remoteForm.svn_url"
+                  placeholder="svn:// or http://svn.example.com/repo"
+                  style="width: 320px"
+                  clearable
+                />
+                <el-input
+                  v-if="remoteForm.source_type === 'github'"
+                  v-model="remoteForm.branch"
+                  placeholder="分支 (默认 main)"
+                  style="width: 130px"
+                  clearable
+                />
+                <el-input
+                  v-if="remoteForm.source_type === 'github'"
+                  v-model="remoteForm.github_token"
+                  type="password"
+                  show-password
+                  placeholder="Token (公开仓库留空)"
+                  style="width: 180px"
+                  clearable
+                />
+                <template v-else>
+                  <el-input
+                    v-model="remoteForm.svn_username"
+                    placeholder="SVN 用户名"
+                    style="width: 130px"
+                    clearable
+                  />
+                  <el-input
+                    v-model="remoteForm.svn_password"
+                    type="password"
+                    show-password
+                    placeholder="SVN 密码"
+                    style="width: 140px"
+                    clearable
+                  />
+                </template>
+                <el-button
+                  type="primary"
+                  :loading="analyzing"
+                  :disabled="!remoteFormValid"
+                  @click="runRemoteAnalysis"
+                >
+                  <el-icon><Search /></el-icon>
+                  拉取并解析
+                </el-button>
+              </div>
+              <div style="font-size: 12px; color: #909399">
+                * 公开开源仓库直接输入地址即可免 Token 拉取与解析；私有仓库请填写对应访问凭据。
+              </div>
+            </div>
+          </template>
+
+          <!-- 模式 3：文件 / Zip 上传 -->
           <template v-else>
             <el-upload
               v-model:file-list="uploadFileList"
@@ -40,7 +138,7 @@
               </div>
               <template #tip>
                 <div class="el-upload__tip">
-                  支持 .py / .js / .ts / .java / .go / .rb / .php 等单/多文件；也支持 .zip 压缩包
+                  支持 .py / .js / .ts / .java / .go / .rb / .php 等源文件；也支持 .zip 压缩包
                 </div>
               </template>
             </el-upload>
@@ -51,7 +149,7 @@
               @click="runUploadAnalysis"
             >
               <el-icon><Upload /></el-icon>
-              发起解析
+              发起上传解析
             </el-button>
           </template>
         </div>
@@ -223,20 +321,52 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, nextTick, watch } from 'vue'
+import { ref, computed, nextTick, watch, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import { Search, Loading, UploadFilled, Upload } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { analysisApi } from '@/api'
+import { analysisApi, projectApi } from '@/api'
 import type { UploadUserFile, UploadRawFile } from 'element-plus'
 
-const inputMode = ref<'path' | 'files'>('path')
-const localPath = ref('')
+const route = useRoute()
+const inputMode = ref<'project' | 'remote' | 'files'>('project')
 const analyzing = ref(false)
 const analysisResult = ref<any>(null)
 const activeTab = ref('apis')
 const expandedModules = ref<number[]>([])
 const graphRef = ref<HTMLElement>()
 const uploadFileList = ref<UploadUserFile[]>([])
+
+// 项目模式状态
+const projectList = ref<any[]>([])
+const selectedProjectId = ref('')
+const selectedProject = computed(() =>
+  projectList.value.find((p) => p.id === selectedProjectId.value)
+)
+const selectedProjectRepoUrl = computed(() => {
+  const cfg = selectedProject.value?.source_config || {}
+  return cfg.repo_url || cfg.svn_url || ''
+})
+
+// 远程仓库模式状态
+const remoteForm = ref({
+  source_type: 'github',
+  repo_url: '',
+  branch: 'main',
+  commit_sha: '',
+  github_token: '',
+  svn_url: '',
+  svn_username: '',
+  svn_password: '',
+  svn_revision: '',
+})
+
+const remoteFormValid = computed(() => {
+  if (remoteForm.value.source_type === 'github') {
+    return !!remoteForm.value.repo_url?.trim()
+  }
+  return !!remoteForm.value.svn_url?.trim()
+})
 
 // Computed properties
 const hasBusinessModules = computed(() => {
@@ -288,9 +418,27 @@ function riskSeverity(risk: any): 'error' | 'warning' | 'info' {
   return 'info'
 }
 
-async function runAnalysis() {
-  if (!localPath.value.trim()) {
-    ElMessage.warning('请输入代码路径')
+async function loadProjects() {
+  try {
+    const res: any = await projectApi.getList()
+    projectList.value = res?.data?.list || []
+    if (route.query.project_id) {
+      selectedProjectId.value = route.query.project_id as string
+    } else if (projectList.value.length > 0 && !selectedProjectId.value) {
+      selectedProjectId.value = projectList.value[0].id
+    }
+  } catch {
+    projectList.value = []
+  }
+}
+
+onMounted(() => {
+  loadProjects()
+})
+
+async function runProjectAnalysis() {
+  if (!selectedProjectId.value) {
+    ElMessage.warning('请选择项目')
     return
   }
 
@@ -299,22 +447,59 @@ async function runAnalysis() {
   activeTab.value = 'apis'
 
   try {
-    const res: any = await analysisApi.run({
-      local_path: localPath.value.trim(),
-    })
+    const res: any = await analysisApi.project(selectedProjectId.value)
     analysisResult.value = res?.data || res
-    ElMessage.success(`解析完成，识别到 ${analysisResult.value?.total_apis || 0} 个 API 接口`)
-    // Auto-expand first module
+    ElMessage.success(
+      `项目「${selectedProject.value?.name || ''}」解析完成，识别到 ${analysisResult.value?.total_apis || 0} 个 API 接口` +
+        (analysisResult.value?.tech_stack?.stack ? `（栈：${analysisResult.value.tech_stack.stack}）` : '')
+    )
     if (hasBusinessModules.value) {
       expandedModules.value = [0]
     }
-    // Render graph on next tick
     await nextTick()
     if (hasGraphData.value) {
       renderDependencyGraph()
     }
   } catch (err: any) {
-    ElMessage.error('解析失败: ' + (err.response?.data?.detail || err.message))
+    ElMessage.error('项目代码解析失败: ' + (err.response?.data?.detail || err.message))
+  } finally {
+    analyzing.value = false
+  }
+}
+
+async function runRemoteAnalysis() {
+  if (!remoteFormValid.value) {
+    ElMessage.warning('请输入仓库地址')
+    return
+  }
+
+  analyzing.value = true
+  analysisResult.value = null
+  activeTab.value = 'apis'
+
+  try {
+    const payload = {
+      ...remoteForm.value,
+      repo_url: remoteForm.value.repo_url.trim(),
+      svn_url: remoteForm.value.svn_url.trim(),
+      branch: remoteForm.value.branch.trim() || 'main',
+      github_token: remoteForm.value.github_token.trim() || undefined,
+    }
+    const res: any = await analysisApi.remote(payload)
+    analysisResult.value = res?.data || res
+    ElMessage.success(
+      `远程仓库拉取解析完成，识别到 ${analysisResult.value?.total_apis || 0} 个 API 接口` +
+        (analysisResult.value?.tech_stack?.stack ? `（栈：${analysisResult.value.tech_stack.stack}）` : '')
+    )
+    if (hasBusinessModules.value) {
+      expandedModules.value = [0]
+    }
+    await nextTick()
+    if (hasGraphData.value) {
+      renderDependencyGraph()
+    }
+  } catch (err: any) {
+    ElMessage.error('远程拉取解析失败: ' + (err.response?.data?.detail || err.message))
   } finally {
     analyzing.value = false
   }

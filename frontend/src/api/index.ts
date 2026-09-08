@@ -240,6 +240,19 @@ export const analysisApi = {
       headers: { 'Content-Type': 'multipart/form-data' },
       timeout: 300000,
     }),
+  remote: (data: {
+    source_type: string
+    repo_url?: string
+    branch?: string
+    commit_sha?: string
+    github_token?: string
+    svn_url?: string
+    svn_username?: string
+    svn_password?: string
+    svn_revision?: string
+  }) => api.post('/analysis/remote', data, { timeout: 300000 }),
+  project: (projectId: string) =>
+    api.post(`/analysis/project/${projectId}`, {}, { timeout: 300000 }),
   get: (id: string) => api.get(`/analysis/${id}`),
 }
 
