@@ -71,6 +71,7 @@ def _set_task_status_sync(task_id: str, status: str, extra: dict[str, Any] | Non
     )
     # 落库（status, current_step 列，P0 解决 step=N/A 与状态不同步）
     step_text = (extra or {}).get("step") or status
+    status_lower = status.lower()
     valid_statuses = {
         "pending", "pulling", "analyzing", "generating",
         "executing", "analyzing_defects", "reporting",
@@ -81,19 +82,26 @@ def _set_task_status_sync(task_id: str, status: str, extra: dict[str, Any] | Non
         from app.config import settings as _s
         _dsn = f"host={_s.POSTGRES_HOST} port={_s.POSTGRES_PORT} dbname={_s.POSTGRES_DB} user={_s.POSTGRES_USER} password={_s.POSTGRES_PASSWORD}"
         with psycopg2.connect(_dsn) as _c, _c.cursor() as _cur:
-            if status in valid_statuses:
-                _cur.execute(
-                    "UPDATE test_runs SET status = %s::teststatus, current_step = %s WHERE id = %s",
-                    (status, step_text[:50], task_id),
-                )
+            if status_lower in valid_statuses:
+                status_upper = status_lower.upper()
+                if status_upper in ("COMPLETED", "FAILED", "CANCELLED"):
+                    _cur.execute(
+                        "UPDATE test_runs SET status = %s::teststatus, current_step = %s, completed_at = COALESCE(completed_at, NOW()) WHERE id = %s",
+                        (status_upper, step_text[:50], task_id),
+                    )
+                else:
+                    _cur.execute(
+                        "UPDATE test_runs SET status = %s::teststatus, current_step = %s WHERE id = %s",
+                        (status_upper, step_text[:50], task_id),
+                    )
             else:
                 _cur.execute(
                     "UPDATE test_runs SET current_step = %s WHERE id = %s",
                     (step_text[:50], task_id),
                 )
             _c.commit()
-    except Exception:  # noqa: BLE001 - 落库失败不影响 Redis 进度
-        pass
+    except Exception as _err:  # noqa: BLE001 - 落库失败不影响 Redis 进度
+        logger.warning(f"[{task_id}] _set_task_status_sync DB update failed: {_err}")
 
 
 def _set_task_progress_sync(task_id: str, progress: int, step: str = "") -> None:
@@ -109,7 +117,12 @@ def _set_task_progress_sync(task_id: str, progress: int, step: str = "") -> None
         from app.config import settings as _s
         _dsn = f"host={_s.POSTGRES_HOST} port={_s.POSTGRES_PORT} dbname={_s.POSTGRES_DB} user={_s.POSTGRES_USER} password={_s.POSTGRES_PASSWORD}"
         with psycopg2.connect(_dsn) as _c, _c.cursor() as _cur:
-            if step:
+            if int(progress) >= 100 or ("完成" in (step or "")):
+                _cur.execute(
+                    "UPDATE test_runs SET progress = %s, current_step = %s, status = 'COMPLETED'::teststatus, completed_at = COALESCE(completed_at, NOW()) WHERE id = %s",
+                    (int(progress), (step or "测试完成")[:50], task_id),
+                )
+            elif step:
                 _cur.execute(
                     "UPDATE test_runs SET progress = %s, current_step = %s WHERE id = %s",
                     (int(progress), step[:50], task_id),
@@ -120,8 +133,8 @@ def _set_task_progress_sync(task_id: str, progress: int, step: str = "") -> None
                     (int(progress), task_id),
                 )
             _c.commit()
-    except Exception:  # noqa: BLE001 - 落库失败不影响 Redis 进度
-        pass
+    except Exception as _err:  # noqa: BLE001 - 落库失败不影响 Redis 进度
+        logger.warning(f"[{task_id}] _set_task_progress_sync DB update failed: {_err}")
 
 
 def _persist_test_results(test_run_id: str, test_results: list[dict[str, Any]]) -> int:
@@ -761,15 +774,14 @@ def aggregate_results(
     except Exception as e:  # noqa: BLE001
         logger.warning(f"[{test_run_id}] aggregate auto-collect error (non-fatal): {e}")
 
-    # 自动生成测试报告（有结果才生成；异步任务，不阻塞本阶段）
-    if summary.get("total_tests", 0) > 0:
-        try:
-            from app.modules.report.tasks import auto_generate_report
+    # 自动生成测试报告（测试完成均自动触发；异步任务，不阻塞本阶段）
+    try:
+        from app.modules.report.tasks import auto_generate_report
 
-            auto_generate_report.delay(test_run_id)
-            logger.info(f"[{test_run_id}] auto report generation dispatched")
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"[{test_run_id}] auto report dispatch failed (non-fatal): {e}")
+        auto_generate_report.delay(test_run_id)
+        logger.info(f"[{test_run_id}] auto report generation dispatched")
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[{test_run_id}] auto report dispatch failed (non-fatal): {e}")
 
     # P0：plan 模式写计划执行快照（test_plan_executions）
     try:

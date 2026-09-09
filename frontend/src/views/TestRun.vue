@@ -106,7 +106,11 @@
               <el-option label="上传代码" value="upload" />
             </el-select>
             <el-select v-model="filterStatus" placeholder="全部状态" clearable style="width: 140px" @change="loadTestRuns">
-              <el-option v-for="(label, key) in STATUS_OPTIONS" :key="key" :label="label" :value="key" />
+              <el-option label="已完成" value="completed" />
+              <el-option label="进行中" value="executing" />
+              <el-option label="失败" value="failed" />
+              <el-option label="排队中" value="pending" />
+              <el-option label="已取消" value="cancelled" />
             </el-select>
           </div>
         </div>
@@ -130,10 +134,11 @@
             <span class="mono-text">{{ row.id?.substring(0, 8) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="110">
+        <el-table-column label="任务状态" width="115">
           <template #default="{ row }">
-            <el-tag :type="statusTagType(row.status)" size="small">
-              {{ statusLabel(row.status) }}
+            <el-tag :type="macroStatusTag(row.status)" size="small" :effect="row.status === 'completed' ? 'light' : 'plain'">
+              <el-icon v-if="isStatusRunning(row.status)" class="is-loading" style="margin-right: 4px"><Loading /></el-icon>
+              {{ macroStatusLabel(row.status) }}
             </el-tag>
           </template>
         </el-table-column>
@@ -142,9 +147,11 @@
             <el-progress :percentage="row.progress || 0" :status="progressStatus(row.status)" :stroke-width="14" />
           </template>
         </el-table-column>
-        <el-table-column label="当前步骤" min-width="160" show-overflow-tooltip>
+        <el-table-column label="当前步骤" min-width="170" show-overflow-tooltip>
           <template #default="{ row }">
-            <span class="step-text">{{ statusLabel(row.current_step || row.status) }}</span>
+            <span class="step-text" :class="{'step-running': isStatusRunning(row.status), 'step-completed': row.status === 'completed'}">
+              {{ formatStepText(row) }}
+            </span>
           </template>
         </el-table-column>
         <el-table-column label="来源" min-width="180" show-overflow-tooltip>
@@ -171,7 +178,7 @@
               详情
             </el-button>
             <el-button
-              v-if="row.status === 'completed'"
+              v-if="canViewReport(row)"
               size="small"
               type="success"
               plain
@@ -205,8 +212,9 @@
             </el-tag>
           </el-descriptions-item>
           <el-descriptions-item label="任务状态">
-            <el-tag :type="statusTagType(selectedRun.status)" size="small">
-              {{ statusLabel(selectedRun.status) }}
+            <el-tag :type="macroStatusTag(selectedRun.status)" size="small">
+              <el-icon v-if="isStatusRunning(selectedRun.status)" class="is-loading" style="margin-right: 4px"><Loading /></el-icon>
+              {{ macroStatusLabel(selectedRun.status) }}
             </el-tag>
           </el-descriptions-item>
           <el-descriptions-item label="任务 ID">
@@ -214,7 +222,7 @@
           </el-descriptions-item>
           <el-descriptions-item label="当前动作">
             <span class="step-text" style="font-weight: 600; color: var(--el-color-primary)">
-              {{ detailStep || selectedRun.current_step || statusLabel(selectedRun.status) }}
+              {{ detailStep || formatStepText(selectedRun) }}
             </span>
           </el-descriptions-item>
           <el-descriptions-item label="整体进度">
@@ -330,7 +338,7 @@
             <el-button
               type="success"
               :icon="Document"
-              :disabled="!execSummary?.has_report && selectedRun.status !== 'completed'"
+              :disabled="!execSummary?.has_report && !canViewReport(selectedRun)"
               @click="openReportPage(selectedRun.id)"
             >
               查看完整测试报告
@@ -469,7 +477,7 @@
  * Options API 的 data() 返回类型显式，规避该 bug。
  */
 import { defineComponent } from 'vue'
-import { VideoPlay, Document, Odometer, Warning } from '@element-plus/icons-vue'
+import { VideoPlay, Document, Odometer, Warning, Loading } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { projectApi, testRunApi, planApi } from '@/api'
 
@@ -521,7 +529,7 @@ const STATUS_TAG: Record<string, string> = {
 
 export default defineComponent({
   name: 'TestRunView',
-  components: { VideoPlay, Document, Odometer, Warning },
+  components: { VideoPlay, Document, Odometer, Warning, Loading },
   data() {
     return {
       Document,
@@ -947,11 +955,64 @@ export default defineComponent({
     },
 
     // ============ UI helpers ============
+    macroStatusTag(status: string): string {
+      const s = (status || '').toLowerCase()
+      if (s === 'completed') return 'success'
+      if (s === 'failed') return 'danger'
+      if (s === 'cancelled') return 'info'
+      if (s === 'pending') return 'warning'
+      return 'primary'
+    },
+    macroStatusLabel(status: string): string {
+      const s = (status || '').toLowerCase()
+      if (s === 'completed') return '已完成'
+      if (s === 'failed') return '执行失败'
+      if (s === 'cancelled') return '已取消'
+      if (s === 'pending') return '排队等待'
+      return '进行中'
+    },
+    isStatusRunning(status: string): boolean {
+      const s = (status || '').toLowerCase()
+      return !['completed', 'failed', 'cancelled', 'pending'].includes(s)
+    },
+    formatStepText(row: any): string {
+      if (!row) return '—'
+      const status = (row.status || '').toLowerCase()
+      const step = row.current_step || ''
+      const progress = row.progress || 0
+
+      if (status === 'completed' || progress >= 100) {
+        return step && step.includes('完成') ? step : '测试完成 (100%)'
+      }
+      if (status === 'failed') {
+        return step && step.includes('失败') ? step : (row.error_message || '测试异常中断')
+      }
+      if (status === 'cancelled') {
+        return '任务已取消'
+      }
+      if (step) {
+        const stepMap: Record<string, string> = {
+          pending: '排队等待中...',
+          pulling: '拉取源码中...',
+          analyzing: '代码结构与API解析中...',
+          generating: 'AI 测试用例生成中...',
+          executing: '测试用例执行中...',
+          analyzing_defects: 'AI 缺陷分析归因中...',
+          reporting: '生成测试报告中...',
+        }
+        return stepMap[step] || step
+      }
+      return '等待中...'
+    },
+    canViewReport(row: any): boolean {
+      if (!row) return false
+      return row.status === 'completed' || (row.progress || 0) >= 100 || (row.current_step && row.current_step.includes('完成'))
+    },
     statusTagType(status: string): string {
-      return STATUS_TAG[status] || 'info'
+      return this.macroStatusTag(status)
     },
     statusLabel(status: string): string {
-      return STATUS_OPTIONS[status] || status
+      return this.macroStatusLabel(status)
     },
     progressStatus(status: string): string {
       if (status === 'completed') return 'success'
@@ -1191,5 +1252,12 @@ export default defineComponent({
   justify-content: flex-start;
   padding-top: 4px;
   border-top: 1px dashed #ebeef5;
+}
+.step-running {
+  color: var(--el-color-primary, #409eff);
+  font-weight: 500;
+}
+.step-completed {
+  color: var(--el-color-success, #67c23a);
 }
 </style>

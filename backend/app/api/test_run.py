@@ -14,7 +14,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import Project, TestRun, TestStatus, User, SourceType as ModelSourceType
@@ -95,30 +95,54 @@ async def list_test_runs(
     result = await db.execute(stmt)
     rows = result.fetchall()
 
+    run_list = []
+    stuck_run_ids = []
+    for run, project in rows:
+        st_val = run.status.value if run.status else "pending"
+        step_val = run.current_step or "pending"
+        prog_val = run.progress or 0
+        if prog_val >= 100 or ("完成" in step_val):
+            if st_val in ("pulling", "pending", "executing", "analyzing", "generating"):
+                st_val = "completed"
+                stuck_run_ids.append(run.id)
+
+        run_list.append({
+            "id": str(run.id),
+            "project_id": str(run.project_id) if run.project_id else None,
+            "project_name": project.name if project else "—",
+            "status": st_val,
+            "progress": prog_val,
+            "source_type": run.source_type.value if run.source_type else None,
+            "source_ref": run.source_ref,
+            "branch": run.branch,
+            "commit_sha": run.commit_sha,
+            "error_message": run.error_message,
+            "started_at": run.started_at.isoformat() if run.started_at else None,
+            "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+            "created_at": run.created_at.isoformat() if run.created_at else None,
+            "plan_id": str(run.plan_id) if run.plan_id else None,
+            "current_step": step_val,
+            "target_service_url": getattr(run, "target_service_url", None),
+        })
+
+    # 异步自愈落库脏数据（避免下次再判断）
+    if stuck_run_ids:
+        try:
+            from sqlalchemy import update as sa_update
+            from datetime import datetime as _dt
+            await db.execute(
+                sa_update(TestRun)
+                .where(TestRun.id.in_(stuck_run_ids))
+                .values(status=TestStatus.COMPLETED, completed_at=func.coalesce(TestRun.completed_at, _dt.utcnow()))
+            )
+            await db.commit()
+        except Exception as _heal_err:
+            logger.warning(f"Self-heal stuck test runs DB commit failed: {_heal_err}")
+
     return {
         "code": 0,
         "data": {
-            "list": [
-                {
-                    "id": str(run.id),
-                    "project_id": str(run.project_id) if run.project_id else None,
-                    "project_name": project.name if project else "—",
-                    "status": run.status.value if run.status else "pending",
-                    "progress": run.progress or 0,
-                    "source_type": run.source_type.value if run.source_type else None,
-                    "source_ref": run.source_ref,
-                    "branch": run.branch,
-                    "commit_sha": run.commit_sha,
-                    "error_message": run.error_message,
-                    "started_at": run.started_at.isoformat() if run.started_at else None,
-                    "completed_at": run.completed_at.isoformat() if run.completed_at else None,
-                    "created_at": run.created_at.isoformat() if run.created_at else None,
-                    "plan_id": str(run.plan_id) if run.plan_id else None,
-                    "current_step": run.current_step or "pending",
-                    "target_service_url": getattr(run, "target_service_url", None),
-                }
-                for run, project in rows
-            ],
+            "list": run_list,
             "total": len(rows),
         },
         "message": "success",

@@ -210,6 +210,23 @@ async def share_view(
     report = result.scalar_one_or_none()
 
     if report is None:
+        # 即时生成兜底：检查任务是否存在
+        run_obj = (
+            await db.execute(select(TestRun).where(TestRun.id == run_uuid))
+        ).scalar_one_or_none()
+        if run_obj is not None:
+            test_results = await _load_test_results(run_id, db)
+            if test_results is not None:
+                try:
+                    await _generate_report_async(run_id, test_results)
+                    result = await db.execute(
+                        select(TestReport).where(TestReport.test_run_id == run_uuid)
+                    )
+                    report = result.scalar_one_or_none()
+                except Exception as _gen_err:
+                    logger.error(f"On-demand report generation in share_view failed: {_gen_err}")
+
+    if report is None:
         raise HTTPException(
             status_code=404,
             detail=f"报告尚未生成（run_id={run_id}）。请先点击「重新生成报告」按钮。",
@@ -294,6 +311,23 @@ async def get_html_report(
         select(TestReport).where(TestReport.test_run_id == run_uuid)
     )
     report = result.scalar_one_or_none()
+
+    if report is None:
+        # 即时生成兜底：检查任务是否存在
+        run_obj = (
+            await db.execute(select(TestRun).where(TestRun.id == run_uuid))
+        ).scalar_one_or_none()
+        if run_obj is not None:
+            test_results = await _load_test_results(run_id, db)
+            if test_results is not None:
+                try:
+                    await _generate_report_async(run_id, test_results)
+                    result = await db.execute(
+                        select(TestReport).where(TestReport.test_run_id == run_uuid)
+                    )
+                    report = result.scalar_one_or_none()
+                except Exception as _gen_err:
+                    logger.error(f"On-demand report generation failed: {_gen_err}")
 
     if report is None:
         raise HTTPException(
@@ -580,7 +614,26 @@ async def _load_test_results(
     )
     joined = result.all()
     if not joined:
-        return None
+        run_row = (
+            await db.execute(select(TestRun).where(TestRun.id == uuid.UUID(run_id)))
+        ).scalar_one_or_none()
+        if run_row is None:
+            return None
+        return {
+            "api_results": [],
+            "api_tests": {"results": [], "total": 0, "passed": 0, "failed": 0},
+            "performance_tests": {"results": [], "total": 0, "passed": 0, "failed": 0},
+            "performance_results": [],
+            "integration_tests": {"results": [], "total": 0, "passed": 0, "failed": 0},
+            "integration_results": [],
+            "summary": {
+                "total": 0,
+                "passed": 0,
+                "failed": 0,
+                "source": "db_empty_fallback",
+                "message": "本测试任务未产生用例执行结果或已归档",
+            },
+        }
 
     api_results: list[dict[str, Any]] = []
     perf_results: list[dict[str, Any]] = []

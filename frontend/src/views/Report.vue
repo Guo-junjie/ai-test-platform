@@ -5,12 +5,16 @@
       <template #header>
         <div class="card-header">
           <span>测试报告</span>
-          <div>
+          <div style="display: flex; gap: 8px; align-items: center">
+            <el-button type="success" @click="openCreateModal">
+              <el-icon><Plus /></el-icon>
+              生成报告
+            </el-button>
             <el-select
               v-model="filterProjectId"
               placeholder="全部项目"
               clearable
-              style="width: 180px; margin-right: 8px"
+              style="width: 180px"
               @change="onFilterChange"
             >
               <el-option v-for="p in projects" :key="p.id" :label="p.name" :value="p.id" />
@@ -19,7 +23,7 @@
               v-model="searchRunId"
               placeholder="按任务ID搜索"
               clearable
-              style="width: 180px; margin-right: 8px"
+              style="width: 180px"
               @keyup.enter="loadReports"
             />
             <el-button type="primary" @click="loadReports">
@@ -151,15 +155,68 @@
         <el-empty v-else-if="!loadingHtml" description="无法加载报告内容" />
       </div>
     </el-dialog>
+
+    <!-- Manual report creation modal -->
+    <el-dialog
+      v-model="createModalVisible"
+      title="生成测试报告"
+      width="640px"
+      destroy-on-close
+    >
+      <div style="margin-bottom: 16px; color: #606266; font-size: 13px">
+        从已有的测试任务中选取一项，即时提取执行结果、分析缺陷并生成包含可视化图表与质量门禁的完整报告。
+      </div>
+      <el-form label-width="90px">
+        <el-form-item label="测试任务" required>
+          <el-select
+            v-model="selectedCreateRunId"
+            placeholder="请选择测试任务"
+            filterable
+            clearable
+            :loading="loadingTestRuns"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="run in candidateRuns"
+              :key="run.id"
+              :label="`${run.project_name || '未归属项目'} - ${run.id.substring(0, 8)}（${run.current_step || run.status}）`"
+              :value="run.id"
+            >
+              <div style="display: flex; justify-content: space-between; align-items: center; width: 100%">
+                <span>
+                  <b>{{ run.project_name || '未归属项目' }}</b>
+                  <span class="mono-text" style="margin-left: 8px; color: #909399">{{ run.id.substring(0, 8) }}</span>
+                </span>
+                <span style="font-size: 12px">
+                  <el-tag size="small" :type="run.status === 'completed' ? 'success' : 'primary'">{{ run.current_step || run.status }}</el-tag>
+                  <span style="margin-left: 8px; color: #c0c4cc">{{ formatTime(run.created_at) }}</span>
+                </span>
+              </div>
+            </el-option>
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="createModalVisible = false">取消</el-button>
+        <el-button
+          type="primary"
+          :loading="generatingReport"
+          :disabled="!selectedCreateRunId"
+          @click="handleManualCreateReport"
+        >
+          立即生成
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Search, View, Download, Share, Delete, ArrowDown } from '@element-plus/icons-vue'
+import { Search, View, Download, Share, Delete, ArrowDown, Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { reportApi, projectApi } from '@/api'
+import { reportApi, projectApi, testRunApi } from '@/api'
 import { useAuthStore } from '@/stores'
 
 // R2：关联数据跳转（缺陷 / 覆盖率按本任务过滤）
@@ -184,6 +241,12 @@ const canManage = computed(() =>
 const viewerVisible = ref(false)
 const selectedReport = ref<any>(null)
 const reportHtml = ref('')
+
+const createModalVisible = ref(false)
+const selectedCreateRunId = ref('')
+const candidateRuns = ref<any[]>([])
+const loadingTestRuns = ref(false)
+const generatingReport = ref(false)
 
 // ==================== Methods ====================
 
@@ -248,6 +311,42 @@ async function removeReport(row: any): Promise<void> {
   }
 }
 
+async function openCreateModal() {
+  createModalVisible.value = true
+  selectedCreateRunId.value = ''
+  loadingTestRuns.value = true
+  try {
+    const res: any = await testRunApi.getList({ limit: 50 })
+    const list = res?.data?.list || res?.data || []
+    candidateRuns.value = Array.isArray(list) ? list : []
+  } catch {
+    candidateRuns.value = []
+  } finally {
+    loadingTestRuns.value = false
+  }
+}
+
+async function handleManualCreateReport() {
+  if (!selectedCreateRunId.value) return
+  generatingReport.value = true
+  try {
+    await reportApi.generate(selectedCreateRunId.value)
+    ElMessage.success('报告生成已启动，正在获取最新报告...')
+    createModalVisible.value = false
+    setTimeout(async () => {
+      await loadReports()
+      const target = reports.value.find(r => r.test_run_id === selectedCreateRunId.value)
+      if (target) {
+        viewReport(target)
+      }
+    }, 2500)
+  } catch (err: any) {
+    ElMessage.error(err?.message || '生成报告失败')
+  } finally {
+    generatingReport.value = false
+  }
+}
+
 async function viewReport(row: any) {
   selectedReport.value = row
   viewerVisible.value = true
@@ -265,7 +364,25 @@ async function viewReport(row: any) {
     }
     reportHtml.value = html
   } catch {
-    ElMessage.error('无法加载报告内容')
+    // 容错补全：尝试即时生成一次并重试
+    ElMessage.info('正在为您即时生成报告，请稍候...')
+    try {
+      await reportApi.generate(row.test_run_id)
+      await new Promise((r) => setTimeout(r, 2500))
+      const retryRes: any = await reportApi.getHtml(row.test_run_id)
+      let html = retryRes?.data?.html || ''
+      if (html && !/<base\s/i.test(html)) {
+        const origin = window.location.origin
+        html = html.replace(/<head([^>]*)>/i, `<head$1><base href="${origin}/">`)
+      }
+      reportHtml.value = html
+      if (html) {
+        ElMessage.success('报告生成成功')
+        void loadReports()
+      }
+    } catch {
+      ElMessage.error('无法加载报告内容，请确认该测试任务已执行完成')
+    }
   } finally {
     loadingHtml.value = false
   }
