@@ -15,7 +15,15 @@ from typing import Any
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from app.config import settings
-from app.models.database import TestReport, TestRun, TestStatus
+from app.models.database import (
+    Defect,
+    DefectSeverity,
+    DefectType,
+    TestCase,
+    TestReport,
+    TestRun,
+    TestStatus,
+)
 from app.modules.report.charts import ChartBuilder
 from app.utils.logger import get_logger
 from app.utils.database import AsyncSessionLocal
@@ -533,7 +541,163 @@ class ReportGenerator:
                     run.progress = 100
                     run.completed_at = datetime.utcnow()
 
+                # 同步落库自动化测试缺陷到 defects 独立表（事务内原子提交）
+                raw_defects = report_data.get("defects", {})
+                await persist_defects_to_db(
+                    test_run_id=test_run_id,
+                    defects_data=raw_defects,
+                    project_id=run.project_id if run else None,
+                    session=session,
+                )
+
                 await session.commit()
                 logger.info(f"Report saved to DB for test_run: {test_run_id}")
         except Exception as e:
             logger.error(f"Failed to save report to DB: {e}")
+
+
+CATEGORY_TO_DEFECT_TYPE: dict[str, DefectType] = {
+    "business_exception": DefectType.BUSINESS,
+    "business": DefectType.BUSINESS,
+    "program_bug": DefectType.PROGRAM,
+    "program": DefectType.PROGRAM,
+    "performance_issue": DefectType.PERFORMANCE,
+    "performance": DefectType.PERFORMANCE,
+    "integration_failure": DefectType.INTEGRATION,
+    "integration": DefectType.INTEGRATION,
+    "security_vulnerability": DefectType.SECURITY,
+    "security": DefectType.SECURITY,
+    "infrastructure_error": DefectType.PROGRAM,
+}
+
+
+async def persist_defects_to_db(
+    test_run_id: str | uuid.UUID,
+    defects_data: dict[str, Any] | list[dict[str, Any]],
+    project_id: str | uuid.UUID | None = None,
+    session: Any | None = None,
+) -> int:
+    """
+    将自动化测试分析产出的缺陷持久化落库到 defects 表。
+
+    - 幂等性保障：重新生成报告时，清理该任务下处于 'open' 状态的历史缺陷并重新落库；
+      保留已被用户手动流转（in_fix / verified / closed / rejected）的缺陷，不覆盖处理进度。
+    - 外键安全性：严格校验 test_case_id 是否在 test_cases 表中存在，避免 FK 约束冲突；
+      若未显式传入 project_id，则自动通过 TestRun 关联查询补齐。
+    """
+    try:
+        run_uuid = uuid.UUID(str(test_run_id))
+    except (ValueError, TypeError):
+        logger.warning(f"[{test_run_id}] Invalid test_run_id uuid, skipping defect persistence")
+        return 0
+
+    if isinstance(defects_data, dict):
+        raw_items = defects_data.get("defects", [])
+    elif isinstance(defects_data, list):
+        raw_items = defects_data
+    else:
+        raw_items = []
+
+    async def _do_persist(s: Any) -> int:
+        nonlocal project_id
+        if not project_id:
+            run_row = (await s.execute(
+                select(TestRun.project_id).where(TestRun.id == run_uuid)
+            )).scalar_one_or_none()
+            if run_row:
+                project_id = run_row
+
+        p_uuid = None
+        if project_id:
+            try:
+                p_uuid = uuid.UUID(str(project_id))
+            except (ValueError, TypeError):
+                p_uuid = None
+
+        # 1. 幂等清理：仅删除未人工流转（status='open'）的既有缺陷
+        existing_rows = (await s.execute(
+            select(Defect).where(Defect.test_run_id == run_uuid)
+        )).scalars().all()
+
+        for old in existing_rows:
+            if getattr(old, "status", "open") == "open":
+                await s.delete(old)
+        await s.flush()
+
+        if not raw_items:
+            return 0
+
+        # 2. 查询该任务已持久化的有效 test_case_id 集合，保障外键安全
+        valid_case_ids = set((await s.execute(
+            select(TestCase.id).where(TestCase.test_run_id == run_uuid)
+        )).scalars().all())
+
+        # 3. 逐条构造 Defect 记录入库
+        inserted_count = 0
+        for item in raw_items:
+            if not isinstance(item, dict):
+                continue
+
+            cat = str(item.get("category") or item.get("defect_type") or "").lower()
+            dtype = CATEGORY_TO_DEFECT_TYPE.get(cat, DefectType.PROGRAM)
+
+            sev_raw = str(item.get("severity") or "P2").upper()
+            try:
+                sev = DefectSeverity(sev_raw)
+            except ValueError:
+                sev = DefectSeverity.P2
+
+            cid_raw = item.get("case_id")
+            case_uuid = None
+            if cid_raw:
+                try:
+                    c_temp = uuid.UUID(str(cid_raw))
+                    if c_temp in valid_case_ids:
+                        case_uuid = c_temp
+                except (ValueError, TypeError):
+                    case_uuid = None
+
+            steps = item.get("reproduction_steps") or item.get("reproduce_steps") or []
+            if isinstance(steps, str):
+                steps = [steps]
+            elif not isinstance(steps, list):
+                steps = []
+
+            title = (item.get("title") or item.get("case_name") or "自动化测试发现缺陷")[:500]
+            desc = item.get("description") or item.get("root_cause") or title or "测试用例执行未通过"
+
+            defect = Defect(
+                id=uuid.uuid4(),
+                test_run_id=run_uuid,
+                test_case_id=case_uuid,
+                project_id=p_uuid,
+                title=title,
+                description=desc,
+                defect_type=dtype,
+                severity=sev,
+                reproduce_steps=steps,
+                root_cause=item.get("root_cause"),
+                fix_suggestion=item.get("fix_suggestion"),
+                is_resolved=False,
+                status="open",
+                created_at=datetime.utcnow(),
+            )
+            s.add(defect)
+            inserted_count += 1
+
+        await s.flush()
+        logger.info(f"[{test_run_id}] Persisted {inserted_count} defects to defects table")
+        return inserted_count
+
+    try:
+        if session is not None:
+            return await _do_persist(session)
+        else:
+            async with AsyncSessionLocal() as s:
+                count = await _do_persist(s)
+                await s.commit()
+                return count
+    except Exception as err:
+        logger.error(f"[{test_run_id}] Failed to persist defects to DB: {err}", exc_info=True)
+        return 0
+

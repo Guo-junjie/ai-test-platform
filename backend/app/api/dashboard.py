@@ -86,9 +86,9 @@ async def get_statistics(
 
     pass_rate = round(passed_runs / completed_runs * 100, 1) if completed_runs > 0 else 0
 
-    # 缺陷总数
+    # 缺陷总数（统计周期内发现的所有缺陷，涵盖自动化测试与手动登记）
     defect_result = await db.execute(
-        select(func.count(Defect.id)).join(TestRun).where(TestRun.created_at >= since)
+        select(func.count(Defect.id)).where(Defect.created_at >= since)
     )
     total_defects = defect_result.scalar() or 0
 

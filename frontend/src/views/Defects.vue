@@ -158,7 +158,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api, { projectApi } from '@/api'
@@ -321,6 +321,14 @@ onMounted(() => {
   if (rid) filters.test_run_id = rid
   void loadProjects()
   void load()
+
+  watch(
+    () => route.query.test_run_id,
+    (newRid) => {
+      filters.test_run_id = (newRid as string) || ''
+      reload()
+    }
+  )
 })
 </script>
 

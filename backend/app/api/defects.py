@@ -108,17 +108,23 @@ async def list_defects(
     db: AsyncSession = Depends(get_db_session),
 ):
     """缺陷列表：多条件过滤 + 分页 + 分组统计。"""
-    # 基础查询（Defect 无 project_id 列，经 TestRun 关联）
-    stmt = select(Defect, TestRun.project_id, Project.name).outerjoin(
-        TestRun, TestRun.id == Defect.test_run_id
-    ).outerjoin(Project, Project.id == TestRun.project_id)
-    count_stmt = select(func.count()).select_from(Defect).outerjoin(
-        TestRun, TestRun.id == Defect.test_run_id
+    # 基础查询（通过 COALESCE(Defect.project_id, TestRun.project_id) 关联 Project）
+    effective_project_id = func.coalesce(Defect.project_id, TestRun.project_id)
+    stmt = (
+        select(Defect, effective_project_id.label("project_id"), Project.name)
+        .outerjoin(TestRun, TestRun.id == Defect.test_run_id)
+        .outerjoin(Project, Project.id == effective_project_id)
+    )
+    count_stmt = (
+        select(func.count())
+        .select_from(Defect)
+        .outerjoin(TestRun, TestRun.id == Defect.test_run_id)
     )
 
     conds = []
     if project_id:
-        conds.append(TestRun.project_id == uuid.UUID(project_id))
+        p_uuid = uuid.UUID(project_id)
+        conds.append(or_(Defect.project_id == p_uuid, TestRun.project_id == p_uuid))
     if severity:
         try:
             conds.append(Defect.severity == DefectSeverity(severity))
@@ -153,7 +159,13 @@ async def list_defects(
     by_severity: dict[str, int] = {s: 0 for s in ("P0", "P1", "P2", "P3")}
     by_status: dict[str, int] = {s: 0 for s in DEFECT_STATUSES}
     if conds:
-        stat_stmt = select(Defect.severity, Defect.status, func.count()).where(*conds).group_by(Defect.severity, Defect.status)
+        stat_stmt = (
+            select(Defect.severity, Defect.status, func.count())
+            .select_from(Defect)
+            .outerjoin(TestRun, TestRun.id == Defect.test_run_id)
+            .where(*conds)
+            .group_by(Defect.severity, Defect.status)
+        )
     else:
         stat_stmt = select(Defect.severity, Defect.status, func.count()).group_by(Defect.severity, Defect.status)
     for sev, st, cnt in (await db.execute(stat_stmt)).fetchall():
@@ -195,6 +207,7 @@ async def create_defect(
 
     defect = Defect(
         id=uuid.uuid4(),
+        project_id=project.id,
         test_run_id=None,  # 手动创建不挂 run
         title=req.title.strip(),
         description=req.description.strip(),
@@ -224,7 +237,7 @@ async def get_defect(
         await db.execute(
             select(Defect, Project.name)
             .outerjoin(TestRun, TestRun.id == Defect.test_run_id)
-            .outerjoin(Project, Project.id == TestRun.project_id)
+            .outerjoin(Project, Project.id == func.coalesce(Defect.project_id, TestRun.project_id))
             .where(Defect.id == did)
         )
     ).first()

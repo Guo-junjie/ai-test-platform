@@ -72,17 +72,18 @@
                 <el-tag :type="statusTagType(row.status)" size="small">{{ row.status }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="100" fixed="right">
-              <template #default="{ row }">
-                <el-button size="small" link @click="goRunDefects(row.id)">查看缺陷</el-button>
-              </template>
-            </el-table-column>
             <el-table-column prop="quality_score" label="质量分" width="100">
               <template #default="{ row }">
                 <span>{{ row.quality_score != null ? row.quality_score : '--' }}</span>
               </template>
             </el-table-column>
             <el-table-column prop="created_at" label="创建时间" min-width="170" />
+            <el-table-column label="操作" width="160" fixed="right">
+              <template #default="{ row }">
+                <el-button size="small" link type="primary" @click="goRunReport(row.id)">查看报告</el-button>
+                <el-button size="small" link type="warning" @click="goRunDefects(row.id)">查看缺陷</el-button>
+              </template>
+            </el-table-column>
           </el-table>
         </el-card>
       </el-col>
@@ -101,10 +102,9 @@ const router = useRouter()
 
 function goStatCard(card: { title: string }) {
   if (card.title === '发现缺陷') {
-    // 平台无独立 /defects 路由 — 缺陷查看走「质量趋势」或「报告详情」
-    router.push({ path: '/quality-trend' })
+    router.push({ path: '/defects' })
   } else if (card.title === '测试任务总数') {
-    router.push({ path: '/test-runs' })
+    router.push({ path: '/test-run' })
   } else if (card.title === '通过率' || card.title === '平均质量分') {
     router.push({ path: '/quality-trend' })
   }
@@ -114,9 +114,13 @@ function goProject(projectId: string) {
   router.push({ path: `/projects/${projectId}` })
 }
 
-function goRunDefects(runId: string) {
-  // 跳到测试报告详情（含缺陷列表）
+function goRunReport(runId: string) {
   router.push({ path: `/report/${runId}` })
+}
+
+function goRunDefects(runId: string) {
+  // 跳转到缺陷中心，带上 test_run_id 过滤该任务发现的缺陷
+  router.push({ path: '/defects', query: { test_run_id: runId } })
 }
 
 const days = ref(30)
