@@ -165,9 +165,27 @@
             <span class="time-text">{{ formatTime(row.created_at) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="100" fixed="right">
+        <el-table-column label="操作" width="180" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" type="danger" :disabled="['completed','failed','cancelled'].includes(row.status)" @click.stop="handleCancel(row)">
+            <el-button size="small" type="primary" plain @click.stop="handleRowClick(row)">
+              详情
+            </el-button>
+            <el-button
+              v-if="row.status === 'completed'"
+              size="small"
+              type="success"
+              plain
+              @click.stop="openReportPage(row.id)"
+            >
+              报告
+            </el-button>
+            <el-button
+              v-if="!['completed','failed','cancelled'].includes(row.status)"
+              size="small"
+              type="danger"
+              plain
+              @click.stop="handleCancel(row)"
+            >
               取消
             </el-button>
           </template>
@@ -178,15 +196,15 @@
     </el-card>
 
     <!-- Task detail dialog -->
-    <el-dialog v-model="detailVisible" :title="`任务详情 - ${selectedRun?.id?.substring(0, 8) || ''}`" width="880px">
+    <el-dialog v-model="detailVisible" :title="`任务详情 - ${selectedRun?.id?.substring(0, 8) || ''}`" width="900px" destroy-on-close>
       <div v-if="selectedRun" class="detail-content">
-        <el-descriptions :column="2" border>
-          <el-descriptions-item label="模式">
+        <el-descriptions :column="2" border size="small">
+          <el-descriptions-item label="任务模式">
             <el-tag size="small" :type="selectedRun.plan_id ? 'success' : 'primary'" effect="plain">
-              {{ selectedRun.plan_id ? '测试计划' : (selectedRun.source_type || '—') }}
+              {{ selectedRun.plan_id ? '测试计划回归' : (selectedRun.source_type || '源码流水线') }}
             </el-tag>
           </el-descriptions-item>
-          <el-descriptions-item label="状态">
+          <el-descriptions-item label="任务状态">
             <el-tag :type="statusTagType(selectedRun.status)" size="small">
               {{ statusLabel(selectedRun.status) }}
             </el-tag>
@@ -194,50 +212,161 @@
           <el-descriptions-item label="任务 ID">
             <span class="mono-text">{{ selectedRun.id }}</span>
           </el-descriptions-item>
-          <el-descriptions-item label="当前步骤">
-            <span class="step-text">{{ statusLabel(detailStep || selectedRun.current_step || selectedRun.status) }}</span>
+          <el-descriptions-item label="当前动作">
+            <span class="step-text" style="font-weight: 600; color: var(--el-color-primary)">
+              {{ detailStep || selectedRun.current_step || statusLabel(selectedRun.status) }}
+            </span>
           </el-descriptions-item>
-          <el-descriptions-item label="进度">
-            <el-progress :percentage="detailProgress" :status="progressStatus(selectedRun.status)" :stroke-width="16" />
+          <el-descriptions-item label="整体进度">
+            <el-progress :percentage="detailProgress" :status="progressStatus(selectedRun.status)" :stroke-width="14" />
           </el-descriptions-item>
-          <el-descriptions-item label="来源">
-            <span class="mono-text">{{ selectedRun.source_ref || (selectedRun.plan_id ? '测试计划' : '-') }}</span>
+          <el-descriptions-item label="代码来源/计划">
+            <span class="mono-text">{{ execSummary?.source_description || selectedRun.source_ref || (selectedRun.plan_id ? '测试计划' : '-') }}</span>
           </el-descriptions-item>
-          <el-descriptions-item label="分支">
-            {{ selectedRun.branch || '-' }}
+          <el-descriptions-item label="分支 / Commit">
+            <span v-if="selectedRun.branch || selectedRun.commit_sha" class="mono-text">
+              {{ selectedRun.branch || 'main' }}
+              <span v-if="selectedRun.commit_sha">@ {{ selectedRun.commit_sha.substring(0, 8) }}</span>
+            </span>
+            <span v-else>—</span>
           </el-descriptions-item>
-          <el-descriptions-item label="Commit">
-            <span class="mono-text">{{ selectedRun.commit_sha?.substring(0, 12) || '-' }}</span>
-          </el-descriptions-item>
-          <el-descriptions-item label="目标服务" :span="2">
+          <el-descriptions-item label="被测目标环境">
             <span v-if="selectedRun.target_service_url" class="mono-text" style="color: var(--el-color-primary)">
               {{ selectedRun.target_service_url }}
             </span>
-            <span v-else style="color: var(--el-text-color-placeholder)">未指定（本地容器启动或离线无 SUT 模式）</span>
+            <span v-else style="color: var(--el-text-color-placeholder)">未指定（离线模式或本地环境）</span>
           </el-descriptions-item>
-          <el-descriptions-item v-if="selectedRun.error_message" label="错误信息" :span="2">
-            <span class="error-text">{{ selectedRun.error_message }}</span>
+          <el-descriptions-item label="执行耗时" :span="2">
+            <span>{{ formatDuration(selectedRun.started_at, selectedRun.completed_at) }}</span>
+            <span class="time-sub" style="margin-left: 12px; color: var(--el-text-color-secondary)">
+              （开始: {{ formatTime(selectedRun.started_at) || '排队中' }} ~ 结束: {{ formatTime(selectedRun.completed_at) || '进行中' }}）
+            </span>
           </el-descriptions-item>
         </el-descriptions>
 
-        <!-- Step timeline (phase 6b) -->
-        <el-divider content-position="left">执行步骤</el-divider>
-        <el-steps :active="currentStepIndex" finish-status="success" align-center>
-          <el-step v-for="step in STEP_TIMELINE" :key="step.key" :title="step.label" :description="step.desc" />
-        </el-steps>
+        <!-- 失败警告条（如果有错误） -->
+        <el-alert
+          v-if="selectedRun.status === 'failed' || selectedRun.error_message"
+          type="error"
+          :closable="false"
+          show-icon
+          class="failure-alert"
+        >
+          <template #title>
+            <span style="font-weight: 600">任务执行中断或失败</span>
+          </template>
+          <div class="failure-content">
+            <div class="failure-msg">{{ selectedRun.error_message || '测试执行发生未知异常' }}</div>
+            <div
+              v-if="(selectedRun.error_message || '').includes('目标被测服务无法连接') || (selectedRun.error_message || '').includes('不可达')"
+              class="failure-tip"
+            >
+              <b>排错建议：</b>目标被测服务连通性预检失败。已启动防虚假保护中止执行。请确认被测应用是否已启动、端口映射是否正确，并在「项目管理」详情中点击「连通测试」再次验证。
+            </div>
+            <div
+              v-else-if="(selectedRun.error_message || '').includes('clone') || (selectedRun.error_message || '').includes('git')"
+              class="failure-tip"
+            >
+              <b>排错建议：</b>代码拉取失败。公开仓库请检查仓库地址；私有仓库请在「仓库配置」中配置有效的访问 Token。
+            </div>
+          </div>
+        </el-alert>
+
+        <!-- Step timeline -->
+        <div class="step-timeline-box">
+          <div class="timeline-title-row">
+            <span class="timeline-title">流水线执行阶段 ({{ isPlanMode ? '计划回归链路' : '自动化全链路' }})</span>
+            <span class="timeline-hint" v-if="detailStep || selectedRun.current_step">
+              当前状态: <b>{{ detailStep || selectedRun.current_step }}</b>
+            </span>
+          </div>
+          <el-steps :active="currentStepIndex" :process-status="stepProcessStatus" finish-status="success" align-center>
+            <el-step v-for="step in activeSteps" :key="step.key" :title="step.label" :description="step.desc" />
+          </el-steps>
+        </div>
+
+        <!-- 执行结果概览与快捷闭环出口（当任务完成或已有用例执行结果时呈现） -->
+        <div v-if="execSummary || selectedRun.status === 'completed'" class="exec-summary-card" v-loading="execSummaryLoading">
+          <div class="summary-header">
+            <div class="summary-title-group">
+              <span class="summary-title">执行统计与质量产物</span>
+              <el-tag v-if="execSummary?.report_quality_score != null" type="success" size="small" effect="dark">
+                质量评分: {{ execSummary.report_quality_score }} 分
+              </el-tag>
+            </div>
+            <div class="summary-tags">
+              <el-tag size="small" :type="execSummary?.results_failed > 0 ? 'danger' : 'success'" effect="plain">
+                用例通过率: {{ calculatePassRate(execSummary) }}%
+              </el-tag>
+            </div>
+          </div>
+          <el-row :gutter="12" class="summary-metrics">
+            <el-col :span="6">
+              <div class="metric-box">
+                <div class="m-val">{{ execSummary?.cases_total ?? (execSummary?.results_total ?? 0) }}</div>
+                <div class="m-lbl">执行用例数</div>
+              </div>
+            </el-col>
+            <el-col :span="6">
+              <div class="metric-box success">
+                <div class="m-val">{{ execSummary?.results_passed ?? 0 }}</div>
+                <div class="m-lbl">通过用例</div>
+              </div>
+            </el-col>
+            <el-col :span="6">
+              <div class="metric-box danger">
+                <div class="m-val">{{ execSummary?.results_failed ?? 0 }}</div>
+                <div class="m-lbl">失败用例</div>
+              </div>
+            </el-col>
+            <el-col :span="6">
+              <div class="metric-box warning">
+                <div class="m-val">{{ execSummary?.defect_count ?? 0 }}</div>
+                <div class="m-lbl">发现缺陷</div>
+              </div>
+            </el-col>
+          </el-row>
+          <div class="summary-actions">
+            <el-button
+              type="success"
+              :icon="Document"
+              :disabled="!execSummary?.has_report && selectedRun.status !== 'completed'"
+              @click="openReportPage(selectedRun.id)"
+            >
+              查看完整测试报告
+            </el-button>
+            <el-button
+              type="primary"
+              plain
+              :icon="Odometer"
+              @click="openCoveragePage(selectedRun.id)"
+            >
+              查看代码覆盖率
+            </el-button>
+            <el-button
+              v-if="(execSummary?.defect_count > 0 || execSummary?.results_failed > 0)"
+              type="danger"
+              plain
+              :icon="Warning"
+              @click="openDefectsPage(selectedRun.id)"
+            >
+              查看关联缺陷 ({{ execSummary.defect_count || execSummary.results_failed }})
+            </el-button>
+          </div>
+        </div>
 
         <!-- Analysis result summary -->
-        <div v-if="selectedRun.analysis_result" class="analysis-summary">
-          <el-divider content-position="left">代码解析结果</el-divider>
-          <el-descriptions :column="3" border>
+        <div v-if="selectedRun.analysis_result && !isPlanMode" class="analysis-summary">
+          <el-divider content-position="left">代码解析技术栈</el-divider>
+          <el-descriptions :column="3" border size="small">
             <el-descriptions-item label="技术栈">
               <el-tag size="small">{{ selectedRun.analysis_result.tech_stack?.stack || 'N/A' }}</el-tag>
             </el-descriptions-item>
             <el-descriptions-item label="框架">
               {{ selectedRun.analysis_result.tech_stack?.framework || 'N/A' }}
             </el-descriptions-item>
-            <el-descriptions-item label="API 数量">
-              {{ selectedRun.analysis_result.total_apis || 0 }}
+            <el-descriptions-item label="提取 API 路由">
+              {{ selectedRun.analysis_result.total_apis || 0 }} 个
             </el-descriptions-item>
           </el-descriptions>
         </div>
@@ -340,7 +469,7 @@
  * Options API 的 data() 返回类型显式，规避该 bug。
  */
 import { defineComponent } from 'vue'
-import { VideoPlay } from '@element-plus/icons-vue'
+import { VideoPlay, Document, Odometer, Warning } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { projectApi, testRunApi, planApi } from '@/api'
 
@@ -357,15 +486,24 @@ const STATUS_OPTIONS: Record<string, string> = {
   cancelled: '已取消',
 }
 
-const STEP_TIMELINE = [
-  { key: 'pending', label: '准备', desc: '任务排队' },
-  { key: 'pulling', label: '拉取代码', desc: '从仓库下载' },
-  { key: 'analyzing', label: '解析', desc: '识别技术栈' },
-  { key: 'generating', label: '生成用例', desc: 'AI 生成测试用例' },
-  { key: 'executing', label: '执行', desc: '跑测试用例' },
-  { key: 'analyzing_defects', label: '缺陷分析', desc: 'AI 分析失败' },
-  { key: 'reporting', label: '报告', desc: '生成测试报告' },
-  { key: 'completed', label: '完成', desc: '结果归档' },
+const AUTO_STEPS = [
+  { key: 'pending', label: '准备', desc: '初始化与排队' },
+  { key: 'pulling', label: '代码准备', desc: '拉取/加载源码' },
+  { key: 'analyzing', label: '代码解析', desc: '识别技术栈与API' },
+  { key: 'generating', label: '用例生成', desc: 'AI生成测试用例' },
+  { key: 'env_check', label: '环境预检', desc: '目标服务连通性' },
+  { key: 'executing', label: '用例执行', desc: '接口/性能/集成测试' },
+  { key: 'coverage', label: '覆盖率采集', desc: '探针采集与分析' },
+  { key: 'reporting', label: '报告归档', desc: '缺陷分析与报告' },
+]
+
+const PLAN_STEPS = [
+  { key: 'pending', label: '准备', desc: '初始化与排队' },
+  { key: 'loading', label: '计划加载', desc: '加载固化测试集' },
+  { key: 'env_check', label: '环境预检', desc: '目标服务连通性' },
+  { key: 'executing', label: '用例执行', desc: '接口/性能/集成测试' },
+  { key: 'coverage', label: '覆盖率采集', desc: '探针采集与分析' },
+  { key: 'reporting', label: '报告归档', desc: '缺陷分析与报告' },
 ]
 
 const STATUS_TAG: Record<string, string> = {
@@ -383,9 +521,13 @@ const STATUS_TAG: Record<string, string> = {
 
 export default defineComponent({
   name: 'TestRunView',
-  components: { VideoPlay },
+  components: { VideoPlay, Document, Odometer, Warning },
   data() {
     return {
+      Document,
+      Odometer,
+      Warning,
+
       loading: false,
       creating: false,
       plansLoading: false,
@@ -399,6 +541,9 @@ export default defineComponent({
       detailProgress: 0,
       detailStep: '',
       progressTimer: null as number | null,
+
+      execSummary: null as any,
+      execSummaryLoading: false,
 
       filterProjectId: '',
       filterMode: '' as '' | 'auto' | 'plan' | 'upload',
@@ -415,17 +560,81 @@ export default defineComponent({
       planExecsLoading: false,
 
       STATUS_OPTIONS,
-      STEP_TIMELINE,
+      AUTO_STEPS,
+      PLAN_STEPS,
     }
   },
   computed: {
     selectedPlan(): any {
       return this.plans.find((p: any) => p.id === this.selectedPlanId) || null
     },
+    isPlanMode(): boolean {
+      return Boolean(this.selectedRun?.plan_id)
+    },
+    activeSteps(): Array<{ key: string; label: string; desc: string }> {
+      return this.isPlanMode ? PLAN_STEPS : AUTO_STEPS
+    },
+    stepProcessStatus(): 'wait' | 'process' | 'finish' | 'error' | 'success' {
+      const status = this.selectedRun?.status
+      if (status === 'failed') return 'error'
+      if (status === 'completed') return 'success'
+      return 'process'
+    },
     currentStepIndex(): number {
-      const step = this.detailStep || this.selectedRun?.current_step || this.selectedRun?.status || 'pending'
-      const idx = this.STEP_TIMELINE.findIndex((s) => s.key === step)
-      return idx === -1 ? 0 : idx
+      const run = this.selectedRun
+      if (!run) return 0
+      const status = run.status || ''
+      const stepText = (this.detailStep || run.current_step || status || '').toLowerCase()
+      const isPlan = this.isPlanMode
+
+      // 1. 已完成状态：直接指向最后一步全部成功
+      if (status === 'completed') {
+        return isPlan ? PLAN_STEPS.length : AUTO_STEPS.length
+      }
+
+      // 2. 根据步骤文字关键字映射
+      if (isPlan) {
+        if (stepText.includes('报告') || stepText.includes('完成') || stepText.includes('report') || stepText.includes('done')) {
+          return 5
+        }
+        if (stepText.includes('覆盖率') || stepText.includes('coverage') || stepText.includes('jacoco')) {
+          return 4
+        }
+        if (stepText.includes('执行') || stepText.includes('execut') || stepText.includes('测试') || (stepText.includes('用例') && !stepText.includes('加载'))) {
+          return 3
+        }
+        if (stepText.includes('环境') || stepText.includes('连通') || stepText.includes('env') || stepText.includes('probe') || stepText.includes('不可达')) {
+          return 2
+        }
+        if (stepText.includes('计划') || stepText.includes('加载') || stepText.includes('loading') || stepText.includes('load')) {
+          return 1
+        }
+        return 0
+      } else {
+        // Auto 模式
+        if (stepText.includes('报告') || stepText.includes('完成') || stepText.includes('report') || stepText.includes('done')) {
+          return 7
+        }
+        if (stepText.includes('覆盖率') || stepText.includes('coverage') || stepText.includes('jacoco')) {
+          return 6
+        }
+        if (stepText.includes('执行') || stepText.includes('execut') || stepText.includes('跑') || (stepText.includes('测试') && !stepText.includes('生成'))) {
+          return 5
+        }
+        if (stepText.includes('环境') || stepText.includes('连通') || stepText.includes('env') || stepText.includes('probe') || stepText.includes('不可达')) {
+          return 4
+        }
+        if (stepText.includes('生成') || stepText.includes('入库') || stepText.includes('generat')) {
+          return 3
+        }
+        if (stepText.includes('解析') || stepText.includes('analyz') || stepText.includes('识别')) {
+          return 2
+        }
+        if (stepText.includes('拉取') || stepText.includes('pull') || stepText.includes('clone') || stepText.includes('git') || stepText.includes('svn') || stepText.includes('上传')) {
+          return 1
+        }
+        return 0
+      }
     },
   },
   methods: {
@@ -501,21 +710,96 @@ export default defineComponent({
         if (data) {
           this.detailProgress = data.progress || 0
           this.detailStep = data.step || ''
+          if (data.status && this.selectedRun) {
+            this.selectedRun.status = data.status
+            if (['completed', 'failed', 'cancelled'].includes(data.status)) {
+              this.fetchRunDetail(runId)
+              this.loadExecSummary(runId)
+            }
+          }
         }
       } catch {
         /* polling 错误忽略 */
       }
     },
 
-    handleRowClick(row: any): void {
+    async handleRowClick(row: any): Promise<void> {
       this.selectedRun = row
       this.detailProgress = row.progress || 0
-      this.detailStep = ''
+      this.detailStep = row.current_step || ''
       this.detailVisible = true
+      this.execSummary = null
+
+      this.fetchRunDetail(row.id)
+      this.loadExecSummary(row.id)
+
       if (!['completed', 'failed', 'cancelled'].includes(row.status)) {
         this.updateDetailProgress(row.id)
         this.schedulePoll()
       }
+    },
+
+    async fetchRunDetail(runId: string): Promise<void> {
+      try {
+        const res: any = await testRunApi.get(runId)
+        if (res?.data) {
+          this.selectedRun = res.data
+          if (res.data.current_step) this.detailStep = res.data.current_step
+          if (res.data.progress != null) this.detailProgress = res.data.progress
+        }
+      } catch {
+        /* 忽略 */
+      }
+    },
+
+    async loadExecSummary(runId: string): Promise<void> {
+      this.execSummaryLoading = true
+      try {
+        const res: any = await testRunApi.getExecSummary(runId)
+        this.execSummary = res?.data || null
+      } catch {
+        this.execSummary = null
+      } finally {
+        this.execSummaryLoading = false
+      }
+    },
+
+    openReportPage(runId?: string): void {
+      const id = runId || this.selectedRun?.id
+      if (!id) return
+      this.$router.push({ path: '/report', query: { id } })
+    },
+
+    openCoveragePage(runId?: string): void {
+      const id = runId || this.selectedRun?.id
+      this.$router.push({ path: '/coverage', query: id ? { test_run_id: id } : {} })
+    },
+
+    openDefectsPage(runId?: string): void {
+      const id = runId || this.selectedRun?.id
+      this.$router.push({ path: '/defects', query: id ? { test_run_id: id } : {} })
+    },
+
+    calculatePassRate(summary: any): number {
+      if (!summary) return 0
+      const total = summary.cases_total || summary.results_total || 0
+      if (!total) return 0
+      const passed = summary.results_passed || 0
+      return Math.round((passed / total) * 100)
+    },
+
+    formatDuration(start?: string, end?: string): string {
+      if (!start) return '—'
+      const startTime = new Date(start).getTime()
+      const endTime = end ? new Date(end).getTime() : Date.now()
+      if (isNaN(startTime) || isNaN(endTime)) return '—'
+      const diffSec = Math.max(0, Math.floor((endTime - startTime) / 1000))
+      if (diffSec < 60) return `${diffSec} 秒`
+      const min = Math.floor(diffSec / 60)
+      const sec = diffSec % 60
+      if (min < 60) return `${min} 分 ${sec} 秒`
+      const hours = Math.floor(min / 60)
+      return `${hours} 小时 ${min % 60} 分`
     },
 
     // ============ R2：计划管理抽屉 ============
@@ -626,10 +910,24 @@ export default defineComponent({
           payload.target_service_url = this.planTargetUrl.trim()
         }
         const res: any = await planApi.execute(this.selectedPlanId, payload)
-        ElMessage.success('测试计划已启动，可在列表中查看实时进度')
+        const runId = res?.data?.test_run_id
+        ElMessage.success('测试计划已启动，正在实时跟踪流水线执行...')
         this.selectedPlanId = ''
         this.planTargetUrl = ''
-        this.loadTestRuns()
+        await this.loadTestRuns()
+        if (runId) {
+          const run = this.testRuns.find((r) => r.id === runId)
+          if (run) {
+            this.handleRowClick(run)
+          } else {
+            this.selectedRun = { id: runId, plan_id: true, status: 'pulling', progress: 0, current_step: '加载计划用例' }
+            this.detailVisible = true
+            this.fetchRunDetail(runId)
+            this.loadExecSummary(runId)
+            this.updateDetailProgress(runId)
+            this.schedulePoll()
+          }
+        }
       } catch {
         /* axios 拦截器已处理 */
       } finally {
@@ -671,7 +969,17 @@ export default defineComponent({
   },
   mounted() {
     this.loadProjects()
+    this.loadPlans()
     this.loadTestRuns()
+
+    const runId = (this.$route.query.run_id || this.$route.query.id) as string
+    if (runId) {
+      this.detailVisible = true
+      this.fetchRunDetail(runId)
+      this.loadExecSummary(runId)
+      this.updateDetailProgress(runId)
+      this.schedulePoll()
+    }
   },
   beforeUnmount() {
     if (this.progressTimer) {
@@ -766,5 +1074,122 @@ export default defineComponent({
   margin-top: 8px;
   color: #67c23a;
   font-size: 13px;
+}
+
+.failure-alert {
+  margin-top: 4px;
+}
+.failure-content {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+.failure-msg {
+  color: #f56c6c;
+  word-break: break-all;
+}
+.failure-tip {
+  color: #606266;
+  background: #fef0f0;
+  padding: 8px 12px;
+  border-radius: 4px;
+  line-height: 1.5;
+}
+
+.step-timeline-box {
+  background: #fafafa;
+  border: 1px solid #ebeef5;
+  border-radius: 8px;
+  padding: 16px 20px 20px;
+}
+.timeline-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+.timeline-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: #303133;
+}
+.timeline-hint {
+  font-size: 13px;
+  color: #606266;
+}
+.timeline-hint b {
+  color: #409eff;
+}
+
+.exec-summary-card {
+  background: #fdfdfd;
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.summary-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.summary-title-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.summary-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: #303133;
+}
+.summary-metrics {
+  margin: 0 !important;
+}
+.metric-box {
+  background: #f4f4f5;
+  border-radius: 6px;
+  padding: 12px;
+  text-align: center;
+  transition: all 0.2s ease;
+}
+.metric-box .m-val {
+  font-size: 22px;
+  font-weight: 700;
+  color: #303133;
+  line-height: 1.2;
+}
+.metric-box .m-lbl {
+  font-size: 12px;
+  color: #909399;
+  margin-top: 4px;
+}
+.metric-box.success {
+  background: #f0f9eb;
+}
+.metric-box.success .m-val {
+  color: #67c23a;
+}
+.metric-box.danger {
+  background: #fef0f0;
+}
+.metric-box.danger .m-val {
+  color: #f56c6c;
+}
+.metric-box.warning {
+  background: #fdf6ec;
+}
+.metric-box.warning .m-val {
+  color: #e6a23c;
+}
+.summary-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-start;
+  padding-top: 4px;
+  border-top: 1px dashed #ebeef5;
 }
 </style>

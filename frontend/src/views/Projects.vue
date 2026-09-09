@@ -666,16 +666,22 @@ export default defineComponent({
       if (!this.current) return
       this.executing = true
       try {
-        await testRunApi.create({
+        const res: any = await testRunApi.create({
           mode: 'auto',
           source_type: this.runDialogForm.sourceType || 'upload',
           project_id: this.current.id,
           code_version_id: this.runDialogForm.versionId,
           target_service_url: this.runDialogForm.targetUrl?.trim() || undefined,
         })
-        ElMessage.success('测试任务已启动，可在「测试任务」页查看实时执行与真实环境结果')
+        const runId = res?.data?.test_run_id || res?.data?.id || res?.test_run_id
+        ElMessage.success('测试任务已启动，正在跳转至任务详情跟踪实时流水线...')
         this.runDialogVisible = false
         this.detailVisible = false
+        if (runId) {
+          this.$router.push({ path: '/test-run', query: { run_id: runId } })
+        } else {
+          this.$router.push('/test-run')
+        }
       } catch {
         /* 拦截器已提示 */
       } finally {

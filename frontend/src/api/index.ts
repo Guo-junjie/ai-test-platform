@@ -106,6 +106,7 @@ export const testRunApi = {
   create: (data: any) => api.post('/test-runs', data),
   get: (id: string) => api.get(`/test-runs/${id}`),
   getProgress: (id: string) => api.get(`/test-runs/${id}/progress`),
+  getExecSummary: (id: string) => api.get(`/test-runs/${id}/exec-summary`),
   cancel: (id: string) => api.post(`/test-runs/${id}/cancel`),
 }
 
