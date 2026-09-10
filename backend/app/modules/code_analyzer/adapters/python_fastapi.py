@@ -72,6 +72,26 @@ class PythonFastAPIAdapter(APIExtractorAdapter):
 
         logger.info(f"PythonFastAPI adapter: scanning {len(source_files)} source files")
 
+        # 预扫描：收集 include_router 挂载前缀映射（如 app.include_router(todo.router, prefix="/todos")）
+        router_prefixes: dict[str, str] = {}
+        for file_path in source_files:
+            try:
+                c = file_path.read_text(encoding="utf-8", errors="ignore")
+                for m in re.finditer(
+                    r'(?:app|router)\.include_router\(\s*([a-zA-Z0-9_.]+)[^)]*?\bprefix\s*=\s*["\']([^"\']+)["\']',
+                    c,
+                ):
+                    raw_var = m.group(1)
+                    if "." in raw_var and raw_var.endswith(".router"):
+                        var_name = raw_var.split(".")[-2]
+                    else:
+                        var_name = raw_var.split(".")[0]
+                    p = m.group(2).strip().rstrip("/")
+                    if p:
+                        router_prefixes[var_name] = p
+            except Exception:
+                pass
+
         for file_path in source_files:
             try:
                 content = file_path.read_text(encoding="utf-8", errors="ignore")
@@ -82,14 +102,18 @@ class PythonFastAPIAdapter(APIExtractorAdapter):
             if "@app." not in content and "@router." not in content:
                 continue
 
-            file_apis = self._extract_from_file(content, file_path, root)
+            file_apis = self._extract_from_file(content, file_path, root, router_prefixes)
             apis.extend(file_apis)
 
         logger.info(f"PythonFastAPI adapter: extracted {len(apis)} APIs")
         return apis
 
     def _extract_from_file(
-        self, content: str, file_path: Path, root: Path
+        self,
+        content: str,
+        file_path: Path,
+        root: Path,
+        router_prefixes: dict[str, str] | None = None,
     ) -> list[dict[str, Any]]:
         """
         从单个 Python 文件中提取 FastAPI 路由。
@@ -98,6 +122,7 @@ class PythonFastAPIAdapter(APIExtractorAdapter):
             content: 文件内容。
             file_path: 文件路径。
             root: 项目根目录。
+            router_prefixes: include_router 前缀映射表。
 
         Returns:
             接口定义列表。
@@ -105,10 +130,32 @@ class PythonFastAPIAdapter(APIExtractorAdapter):
         apis: list[dict[str, Any]] = []
         rel_path = str(file_path.relative_to(root))
 
+        # 1. 优先解析本文件 APIRouter(prefix="/...")
+        file_prefix = ""
+        apirouter_match = re.search(r'APIRouter\([^)]*?\bprefix\s*=\s*["\']([^"\']+)["\']', content)
+        if apirouter_match:
+            file_prefix = apirouter_match.group(1).strip().rstrip("/")
+
+        # 2. 若文件内未显式定义 prefix，则从全局 include_router 映射表匹配模块名/文件名
+        if not file_prefix and router_prefixes:
+            stem = file_path.stem
+            if stem in router_prefixes:
+                file_prefix = router_prefixes[stem]
+
         for match in _RE_ROUTE_DECORATOR.finditer(content):
             http_method = match.group(1).upper()
             route_path = match.group(2)
             line_number = content[: match.start()].count("\n") + 1
+
+            # 拼接路由前缀
+            normalized_sub = route_path if route_path.startswith("/") else "/" + route_path
+            if file_prefix:
+                if normalized_sub == "/":
+                    final_path = file_prefix + "/"
+                else:
+                    final_path = file_prefix + normalized_sub
+            else:
+                final_path = normalized_sub
 
             # 查找紧随装饰器之后的函数定义
             func_name = "unknown"
@@ -135,7 +182,7 @@ class PythonFastAPIAdapter(APIExtractorAdapter):
 
             apis.append(
                 {
-                    "path": route_path if route_path.startswith("/") else "/" + route_path,
+                    "path": final_path,
                     "http_method": http_method,
                     "params": params,
                     "return_type": return_type,
