@@ -276,25 +276,41 @@ class TestCaseGenerator:
     ) -> dict[str, Any]:
         """将 AI 生成的用例数据标准化。"""
         case_type = case_data.get("case_type", "positive")
+        raw_req = case_data.get("request", {})
+        if not isinstance(raw_req, dict):
+            raw_req = {}
+        headers = raw_req.get("headers")
+        if not isinstance(headers, dict):
+            headers = {}
+        params = raw_req.get("params")
+        if not isinstance(params, dict):
+            params = {}
+        body = raw_req.get("body")
+        if not isinstance(body, (dict, list, str)):
+            body = {}
+        raw_exp = case_data.get("expected", {})
+        if not isinstance(raw_exp, dict):
+            raw_exp = {}
+
         return {
             "case_id": f"case_{uuid.uuid4().hex[:8]}",
             "case_type": case_type,
             "case_name": case_data.get("case_name", f"{case_type}_case"),
             "description": case_data.get("description", ""),
             "request": {
-                "method": case_data.get("request", {}).get(
+                "method": raw_req.get(
                     "method", api_info.get("http_method", "GET")
                 ),
-                "url": case_data.get("request", {}).get(
+                "url": raw_req.get(
                     "url", api_info.get("path", "/")
                 ),
-                "headers": case_data.get("request", {}).get("headers", {}),
-                "body": case_data.get("request", {}).get("body", {}),
-                "params": case_data.get("request", {}).get("params", {}),
+                "headers": headers,
+                "body": body,
+                "params": params,
             },
             "expected": {
-                "status_code": case_data.get("expected", {}).get("status_code", 200),
-                "assertions": case_data.get("expected", {}).get("assertions", []),
+                "status_code": raw_exp.get("status_code", 200),
+                "assertions": raw_exp.get("assertions", []),
             },
             "priority": self._infer_priority(case_type),
         }

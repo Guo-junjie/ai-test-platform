@@ -81,37 +81,54 @@ class APITester:
     ) -> dict[str, Any]:
         """执行单个测试用例。"""
         async with semaphore:
-            case_id = case.get("case_id", str(uuid.uuid4()))
-            case_name = case.get("case_name", "unknown")
-            request_data = case.get("request", {})
-            expected = case.get("expected", {})
-
-            # 变量替换
-            method = self._replace_variables(
-                request_data.get("method", "GET"), context
-            )
-            url = self._replace_variables(
-                request_data.get("url", "/"), context
-            )
-            headers = self._replace_variables_in_dict(
-                request_data.get("headers", {}), context
-            )
-            body = self._replace_variables_in_dict(
-                request_data.get("body", {}), context
-            )
-            params = self._replace_variables_in_dict(
-                request_data.get("params", {}), context
-            )
-
+            case_id = case.get("case_id", str(uuid.uuid4())) if isinstance(case, dict) else str(uuid.uuid4())
+            case_name = case.get("case_name", "unknown") if isinstance(case, dict) else "unknown"
             start_time = time.time()
+
             try:
-                response = await client.request(
-                    method=method.upper(),
-                    url=url,
-                    headers=headers,
-                    json=body if body else None,
-                    params=params if params else None,
+                request_data = case.get("request", {}) if isinstance(case, dict) else {}
+                if not isinstance(request_data, dict):
+                    request_data = {}
+                expected = case.get("expected", {}) if isinstance(case, dict) else {}
+                if not isinstance(expected, dict):
+                    expected = {}
+
+                # 变量替换
+                method = self._replace_variables(
+                    request_data.get("method", "GET"), context
                 )
+                url = self._replace_variables(
+                    request_data.get("url", "/"), context
+                )
+                raw_headers = request_data.get("headers")
+                headers = self._replace_variables_in_dict(raw_headers, context) if isinstance(raw_headers, dict) else {}
+
+                raw_params = request_data.get("params")
+                params = self._replace_variables_in_dict(raw_params, context) if isinstance(raw_params, dict) else {}
+
+                raw_body = request_data.get("body")
+                if isinstance(raw_body, dict):
+                    body = self._replace_variables_in_dict(raw_body, context)
+                elif isinstance(raw_body, str):
+                    body = self._replace_variables(raw_body, context)
+                else:
+                    body = raw_body
+
+                req_kwargs: dict[str, Any] = {
+                    "method": str(method or "GET").upper(),
+                    "url": str(url or "/"),
+                }
+                if headers:
+                    req_kwargs["headers"] = headers
+                if params:
+                    req_kwargs["params"] = params
+                if body is not None and body != {}:
+                    if isinstance(body, (dict, list)):
+                        req_kwargs["json"] = body
+                    else:
+                        req_kwargs["content"] = str(body)
+
+                response = await client.request(**req_kwargs)
                 response_time_ms = (time.time() - start_time) * 1000
 
                 # 解析响应体
@@ -176,9 +193,11 @@ class APITester:
         return text
 
     def _replace_variables_in_dict(
-        self, data: dict[str, Any], context: dict[str, str]
+        self, data: Any, context: dict[str, str]
     ) -> dict[str, Any]:
         """递归替换字典中的变量占位符。"""
+        if not isinstance(data, dict):
+            return {}
         result: dict[str, Any] = {}
         for key, value in data.items():
             if isinstance(value, str):
