@@ -344,6 +344,10 @@ def _probe_service_url(url: str, timeout: float = 5.0) -> tuple[bool, str, str]:
         candidates.append(target.replace("://localhost", "://host.docker.internal", 1))
     elif "://127.0.0.1" in target:
         candidates.append(target.replace("://127.0.0.1", "://host.docker.internal", 1))
+    import re
+    ip_match = re.search(r"://(\d+\.\d+\.\d+\.\d+)(:\d+)?", target)
+    if ip_match and "://host.docker.internal" not in target:
+        candidates.append(target.replace(f"://{ip_match.group(1)}", "://host.docker.internal", 1))
 
     last_err = ""
     for cand in candidates:
