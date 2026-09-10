@@ -428,8 +428,8 @@ class TestCaseGenerator:
     ) -> list[dict[str, Any]]:
         """从正向用例中选取性能测试用例。"""
         positive_cases = [c for c in all_api_cases if c.get("case_type") == "positive"]
-        # 最多取 5 个性能测试用例
-        selected = positive_cases[:5]
+        # 取 2 个性能测试用例进行冒烟压测（避免单次流水线耗时过长）
+        selected = positive_cases[:2]
         perf_cases: list[dict[str, Any]] = []
         for case in selected:
             perf_case = case.copy()
@@ -438,8 +438,8 @@ class TestCaseGenerator:
             perf_case["case_name"] = f"[性能] {case.get('case_name', '')}"
             perf_case["description"] = f"性能压测: {case.get('request', {}).get('method', '')} {case.get('request', {}).get('url', '')}"
             perf_case["load_config"] = {
-                "concurrent_users": [10, 50, 100, 200],
-                "duration_seconds": 30,
+                "concurrent_users": [10, 50],
+                "duration_seconds": 5,
             }
             perf_cases.append(perf_case)
         return perf_cases
