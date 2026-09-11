@@ -164,6 +164,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import api, { projectApi } from '@/api'
 import { useAuthStore } from '@/stores'
 
+const route = useRoute()
+
 const SEVERITY: Record<string, string> = { P0: '致命', P1: '严重', P2: '一般', P3: '轻微' }
 const STATUS: Record<string, string> = { open: '待处理', in_fix: '修复中', verified: '已验证', closed: '已关闭', rejected: '已驳回' }
 const TYPES: Record<string, string> = {
@@ -314,22 +316,28 @@ async function remove(row: any) {
   } catch { /* */ }
 }
 
-onMounted(() => {
-  // R2：支持从报告页跳转 ?test_run_id=xxx 直达按任务过滤
-  const route = useRoute()
+function syncFiltersFromRoute() {
   const rid = (route.query.test_run_id as string) || ''
-  if (rid) filters.test_run_id = rid
+  filters.test_run_id = rid
+  const pid = (route.query.project_id as string) || ''
+  if (pid) filters.project_id = pid
+  const sev = (route.query.severity as string) || ''
+  if (sev) filters.severity = sev
+}
+
+onMounted(() => {
+  syncFiltersFromRoute()
   void loadProjects()
   void load()
-
-  watch(
-    () => route.query.test_run_id,
-    (newRid) => {
-      filters.test_run_id = (newRid as string) || ''
-      reload()
-    }
-  )
 })
+
+watch(
+  () => [route.fullPath, route.query.test_run_id, route.query.project_id],
+  () => {
+    syncFiltersFromRoute()
+    reload()
+  }
+)
 </script>
 
 <style scoped>

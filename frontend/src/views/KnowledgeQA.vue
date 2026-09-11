@@ -252,10 +252,15 @@ async function handleAsk(): Promise<void> {
       sourcesExpanded: false,
     })
     scrollToBottom()
-  } catch {
+  } catch (err: any) {
+    const errorMsg =
+      err?.response?.data?.detail ||
+      err?.response?.data?.message ||
+      err?.message ||
+      '抱歉，本次回答失败，请稍后重试。'
     messages.value.push({
       role: 'assistant',
-      content: '抱歉，本次回答失败，请稍后重试。',
+      content: `抱歉，本次回答失败：${errorMsg}`,
       sources: [],
     })
   } finally {

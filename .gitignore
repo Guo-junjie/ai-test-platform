@@ -7,3 +7,4 @@ dist_bak_*/
 .idea/
 .vscode/
 .DS_Store
+.ssh_*.py

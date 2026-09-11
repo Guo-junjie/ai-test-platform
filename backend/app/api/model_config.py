@@ -408,7 +408,7 @@ async def test_model_connection(
         raise HTTPException(400, "api_base_url 未配置")
 
     provider = config.provider.value if config.provider else "custom"
-    if provider == "anthropic":
+    if provider == "anthropic" or "/anthropic" in base_url.lower():
         probe_url = f"{base_url}/v1/models" if not base_url.endswith("/v1") else f"{base_url}/models"
         headers = {
             "x-api-key": api_key,

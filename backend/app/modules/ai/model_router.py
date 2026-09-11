@@ -92,14 +92,21 @@ class ModelRouter:
     ) -> str:
         """统一调用入口 — 自动路由到对应模型"""
         client = self.get_client(use_case)
+        current_config_id = client.config.config_id
         try:
             return await client.chat(messages, **kwargs)
         except Exception as e:
             logger.error(f"Model call failed for {use_case}: {e}")
-            # 切换到备用模型重试
-            fallback_config = self.configs.get(self.routing.fallback_model_id)
-            if fallback_config and fallback_config.is_active:
-                logger.info(f"Retrying with fallback model: {fallback_config.name}")
+            # 切换到备用模型重试（避免回退到刚刚失败的同一模型）
+            fallback_id = getattr(self.routing, "fallback_model_id", None) if self.routing else None
+            if fallback_id == current_config_id:
+                fallback_id = next(
+                    (cid for cid, c in self.configs.items() if c.is_active and cid != current_config_id),
+                    None
+                )
+            if fallback_id and fallback_id in self.configs and self.configs[fallback_id].is_active:
+                fallback_config = self.configs[fallback_id]
+                logger.info(f"Retrying with fallback model: {fallback_config.name} ({fallback_config.model_name})")
                 fallback_client = UnifiedModelClient(fallback_config)
                 return await fallback_client.chat(messages, **kwargs)
             raise
@@ -175,12 +182,19 @@ async def refresh_model_router_from_db(db) -> None:
             )
         )
     else:
-        # 无路由记录：若有启用模型，全部路由到第一个启用模型，保证「配一个即用」
+        # 无路由记录：按优先级选择主模型（优先 is_default，其次第一个 active）
+        default_model = next((c.id for c in rows if c.is_active and c.is_default), None)
         first_active = next((c.id for c in rows if c.is_active), None)
-        if first_active:
-            router.set_routing(
-                ModelRoutingConfig(**{f: first_active for f in routing_fields})
-            )
+        main_model_id = default_model or first_active
+
+        fallback_model = next((c.id for c in rows if c.is_active and c.is_fallback), None)
+        other_active = next((c.id for c in rows if c.is_active and c.id != main_model_id), None)
+        fallback_model_id = fallback_model or other_active or main_model_id
+
+        if main_model_id:
+            routing_dict = {f: main_model_id for f in routing_fields}
+            routing_dict["fallback_model_id"] = fallback_model_id
+            router.set_routing(ModelRoutingConfig(**routing_dict))
 
     logger.info(
         f"Model router refreshed from DB: {len(router.configs)} config(s), "

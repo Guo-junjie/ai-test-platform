@@ -43,6 +43,9 @@ class UnifiedModelClient:
         max_tok = max_tokens or self.config.max_tokens
 
         if self.config.provider == ModelProvider.OPENAI:
+            # 容错：如果用户配置为 OPENAI 但 API URL 为 anthropic 端点（如 /anthropic），自动走 anthropic 调用
+            if "/anthropic" in (self.config.api_base_url or "").lower():
+                return await self._call_anthropic(messages, temp, max_tok)
             return await self._call_openai(messages, temp, max_tok, response_format_json)
         elif self.config.provider == ModelProvider.ANTHROPIC:
             return await self._call_anthropic(messages, temp, max_tok)
@@ -145,7 +148,7 @@ class UnifiedModelClient:
             return data["choices"][0]["message"]["content"]
 
     async def _call_anthropic(self, messages: list[dict], temp: float, max_tok: int) -> str:
-        """调用 Anthropic Claude API"""
+        """调用 Anthropic Claude API（兼容 MiniMax / Claude 3.7+ 的 thinking block 格式）"""
         system_msg = ""
         user_messages = []
         for msg in messages:
@@ -156,13 +159,15 @@ class UnifiedModelClient:
 
         headers = {
             "x-api-key": self.config.api_key,
-            "anthropic-version": "2023-06-01",
+            "anthropic-version": self.config.api_version or "2023-06-01",
             "Content-Type": "application/json",
         }
+        # MiniMax 等模型的 thinking 模式会占用 output tokens，确保给模型足够 token 生成最终 text
+        effective_max_tokens = max(max_tok, 1024)
         payload = {
             "model": self.config.model_name,
             "messages": user_messages,
-            "max_tokens": max_tok,
+            "max_tokens": effective_max_tokens,
             "temperature": temp,
         }
         if system_msg:
@@ -173,7 +178,26 @@ class UnifiedModelClient:
             response = await client.post(url, json=payload, headers=headers)
             response.raise_for_status()
             data = response.json()
-            return data["content"][0]["text"]
+            content_list = data.get("content", [])
+            # 优先提取 text 类型块
+            texts = [
+                item.get("text", "")
+                for item in content_list
+                if isinstance(item, dict) and (item.get("type") == "text" or "text" in item)
+            ]
+            if texts:
+                return "".join(texts).strip()
+            # 兜底：若仅有 thinking 块
+            thinking_texts = [
+                item.get("thinking", "")
+                for item in content_list
+                if isinstance(item, dict) and (item.get("type") == "thinking" or "thinking" in item)
+            ]
+            if thinking_texts:
+                return "".join(thinking_texts).strip()
+            if isinstance(data.get("content"), str):
+                return data["content"].strip()
+            return ""
 
     async def _call_custom_api(self, messages: list[dict], temp: float, max_tok: int) -> str:
         """调用自定义 HTTP API（非 OpenAI 兼容格式）"""

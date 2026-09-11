@@ -235,6 +235,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Files } from '@element-plus/icons-vue'
 import { caseApi, planApi, projectApi } from '@/api'
 
+const route = useRoute()
 const projects = ref<any[]>([])
 const projectId = ref<string>('')
 
@@ -575,7 +576,6 @@ async function saveEdit() {
 onMounted(async () => {
   await loadProjects()
   // 支持从接口文档解析/评审页跳转：?project_id= 直达该项目
-  const route = useRoute()
   const pid = (route.query.project_id as string) || ''
   if (pid && projects.value.some((p: any) => p.id === pid)) {
     projectId.value = pid

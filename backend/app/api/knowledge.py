@@ -831,11 +831,32 @@ async def ask_knowledge_qa(
     零命中直接礼貌拒答（不调 LLM）；命中但未配置对话模型时抛 409 引导配置。
     """
     from app.modules.knowledge.qa import ask_knowledge
+    from app.modules.ai.model_router import ModelNotConfiguredError
 
-    result = await ask_knowledge(
-        db, req.question, project_id=req.project_id, top_k=req.top_k
-    )
-    return {"code": 0, "data": result, "message": "success"}
+    try:
+        result = await ask_knowledge(
+            db, req.question, project_id=req.project_id, top_k=req.top_k
+        )
+        return {"code": 0, "data": result, "message": "success"}
+    except ModelNotConfiguredError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        )
+    except Exception as exc:
+        err_msg = str(exc)
+        if "Insufficient Balance" in err_msg or "402" in err_msg:
+            detail = "AI 模型调用失败：账户余额不足 (Insufficient Balance)，请在「AI 模型配置」中充值 API 账户或切换模型。"
+        elif "401" in err_msg or "Authentication" in err_msg or "Invalid API Key" in err_msg:
+            detail = "AI 模型调用失败：API Key 无效或未授权 (401)，请在「AI 模型配置」中检查 API Key。"
+        elif "429" in err_msg or "RateLimit" in err_msg:
+            detail = "AI 模型调用失败：请求触发速率限制 (429 Rate Limit)，请稍后再试。"
+        elif "404" in err_msg:
+            detail = f"AI 模型调用失败：接口路径或模型不存在 (404)，请检查模型配置中的 API 地址与模型名称。"
+        else:
+            detail = f"AI 模型问答失败: {err_msg}"
+        logger.error(f"[KB QA] ask_knowledge failed: {detail}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=detail)
 
 
 @router.post("/feedback")

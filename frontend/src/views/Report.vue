@@ -212,7 +212,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Search, View, Download, Share, Delete, ArrowDown, Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -221,6 +221,7 @@ import { useAuthStore } from '@/stores'
 
 // R2：关联数据跳转（缺陷 / 覆盖率按本任务过滤）
 const router = useRouter()
+const route = useRoute()
 
 // ==================== State ====================
 
@@ -487,12 +488,14 @@ function formatTime(time: string): string {
 
 // ==================== Lifecycle ====================
 
-onMounted(async () => {
+async function handleRouteParams() {
+  const idFromQuery = (route.query.id as string) || (route.query.run_id as string) || (route.query.test_run_id as string) || (route.params.id as string) || ''
+  const projFromQuery = (route.query.project_id as string) || ''
+  if (projFromQuery) {
+    filterProjectId.value = projFromQuery
+  }
   await loadReports()
   void loadProjects()
-  // 支持「从仪表盘点击'查看缺陷'跳到 /report/:id」直达打开 viewer
-  const route = useRoute()
-  const idFromQuery = (route.query.id as string) || (route.params.id as string) || ''
   if (idFromQuery) {
     const target = reports.value.find(
       (r) => r.test_run_id === idFromQuery || r.id === idFromQuery
@@ -500,12 +503,22 @@ onMounted(async () => {
     if (target) {
       viewReport(target)
     } else {
-      // 列表里没找到（也许还没生成）—— 仍尝试拿一下报告
       ElMessage.info('正在尝试打开该测试报告...')
       viewReport({ test_run_id: idFromQuery })
     }
   }
+}
+
+onMounted(() => {
+  void handleRouteParams()
 })
+
+watch(
+  () => [route.fullPath, route.params.id, route.query.id, route.query.run_id, route.query.test_run_id, route.query.project_id],
+  () => {
+    void handleRouteParams()
+  }
+)
 </script>
 
 <style scoped>

@@ -414,6 +414,8 @@ import { coverageApi, projectApi, projectConfigApi } from '@/api'
 import { useAuthStore } from '@/stores'
 import TrendChart from '@/components/TrendChart.vue'
 
+const route = useRoute()
+
 // ====== 状态 ======
 const projects = ref<any[]>([])
 const projectId = ref<string>('')
@@ -823,8 +825,7 @@ watch(projectId, (val) => {
   }
 })
 
-onMounted(async () => {
-  const route = useRoute()
+async function initCoverageFromRoute() {
   await loadProjects()
   const pid = (route.query.project_id as string) || ''
   const rid = (route.query.test_run_id as string) || ''
@@ -838,7 +839,18 @@ onMounted(async () => {
     projectId.value = projects.value[0].id
     await onProjectChange()
   }
+}
+
+onMounted(async () => {
+  await initCoverageFromRoute()
 })
+
+watch(
+  () => [route.query.project_id, route.query.test_run_id],
+  async () => {
+    await initCoverageFromRoute()
+  }
+)
 </script>
 
 <style scoped>

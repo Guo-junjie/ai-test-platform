@@ -31,6 +31,10 @@ const routes = [
     meta: { title: '测试运行' },
   },
   {
+    path: '/test-runs',
+    redirect: '/test-run',
+  },
+  {
     path: '/defects',
     name: 'Defects',
     component: () => import('@/views/Defects.vue'),
@@ -43,10 +47,18 @@ const routes = [
     meta: { title: '测试报告' },
   },
   {
+    path: '/reports',
+    redirect: '/report',
+  },
+  {
     path: '/report/:id',
     name: 'Report',
     component: () => import('@/views/Report.vue'),
     meta: { title: '测试报告' },
+  },
+  {
+    path: '/reports/:id',
+    redirect: (to: any) => `/report/${to.params.id}`,
   },
   {
     path: '/sources',
