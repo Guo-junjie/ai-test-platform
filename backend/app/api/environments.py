@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import (
@@ -417,6 +417,12 @@ async def delete_environment(
     ).scalar() or 0
     if used:
         raise HTTPException(409, f"该环境已被 {used} 次测试运行引用，不能删除（可归档）")
+    # 先提交删除修订版子行（FK 引用 profile），再删档案本身；
+    # 无 relationship 时 unit-of-work 不保证删除顺序，分两个事务最稳
+    await db.execute(
+        delete(EnvironmentProfileRevision).where(EnvironmentProfileRevision.profile_id == profile.id)
+    )
+    await db.commit()
     await db.delete(profile)
     await db.commit()
     return {"code": 0, "data": None, "message": "deleted"}
