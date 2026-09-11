@@ -371,12 +371,14 @@ async def publish_environment(
     db.add(revision)
     await db.flush()
 
-    # 旧 published revision 置为 superseded
+    # 旧 published revision 置为 superseded（排除刚创建的当前版，
+    # 否则 autoflush 会把它一起查出来覆盖掉发布状态）
     old_revs = (
         await db.execute(
             select(EnvironmentProfileRevision).where(
                 EnvironmentProfileRevision.profile_id == profile.id,
                 EnvironmentProfileRevision.status == "published",
+                EnvironmentProfileRevision.id != revision.id,
             )
         )
     ).scalars().all()
