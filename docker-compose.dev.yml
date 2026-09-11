@@ -1,0 +1,20 @@
+version: "3.8"
+
+# =============================================================================
+# 开发 / 单机演示叠加层 —— 仅在可信环境使用
+#
+# 用法：
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+#
+# 与生产基线的差异：
+# 1. celery-worker 挂载宿主 Docker socket —— 支撑流水线「启动被测服务」
+#    与「自动覆盖率采集」（探针注入需要操作宿主 Docker）。
+#    安全敏感 / 生产环境禁止使用本文件；生产执行应走隔离 Runner。
+# =============================================================================
+
+services:
+  celery-worker:
+    volumes:
+      - ./backend:/app
+      - ./data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock

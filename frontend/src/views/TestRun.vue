@@ -66,15 +66,25 @@
               </el-descriptions>
             </el-form-item>
 
-            <el-form-item label="被测目标 URL">
-              <el-input
-                v-model="planTargetUrl"
-                placeholder="http://192.168.1.100:8080（选填，真实服务地址；留空使用离线模式）"
-              >
-                <template #append>
-                  <el-button :loading="probing" @click="handleProbeUrl(planTargetUrl)">连通测试</el-button>
-                </template>
-              </el-input>
+            <el-form-item label="执行环境" required>
+              <div class="plan-select-row">
+                <el-select
+                  v-model="selectedEnvId"
+                  placeholder="选择已发布环境"
+                  class="plan-select"
+                  :loading="envsLoading"
+                >
+                  <el-option
+                    v-for="e in environments"
+                    :key="e.id"
+                    :label="`${e.name}（${e.base_url}）`"
+                    :value="e.id"
+                  />
+                </el-select>
+              </div>
+              <div v-if="selectedPlan && environments.length === 0 && !envsLoading" class="env-hint">
+                该项目还没有已发布环境 —— 到「项目管理」项目详情新建并发布环境后执行
+              </div>
             </el-form-item>
           </el-form>
           <div class="form-actions">
@@ -82,7 +92,7 @@
             <el-button
               type="primary"
               :loading="creating"
-              :disabled="!selectedPlanId"
+              :disabled="!selectedPlanId || !selectedEnvId"
               @click="handleExecutePlan"
             >
               <el-icon><VideoPlay /></el-icon>
@@ -479,7 +489,7 @@
 import { defineComponent } from 'vue'
 import { VideoPlay, Document, Odometer, Warning, Loading } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { projectApi, testRunApi, planApi } from '@/api'
+import { environmentApi, projectApi, testRunApi, planApi } from '@/api'
 
 const STATUS_OPTIONS: Record<string, string> = {
   pending: '等待中',
@@ -557,8 +567,9 @@ export default defineComponent({
       filterMode: '' as '' | 'auto' | 'plan' | 'upload',
       filterStatus: '',
 
-      planTargetUrl: '',
-      probing: false,
+      selectedEnvId: '' as string,
+      environments: [] as any[],
+      envsLoading: false,
       selectedPlanId: '' as string,
       planDrawerVisible: false,
       planDetail: null as any,
@@ -571,6 +582,17 @@ export default defineComponent({
       AUTO_STEPS,
       PLAN_STEPS,
     }
+  },
+  watch: {
+    selectedPlanId(pid: string): void {
+      this.selectedEnvId = ''
+      this.environments = []
+      if (!pid) return
+      const plan = this.plans.find((p: any) => p.id === pid)
+      if (plan?.project_id) {
+        this.loadEnvironments(plan.project_id)
+      }
+    },
   },
   computed: {
     selectedPlan(): any {
@@ -811,6 +833,22 @@ export default defineComponent({
     },
 
     // ============ R2：计划管理抽屉 ============
+    // ============ M1：执行环境 ============
+    async loadEnvironments(projectId: string): Promise<void> {
+      this.envsLoading = true
+      try {
+        const res: any = await environmentApi.list(projectId)
+        this.environments = (res?.data?.list || []).filter((e: any) => e.status === 'published')
+        if (this.environments.length > 0) {
+          this.selectedEnvId = this.environments[0].id
+        }
+      } catch {
+        this.environments = []
+      } finally {
+        this.envsLoading = false
+      }
+    },
+
     caseTypeLabel(t?: string): string {
       const map: Record<string, string> = {
         api: '接口',
@@ -884,44 +922,23 @@ export default defineComponent({
     },
 
     // ============ 创建测试任务：plan 模式 ============
-    async handleProbeUrl(url?: string): Promise<void> {
-      const target = (url || '').trim()
-      if (!target) {
-        ElMessage.warning('请先输入被测服务 URL')
-        return
-      }
-      this.probing = true
-      try {
-        const res: any = await projectApi.probeUrl(target)
-        const d = res?.data || {}
-        if (d.reachable) {
-          ElMessage.success(d.message || `连接成功: HTTP ${d.status_code} (${d.response_time_ms}ms)`)
-        } else {
-          ElMessage.error(d.message || `连接失败: ${d.error || '无法访问'}`)
-        }
-      } catch (err: any) {
-        ElMessage.error(err?.message || '探测请求失败')
-      } finally {
-        this.probing = false
-      }
-    },
     async handleExecutePlan(): Promise<void> {
       if (!this.selectedPlanId) {
         ElMessage.warning('请先选择测试计划')
         return
       }
+      if (!this.selectedEnvId) {
+        ElMessage.warning('请先选择执行环境')
+        return
+      }
       this.creating = true
       try {
-        // 直接调 planApi.execute：后端会在内部创建 TestRun 并触发 pipeline（mode=plan）
-        const payload: any = {}
-        if (this.planTargetUrl?.trim()) {
-          payload.target_service_url = this.planTargetUrl.trim()
-        }
+        // 直接调 planApi.execute：后端创建 TestRun 并触发 pipeline（mode=plan + 环境档案）
+        const payload: any = { environment_profile_id: this.selectedEnvId }
         const res: any = await planApi.execute(this.selectedPlanId, payload)
         const runId = res?.data?.test_run_id
         ElMessage.success('测试计划已启动，正在实时跟踪流水线执行...')
         this.selectedPlanId = ''
-        this.planTargetUrl = ''
         await this.loadTestRuns()
         if (runId) {
           const run = this.testRuns.find((r) => r.id === runId)
@@ -942,7 +959,6 @@ export default defineComponent({
         this.creating = false
       }
     },
-
     async handleCancel(row: any): Promise<void> {
       try {
         await ElMessageBox.confirm(`确定要取消任务「${row.id.substring(0, 8)}」吗？`, '确认取消', { type: 'warning' })
@@ -1079,6 +1095,12 @@ export default defineComponent({
   display: flex;
   gap: 8px;
   width: 100%;
+}
+.env-hint {
+  font-size: 12px;
+  color: #e6a23c;
+  line-height: 1.6;
+  margin-top: 4px;
 }
 .plan-select {
   flex: 1;

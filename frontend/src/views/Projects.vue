@@ -218,8 +218,84 @@
           description="还没有代码版本 —— 上传压缩包或从仓库拉取"
           :image-size="80"
         />
+
+        <!-- M1：测试环境档案 -->
+        <div class="section-header">
+          <span>测试环境</span>
+          <el-button size="small" type="primary" plain @click="openEnvDialog()">新建环境</el-button>
+        </div>
+        <el-table :data="environments" v-loading="envsLoading" stripe size="small">
+          <el-table-column prop="name" label="名称" min-width="120" show-overflow-tooltip />
+          <el-table-column label="地址" min-width="160" show-overflow-tooltip>
+            <template #default="{ row }">
+              <span class="mono-text">{{ row.base_url || '—' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="状态" width="90" align="center">
+            <template #default="{ row }">
+              <el-tag size="small" :type="row.status === 'published' ? 'success' : 'info'">
+                {{ row.status === 'published' ? '已发布' : '草稿' }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="健康" width="80" align="center">
+            <template #default="{ row }">
+              <el-tag v-if="row.health_status === 'healthy'" size="small" type="success">正常</el-tag>
+              <el-tag v-else-if="row.health_status" size="small" type="warning">异常</el-tag>
+              <span v-else>—</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="修订" width="70" align="center">
+            <template #default="{ row }">{{ row.revision ? `r${row.revision}` : '—' }}</template>
+          </el-table-column>
+          <el-table-column label="操作" width="210" fixed="right">
+            <template #default="{ row }">
+              <el-button size="small" plain @click="openEnvDialog(row)">编辑</el-button>
+              <el-button size="small" plain :loading="row._checking" @click="checkEnv(row)">检查</el-button>
+              <el-button size="small" type="success" plain :loading="row._publishing" @click="publishEnv(row)">
+                {{ row.status === 'published' ? '重新发布' : '发布' }}
+              </el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+        <div class="env-tip">
+          执行测试计划时必须选择「已发布」环境；发布时固化配置为不可变修订版（含健康检查结果），保证历史运行可复现。
+        </div>
       </div>
     </el-drawer>
+
+    <!-- 新建/编辑环境对话框 -->
+    <el-dialog v-model="envDialogVisible" :title="envForm.id ? '编辑环境' : '新建环境'" width="560px" :close-on-click-modal="false">
+      <el-form label-width="100px">
+        <el-form-item label="名称" required>
+          <el-input v-model="envForm.name" placeholder="例如：测试环境 / 预发环境" maxlength="200" />
+        </el-form-item>
+        <el-form-item label="描述">
+          <el-input v-model="envForm.description" type="textarea" :rows="2" placeholder="用途说明（可选）" />
+        </el-form-item>
+        <el-form-item label="被测地址" required>
+          <el-input v-model="envForm.base_url" placeholder="http://host:port" />
+        </el-form-item>
+        <el-form-item label="健康检查路径">
+          <el-input v-model="envForm.healthcheck_path" placeholder="/health（可选，发布时自动检查）" />
+        </el-form-item>
+        <el-form-item label="认证方式">
+          <el-radio-group v-model="envForm.auth_strategy">
+            <el-radio-button value="none">无</el-radio-button>
+            <el-radio-button value="bearer">Bearer</el-radio-button>
+            <el-radio-button value="basic">Basic</el-radio-button>
+            <el-radio-button value="apikey">ApiKey</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item v-if="envForm.auth_strategy !== 'none'" label="凭据">
+          <el-input v-model="envForm.auth_token" type="password" show-password placeholder="留空保持原有凭据" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="envDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="envSaving" @click="submitEnv">保存</el-button>
+      </template>
+    </el-dialog>
 
     <!-- 修改代码来源对话框 -->
     <el-dialog v-model="editSourceVisible" title="修改代码来源" width="560px" :close-on-click-modal="false">
@@ -328,7 +404,7 @@ import { defineComponent } from 'vue'
 import { Plus, UploadFilled, Refresh, VideoPlay } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import type { UploadRequestOptions } from 'element-plus'
-import { projectApi, projectCodeApi, testRunApi } from '@/api'
+import { environmentApi, projectApi, projectCodeApi, testRunApi } from '@/api'
 
 const SOURCE_LABELS: Record<string, string> = {
   github: 'GitHub',
@@ -378,6 +454,21 @@ export default defineComponent({
         versionName: '',
         targetUrl: '',
         sourceType: 'upload',
+      },
+
+      // M1：测试环境档案
+      environments: [] as any[],
+      envsLoading: false,
+      envDialogVisible: false,
+      envSaving: false,
+      envForm: {
+        id: '',
+        name: '',
+        description: '',
+        base_url: '',
+        healthcheck_path: '',
+        auth_strategy: 'none',
+        auth_token: '',
       },
 
       // 修改代码来源
@@ -535,6 +626,100 @@ export default defineComponent({
       this.current = row
       this.detailVisible = true
       this.loadVersions()
+      this.loadEnvironments()
+    },
+    // ============ M1：测试环境档案 ============
+    async loadEnvironments(): Promise<void> {
+      if (!this.current) return
+      this.envsLoading = true
+      try {
+        const res: any = await environmentApi.list(this.current.id)
+        this.environments = res?.data?.list || []
+      } catch {
+        this.environments = []
+      } finally {
+        this.envsLoading = false
+      }
+    },
+    openEnvDialog(env?: any): void {
+      this.envForm = {
+        id: env?.id || '',
+        name: env?.name || '',
+        description: env?.description || '',
+        base_url: env?.base_url || '',
+        healthcheck_path: env?.healthcheck_path || '',
+        auth_strategy: env?.auth_strategy || 'none',
+        auth_token: '',
+      }
+      this.envDialogVisible = true
+    },
+    async submitEnv(): Promise<void> {
+      if (!this.envForm.name.trim()) {
+        ElMessage.warning('请输入环境名称')
+        return
+      }
+      if (!this.envForm.base_url.trim()) {
+        ElMessage.warning('请输入被测地址')
+        return
+      }
+      this.envSaving = true
+      try {
+        const payload: any = {
+          name: this.envForm.name.trim(),
+          description: this.envForm.description?.trim() || undefined,
+          base_url: this.envForm.base_url.trim(),
+          healthcheck_path: this.envForm.healthcheck_path?.trim() || '',
+          auth_strategy: this.envForm.auth_strategy,
+          auth_config: this.envForm.auth_token ? { token: this.envForm.auth_token } : {},
+        }
+        if (this.envForm.id) {
+          await environmentApi.update(this.envForm.id, payload)
+          ElMessage.success('环境已更新（修改后需重新发布才对执行生效）')
+        } else {
+          await environmentApi.create(this.current.id, payload)
+          ElMessage.success('环境草稿已创建，发布后可被执行选择')
+        }
+        this.envDialogVisible = false
+        this.loadEnvironments()
+      } catch {
+        /* 拦截器已提示 */
+      } finally {
+        this.envSaving = false
+      }
+    },
+    async checkEnv(row: any): Promise<void> {
+      row._checking = true
+      try {
+        const res: any = await environmentApi.healthcheck(row.id)
+        const d = res?.data || {}
+        if (d.health_status === 'healthy') {
+          ElMessage.success(`健康检查通过：${d.health_detail || ''}`)
+        } else {
+          ElMessage.warning(`健康检查${d.health_status === 'skipped' ? '跳过' : '未通过'}：${d.health_detail || ''}`)
+        }
+      } catch {
+        /* 拦截器已提示 */
+      } finally {
+        row._checking = false
+      }
+    },
+    async publishEnv(row: any): Promise<void> {
+      row._publishing = true
+      try {
+        const res: any = await environmentApi.publish(row.id)
+        const d = res?.data || {}
+        const health = d.health?.status || 'unknown'
+        if (health === 'healthy') {
+          ElMessage.success(`环境已发布（修订版 r${d.revision}，健康检查正常）`)
+        } else {
+          ElMessage.warning(`环境已发布（修订版 r${d.revision}），但健康检查：${d.health?.detail || health}`)
+        }
+        this.loadEnvironments()
+      } catch {
+        /* 拦截器已提示 */
+      } finally {
+        row._publishing = false
+      }
     },
     formatCoverageInfo(project: any): string {
       const cfg = project?.coverage_config || project?.source_config?.coverage_config
@@ -730,5 +915,14 @@ export default defineComponent({
   margin-top: 8px;
   font-weight: 600;
   color: #303133;
+}
+.env-tip {
+  margin-top: 6px;
+  padding: 8px 12px;
+  background: #f4f8ff;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #909399;
+  line-height: 1.8;
 }
 </style>

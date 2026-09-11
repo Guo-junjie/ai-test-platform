@@ -115,9 +115,21 @@ MINIO_BUCKET=ai-test-platform
 
 ### 3. 启动全部服务
 
+**本地开发 / 单机演示**（叠加开发层：worker 可启动被测服务、自动采集覆盖率）：
+
 ```bash
-docker-compose up -d
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 ```
+
+**生产部署**（只使用基线文件；worker 不持有宿主 Docker socket，执行走隔离 Runner）：
+
+```bash
+docker compose up -d
+```
+
+> 安全说明：`/var/run/docker.sock` 等于宿主机 root 控制权。基线文件 `docker-compose.yml`
+> 不包含该挂载，仅 `docker-compose.dev.yml` 叠加层提供；生产环境禁止引入 dev 叠加层，
+> 且应通过 Secret Store 注入 `.env` 中的默认口令。
 
 等待所有服务启动并完成健康检查（约 30 秒）：
 

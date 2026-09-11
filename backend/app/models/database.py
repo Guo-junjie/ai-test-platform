@@ -173,6 +173,52 @@ class Project(Base):
     test_runs = relationship("TestRun", back_populates="project")
 
 
+class EnvironmentProfile(Base):
+    """测试环境档案（企业化改造 M1）—— 取代执行时的临时 target_service_url。
+
+    一个项目可有多个环境（开发/测试/预发），执行测试计划时必须选择一个
+    「已发布」的环境档案；发布时固化配置为不可变 revision，保证运行可复现。
+    """
+    __tablename__ = "environment_profiles"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False, index=True)
+    name = Column(String(200), nullable=False)
+    description = Column(Text)
+    base_url = Column(String(500), nullable=False, default="")
+    healthcheck_path = Column(String(300), default="")
+    # 认证方式：none / bearer / basic / apikey（M1 仅记录与透传，token 加密存储）
+    auth_strategy = Column(String(20), default="none", nullable=False)
+    auth_config = Column(JSONB, default={})
+    # draft / published / archived
+    status = Column(String(20), default="draft", nullable=False)
+    # 当前已发布 revision 指针（无 FK 约束避免循环依赖）
+    current_revision_id = Column(UUID(as_uuid=True), nullable=True)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class EnvironmentProfileRevision(Base):
+    """环境档案修订版 —— 发布时固化配置快照，不可变，供运行复现与审计。"""
+    __tablename__ = "environment_profile_revisions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    profile_id = Column(UUID(as_uuid=True), ForeignKey("environment_profiles.id"), nullable=False, index=True)
+    revision = Column(Integer, nullable=False, default=1)
+    # 发布时点的完整配置快照：base_url / healthcheck_path / auth_strategy / auth_config
+    config_json = Column(JSONB, nullable=False, default={})
+    # 发布时的健康检查结果：healthy / unreachable / error / skipped
+    health_status = Column(String(20))
+    health_detail = Column(Text)
+    # draft / published / superseded（被更新版本取代）
+    status = Column(String(20), default="draft", nullable=False)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    published_at = Column(DateTime)
+    published_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+
+
 class ProjectCodeVersion(Base):
     """项目代码版本表 —— 代码是项目的属性（R1 重构）。
 
@@ -284,8 +330,11 @@ class TestRun(Base):
 
     # 代码分析结果（JSON）
     analysis_result = Column(JSONB, default={})
-    # 被测目标服务地址（真实环境 URL）
+    # 被测目标服务地址（真实环境 URL；M1 起由环境档案解析而来，保留作展示）
     target_service_url = Column(String(500), nullable=True)
+    # M1：执行所选环境档案及其固化修订版（计划化运行的可复现引用）
+    environment_profile_id = Column(UUID(as_uuid=True), nullable=True)
+    environment_revision_id = Column(UUID(as_uuid=True), nullable=True)
     # 快照 ID
     snapshot_id = Column(String(64))
 
@@ -1395,6 +1444,63 @@ async def init_db():
         logger.warning(f"Skip test_runs plan_id/current_step sync: {e}")
     else:
         logger.info("TestRun plan_id/current_step columns ensured")
+
+    # M1 环境档案：test_runs 补两列（执行所选环境档案及其固化修订版）。
+    try:
+        async with async_engine.connect() as conn:
+            autocommit_conn = await conn.execution_options(isolation_level="AUTOCOMMIT")
+            for col_sql in (
+                "ALTER TABLE test_runs ADD COLUMN IF NOT EXISTS environment_profile_id UUID",
+                "ALTER TABLE test_runs ADD COLUMN IF NOT EXISTS environment_revision_id UUID",
+            ):
+                try:
+                    await autocommit_conn.execute(text(col_sql))
+                except Exception as e:
+                    logger.warning(f"Failed ({col_sql[:50]}...): {e}")
+    except Exception as e:
+        logger.warning(f"Skip test_runs environment columns sync: {e}")
+    else:
+        logger.info("TestRun environment_profile/revision columns ensured")
+
+    # M1 迁移：为已有项目创建「默认测试环境草稿」——
+    # 把 source_config.target_service_url 迁入环境档案（幂等：仅当项目当前
+    # 没有任何环境档案且 source_config 里存在该键时创建）。
+    try:
+        from sqlalchemy import select as _sel
+        from app.utils.database import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as session:
+            projs = (
+                await session.execute(_sel(Project))
+            ).scalars().all()
+            created_envs = 0
+            for proj in projs:
+                if not proj.source_config or not proj.source_config.get("target_service_url"):
+                    continue
+                existing = (
+                    await session.execute(
+                        _sel(EnvironmentProfile.id).where(EnvironmentProfile.project_id == proj.id).limit(1)
+                    )
+                ).first()
+                if existing is not None:
+                    continue
+                env = EnvironmentProfile(
+                    project_id=proj.id,
+                    name="默认环境（迁移）",
+                    description="由项目 source_config.target_service_url 自动迁移的草稿，请确认后发布",
+                    base_url=proj.source_config.get("target_service_url", ""),
+                    healthcheck_path="",
+                    auth_strategy="none",
+                    auth_config={},
+                    status="draft",
+                )
+                session.add(env)
+                created_envs += 1
+            if created_envs:
+                await session.commit()
+                logger.info(f"M1 migration: created {created_envs} default environment draft(s) from legacy target_service_url")
+    except Exception as e:
+        logger.warning(f"Skip default environment seeding: {e}")
 
     # 能力12：best-effort 启用 pgvector 快路径（失败仅记日志，代码绝不依赖；
     # 检索使用 JSONB + Python 侧余弦相似度，不要求 pgvector 扩展）。

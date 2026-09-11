@@ -609,6 +609,8 @@ async def list_plan_executions(
 
 class ExecutePlanRequest(BaseModel):
     target_service_url: str | None = None
+    # M1：环境档案 —— 优先级高于 target_service_url；须为该项目下「已发布」环境
+    environment_profile_id: str | None = None
 
 
 @router.post("/{plan_id}/execute")
@@ -621,7 +623,8 @@ async def execute_plan(
     """触发执行测试计划：建 TestRun(plan_id=this)，派发完整流水线。
 
     用例来源从 test_plan_cases 读取：仅 enabled=True 的 case_asset_id。
-    支持在执行计划时指定真实被测环境 URL（或继承项目默认配置）。
+    目标环境解析优先级：环境档案（须已发布）> 显式 target_service_url（废弃标记）>
+    项目 source_config 回退。
     """
     plan = await _require_plan(plan_id, db)
     if plan.status != "active":
@@ -639,13 +642,50 @@ async def execute_plan(
     if not case_ids:
         raise HTTPException(400, "计划内无启用用例，请先加入用例")
 
-    # 解析目标环境 URL（优先显式传参，其次读项目 source_config）
-    target_url = (req.target_service_url or "").strip() or None
-    if not target_url and plan.project_id:
-        from app.models.database import Project as _Proj
-        p_row = (await db.execute(select(_Proj).where(_Proj.id == plan.project_id))).scalar_one_or_none()
-        if p_row and p_row.source_config:
-            target_url = p_row.source_config.get("target_service_url")
+    # ===== M1：环境解析（档案 > 显式 URL > source_config 回退） =====
+    env_profile_id: uuid.UUID | None = None
+    env_revision_id: uuid.UUID | None = None
+    target_url: str | None = None
+
+    if req.environment_profile_id:
+        from app.models.database import EnvironmentProfile, EnvironmentProfileRevision
+
+        try:
+            epid = uuid.UUID(req.environment_profile_id)
+        except ValueError:
+            raise HTTPException(400, f"Invalid environment_profile_id: {req.environment_profile_id}")
+        env = (
+            await db.execute(select(EnvironmentProfile).where(EnvironmentProfile.id == epid))
+        ).scalar_one_or_none()
+        if env is None:
+            raise HTTPException(404, f"Environment not found: {req.environment_profile_id}")
+        if env.project_id != plan.project_id:
+            raise HTTPException(400, "环境档案不属于该计划所在项目")
+        if env.status != "published" or not env.current_revision_id:
+            raise HTTPException(400, f"环境「{env.name}」尚未发布，请先在项目详情中发布后再执行")
+        rev = (
+            await db.execute(
+                select(EnvironmentProfileRevision).where(
+                    EnvironmentProfileRevision.id == env.current_revision_id
+                )
+            )
+        ).scalar_one_or_none()
+        if rev is None or rev.status != "published":
+            raise HTTPException(400, f"环境「{env.name}」的已发布修订版缺失，请重新发布")
+        cfg = rev.config_json or {}
+        if not cfg.get("base_url"):
+            raise HTTPException(400, f"环境「{env.name}」修订版缺少 base_url，请重新发布")
+        env_profile_id = env.id
+        env_revision_id = rev.id
+        target_url = cfg["base_url"]
+    else:
+        # 旧路径（兼容）：显式 URL > 项目 source_config 回退
+        target_url = (req.target_service_url or "").strip() or None
+        if not target_url and plan.project_id:
+            from app.models.database import Project as _Proj
+            p_row = (await db.execute(select(_Proj).where(_Proj.id == plan.project_id))).scalar_one_or_none()
+            if p_row and p_row.source_config:
+                target_url = p_row.source_config.get("target_service_url")
 
     # 创建 TestRun（plan_id 标记新模式，source_type=upload 兼容老链路）
     run = TestRun(
@@ -659,6 +699,8 @@ async def execute_plan(
         plan_id=plan.id,
         current_step="pending",
         target_service_url=target_url,
+        environment_profile_id=env_profile_id,
+        environment_revision_id=env_revision_id,
     )
     db.add(run)
     await db.commit()

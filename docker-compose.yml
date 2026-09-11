@@ -1,5 +1,15 @@
 version: "3.8"
 
+# =============================================================================
+# 生产部署基线 —— 不挂载宿主 Docker socket
+#
+# celery-worker 在生产环境不得持有宿主 Docker 控制权（socket = 宿主 root 级
+# 权限，被测代码可在 worker 内反控宿主）。生产部署的执行应使用隔离 Runner。
+#
+# 本地开发 / 单机演示：叠加开发层以启用「启动被测服务」「自动覆盖率采集」：
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+# =============================================================================
+
 services:
   # ============ 基础设施 ============
   postgres:
@@ -118,10 +128,6 @@ services:
     volumes:
       - ./backend:/app
       - ./data:/app/data
-      # 能力11 自动覆盖率：探针注入/采集需要操作宿主机 Docker（启动带探针的 SUT、
-      # 拷出覆盖率数据、采集后停止容器）。仅在可信环境开启；安全敏感环境保持注释
-      # 并走「手动上传覆盖率报告」路径。
-      - /var/run/docker.sock:/var/run/docker.sock
     extra_hosts:
       # worker 内通过 host.docker.internal 访问宿主端口映射的 SUT 服务
       - "host.docker.internal:host-gateway"

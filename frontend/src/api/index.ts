@@ -376,6 +376,24 @@ export const caseApi = {
   /** 批量接纳：data { ids: string[] } */
   adoptBatch: (ids: string[]) => api.post('/cases/adopt-batch', { ids }),
 }
+// ============ 测试环境档案（M1：取代临时 target_service_url） ============
+export const environmentApi = {
+  /** 项目环境列表（草稿与已发布） */
+  list: (projectId: string) => api.get(`/projects/${projectId}/environments`),
+  /** 创建环境草稿 */
+  create: (projectId: string, data: any) => api.post(`/projects/${projectId}/environments`, data),
+  /** 详情（含修订历史） */
+  get: (id: string) => api.get(`/environments/${id}`),
+  /** 更新草稿配置（token 留空保持原值） */
+  update: (id: string, data: any) => api.put(`/environments/${id}`, data),
+  /** 按需健康检查（不发布） */
+  healthcheck: (id: string) => api.post(`/environments/${id}/healthcheck`),
+  /** 发布：固化不可变 revision，记录健康检查结果 */
+  publish: (id: string) => api.post(`/environments/${id}/publish`),
+  /** 删除（被 Run 引用时后端拒绝） */
+  remove: (id: string) => api.delete(`/environments/${id}`),
+}
+
 // ============ 测试计划（P0 阶段 5：CRUD + 用例管理 + 执行） ============
 export const planApi = {
   list: (params: any) => api.get('/plans', { params }),
