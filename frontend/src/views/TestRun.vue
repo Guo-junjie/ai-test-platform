@@ -59,6 +59,15 @@
                   </el-tag>
                 </el-descriptions-item>
                 <el-descriptions-item label="启用用例">{{ selectedPlan.enabled_case_count ?? selectedPlan.case_count ?? 0 }}</el-descriptions-item>
+                <el-descriptions-item label="发布状态">
+                  <template v-if="selectedPlan.published_revision">
+                    <el-tag size="small" type="primary">r{{ selectedPlan.published_revision }}</el-tag>
+                    <el-tag v-if="selectedPlan.has_unpublished_changes" size="small" type="warning" style="margin-left: 6px">
+                      有未发布的修改（执行以 r{{ selectedPlan.published_revision }} 为准）
+                    </el-tag>
+                  </template>
+                  <el-tag v-else size="small" type="danger">未发布（请先到管理计划中发布）</el-tag>
+                </el-descriptions-item>
                 <el-descriptions-item label="上次执行">{{ formatTime(selectedPlan.last_executed_at) || '从未执行' }}</el-descriptions-item>
                 <el-descriptions-item v-if="selectedPlan.description" label="描述" :span="2">
                   {{ selectedPlan.description }}
@@ -401,6 +410,28 @@
               {{ planDetail.status === 'active' ? '启用中' : '已归档' }}
             </el-tag>
           </el-descriptions-item>
+          <el-descriptions-item label="已发布修订">
+            <template v-if="planDetail.published_revision">
+              <el-tag size="small" type="primary">r{{ planDetail.published_revision }}</el-tag>
+              <el-tag v-if="planDetail.has_unpublished_changes" size="small" type="warning" style="margin-left: 6px">
+                有未发布的修改
+              </el-tag>
+            </template>
+            <template v-else>
+              <el-tag size="small" type="danger">未发布</el-tag>
+            </template>
+          </el-descriptions-item>
+          <el-descriptions-item label="发布操作">
+            <el-button
+              size="small"
+              type="primary"
+              :loading="publishing"
+              :disabled="!planDetail.has_unpublished_changes"
+              @click="publishPlan"
+            >
+              {{ planDetail.published_revision ? '发布新修订版' : '发布计划' }}
+            </el-button>
+          </el-descriptions-item>
           <el-descriptions-item label="描述" :span="2">{{ planDetail.description || '—' }}</el-descriptions-item>
         </el-descriptions>
 
@@ -577,6 +608,7 @@ export default defineComponent({
       planCasesLoading: false,
       planExecs: [] as any[],
       planExecsLoading: false,
+      publishing: false,
 
       STATUS_OPTIONS,
       AUTO_STEPS,
@@ -864,6 +896,25 @@ export default defineComponent({
       this.planDetail = this.plans.find((p: any) => p.id === this.selectedPlanId) || null
       this.loadPlanDetail()
       this.loadPlanExecs()
+    },
+    async publishPlan(): Promise<void> {
+      if (!this.selectedPlanId) return
+      this.publishing = true
+      try {
+        const res: any = await planApi.publish(this.selectedPlanId)
+        const d = res?.data || {}
+        if (d.unchanged) {
+          ElMessage.info('当前状态与最新已发布修订版一致')
+        } else {
+          ElMessage.success(`已发布修订版 r${d.revision}（${d.enabled_count} 条启用用例）`)
+        }
+        await this.loadPlanDetail()
+        this.loadPlans()
+      } catch {
+        /* 拦截器已提示 */
+      } finally {
+        this.publishing = false
+      }
     },
     async loadPlanDetail(): Promise<void> {
       if (!this.selectedPlanId) return

@@ -11,6 +11,7 @@ from sqlalchemy import (
 from app.utils.case_pair_enum import CasePairEnum  # 修复后替代裸 SAEnum（兼容老数据大小写）
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import declarative_base, relationship
+import json
 import uuid
 
 Base = declarative_base()
@@ -775,7 +776,11 @@ class TestCaseAsset(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
     endpoint_id = Column(UUID(as_uuid=True), ForeignKey("api_endpoints.id"), nullable=True)
-    case_type = Column(String(50), nullable=False)  # positive / negative / boundary / exception
+    case_type = Column(String(50), nullable=False)  # 正向 / 反向 / 边界 / 异常（设计类型，M2 起迁移至 design_type，保留兼容读）
+    # M2 拆分语义：execution_kind 决定执行器（api/performance/integration/...），
+    # design_type 表达设计维度（positive/negative/boundary/exception）
+    execution_kind = Column(String(20), nullable=False, default="api")
+    design_type = Column(String(50), nullable=True)
     title = Column(String(500), nullable=False)
     description = Column(Text, nullable=True)
     request_data = Column(JSONB, nullable=False, default={})  # {method, url, headers, body, params}
@@ -857,6 +862,50 @@ class TestPlanExecution(Base):
 
     plan = relationship("TestPlan", back_populates="executions")
     test_run = relationship("TestRun")
+
+
+class TestPlanRevision(Base):
+    """测试计划修订版（企业化改造 M2）—— 计划即质量合同。
+
+    发布时固化当前编辑态的用例集合与启停状态为不可变修订版；
+    执行必须基于已发布修订版，保证「计划被编辑后历史执行含义不变」。
+    M2 固化范围（用例集合/启停/顺序），用例内容固化随资产版本化在 P1 落地。
+    """
+    __tablename__ = "test_plan_revisions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    plan_id = Column(UUID(as_uuid=True), ForeignKey("test_plans.id"), nullable=False, index=True)
+    revision = Column(Integer, nullable=False, default=1)
+    # 发布时点用例集合指纹（含启停/顺序），用于检测「有未发布的修改」
+    plan_state_hash = Column(String(64), nullable=False)
+    case_count = Column(Integer, default=0)
+    enabled_count = Column(Integer, default=0)
+    # 发布时绑定的默认环境档案（可空；执行时仍可选择覆盖）
+    environment_profile_id = Column(UUID(as_uuid=True), nullable=True)
+    # 执行策略占位：{timeout_s, parallelism}
+    execution_profile = Column(JSONB, default={})
+    # published / superseded
+    status = Column(String(20), default="published", nullable=False)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    published_at = Column(DateTime)
+    published_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+
+
+class TestPlanRevisionCase(Base):
+    """计划修订版内的用例快照（固化集合/启停/顺序与发布时点内容指纹）。"""
+    __tablename__ = "test_plan_revision_cases"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    revision_id = Column(UUID(as_uuid=True), ForeignKey("test_plan_revisions.id"), nullable=False, index=True)
+    case_asset_id = Column(UUID(as_uuid=True), nullable=False)
+    title = Column(String(500), nullable=False)
+    execution_kind = Column(String(20), default="api")
+    design_type = Column(String(50))
+    enabled = Column(Boolean, default=True, nullable=False)
+    sort_order = Column(Integer, default=0)
+    # 发布时点用例内容指纹（检测内容漂移；内容固化在 P1 资产版本化落地）
+    content_hash = Column(String(64), nullable=False)
 
     __table_args__ = (
         Index("idx_test_plan_exec_plan", "plan_id"),
@@ -1501,6 +1550,94 @@ async def init_db():
                 logger.info(f"M1 migration: created {created_envs} default environment draft(s) from legacy target_service_url")
     except Exception as e:
         logger.warning(f"Skip default environment seeding: {e}")
+
+    # M2 迁移：用例类型语义拆分 + 计划修订版回填（幂等）。
+    # 1) TestCaseAsset 加 execution_kind / design_type 两列并把旧 case_type 迁入；
+    # 2) 为每个没有修订版的 TestPlan 回填 published revision 1（固化当前 enabled 用例集）。
+    try:
+        async with async_engine.connect() as conn:
+            ac = await conn.execution_options(isolation_level="AUTOCOMMIT")
+            for col_sql in (
+                "ALTER TABLE test_case_assets ADD COLUMN IF NOT EXISTS execution_kind VARCHAR(20) NOT NULL DEFAULT 'api'",
+                "ALTER TABLE test_case_assets ADD COLUMN IF NOT EXISTS design_type VARCHAR(50)",
+                "UPDATE test_case_assets SET design_type = case_type WHERE design_type IS NULL",
+                "UPDATE test_case_assets SET execution_kind = case_type WHERE case_type IN ('performance', 'integration') AND execution_kind = 'api'",
+            ):
+                try:
+                    await ac.execute(text(col_sql))
+                except Exception as e:
+                    logger.warning(f"Failed ({col_sql[:60]}...): {e}")
+    except Exception as e:
+        logger.warning(f"Skip M2 case-type split migration: {e}")
+    else:
+        logger.info("M2 case-type split (execution_kind/design_type) ensured")
+
+    try:
+        import hashlib as _hashlib
+        from sqlalchemy import select as _sel
+        from app.utils.database import AsyncSessionLocal
+
+        def _case_hash(a) -> str:
+            payload = json.dumps({
+                "title": a.title,
+                "request_data": a.request_data or {},
+                "expected_result": a.expected_result or {},
+                "priority": a.priority,
+                "case_type": a.case_type,
+            }, sort_keys=True, ensure_ascii=False, default=str)
+            return _hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+        async with AsyncSessionLocal() as session:
+            plans = (await session.execute(_sel(TestPlan))).scalars().all()
+            backfilled = 0
+            for plan in plans:
+                has_rev = (
+                    await session.execute(
+                        _sel(TestPlanRevision.id).where(TestPlanRevision.plan_id == plan.id).limit(1)
+                    )
+                ).first()
+                if has_rev is not None:
+                    continue
+                rows = (
+                    await session.execute(
+                        _sel(TestPlanCase, TestCaseAsset)
+                        .outerjoin(TestCaseAsset, TestCaseAsset.id == TestPlanCase.case_asset_id)
+                        .where(TestPlanCase.plan_id == plan.id)
+                        .order_by(TestPlanCase.sort_order.asc(), TestPlanCase.added_at.asc())
+                    )
+                ).all()
+                now = datetime.utcnow()
+                rev = TestPlanRevision(
+                    plan_id=plan.id,
+                    revision=1,
+                    plan_state_hash=_hashlib.sha256(
+                        "|".join(f"{pc.case_asset_id}:{pc.enabled}" for pc, _ in rows).encode("utf-8")
+                    ).hexdigest(),
+                    case_count=len(rows),
+                    enabled_count=sum(1 for pc, _ in rows if pc.enabled),
+                    status="published",
+                    created_at=now,
+                    published_at=now,
+                )
+                session.add(rev)
+                await session.flush()
+                for i, (pc, a) in enumerate(rows):
+                    session.add(TestPlanRevisionCase(
+                        revision_id=rev.id,
+                        case_asset_id=pc.case_asset_id,
+                        title=(a.title if a else "（用例已删除）"),
+                        execution_kind=(a.execution_kind if a else "api"),
+                        design_type=(a.design_type or (a.case_type if a else None)),
+                        enabled=pc.enabled,
+                        sort_order=i,
+                        content_hash=_case_hash(a) if a else "deleted",
+                    ))
+                backfilled += 1
+            if backfilled:
+                await session.commit()
+                logger.info(f"M2 migration: backfilled {backfilled} plan revision(s) as published revision 1")
+    except Exception as e:
+        logger.warning(f"Skip M2 plan revision backfill: {e}")
 
     # 能力12：best-effort 启用 pgvector 快路径（失败仅记日志，代码绝不依赖；
     # 检索使用 JSONB + Python 侧余弦相似度，不要求 pgvector 扩展）。

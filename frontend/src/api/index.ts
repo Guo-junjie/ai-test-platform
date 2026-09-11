@@ -407,6 +407,8 @@ export const planApi = {
   toggleCase: (id: string, case_id: string, enabled: boolean) => api.put(`/plans/${id}/cases/${case_id}`, { enabled }),
   bulkAdd: (id: string, data: any) => api.post(`/plans/${id}/cases/bulk-add`, data),
   listExecutions: (id: string, params: any) => api.get(`/plans/${id}/executions`, { params }),
+  listRevisions: (id: string) => api.get(`/plans/${id}/revisions`),
+  publish: (id: string) => api.post(`/plans/${id}/publish`),
   execute: (id: string, data?: any) => api.post(`/plans/${id}/execute`, data ?? {}),
 }
 

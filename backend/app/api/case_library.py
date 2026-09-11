@@ -111,6 +111,9 @@ async def generate_cases(
             id=str(uuid.uuid4()),
             project_id=req.project_id,
             case_type=case.get("case_type", "positive"),
+            # M2：语义拆分——AI 接口用例 execution_kind=api，设计类型沿用 case_type
+            execution_kind="api",
+            design_type=case.get("case_type", "positive"),
             title=case.get("case_name", ""),
             description=case.get("description", ""),
             request_data=case.get("request", {}),
@@ -291,6 +294,7 @@ async def update_case(
         item.priority = req.priority
     if req.case_type is not None:
         item.case_type = req.case_type
+        item.design_type = req.case_type  # M2：设计类型同步
 
     item.updated_at = datetime.utcnow()
     await db.flush()

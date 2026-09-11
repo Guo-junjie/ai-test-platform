@@ -13,6 +13,8 @@
 - GET    /api/plans/{id}/executions        执行历史
 - POST   /api/plans/{id}/execute          触发执行（创建 TestRun + 派发流水线）
 """
+import hashlib
+import json
 import uuid
 from datetime import datetime
 from typing import Any
@@ -23,11 +25,14 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import (
+    EnvironmentProfile,
     Project,
     TestCaseAsset,
     TestPlan,
     TestPlanCase,
     TestPlanExecution,
+    TestPlanRevision,
+    TestPlanRevisionCase,
     TestRun,
     TestStatus,
     User,
@@ -79,8 +84,52 @@ class PlanBulkAdd(BaseModel):
 # ==================== 内部工具 ====================
 
 
-def _plan_to_dict(p: TestPlan, total: int = 0, enabled: int = 0) -> dict[str, Any]:
-    return {
+def _case_content_hash(a: TestCaseAsset | None) -> str:
+    """用例内容指纹（发布时点）。内容固化随资产版本化在 P1 落地。"""
+    if a is None:
+        return "deleted"
+    payload = json.dumps({
+        "title": a.title,
+        "request_data": a.request_data or {},
+        "expected_result": a.expected_result or {},
+        "priority": a.priority,
+        "case_type": a.case_type,
+    }, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+async def _plan_state(plan_id: uuid.UUID, db: AsyncSession) -> tuple[str, list]:
+    """计算计划当前编辑态指纹与启停用例行（TestPlanCase, TestCaseAsset）。"""
+    rows = (
+        await db.execute(
+            select(TestPlanCase, TestCaseAsset)
+            .outerjoin(TestCaseAsset, TestCaseAsset.id == TestPlanCase.case_asset_id)
+            .where(TestPlanCase.plan_id == plan_id)
+            .order_by(TestPlanCase.sort_order.asc(), TestPlanCase.added_at.asc())
+        )
+    ).all()
+    state_hash = hashlib.sha256(
+        "|".join(f"{pc.case_asset_id}:{pc.enabled}" for pc, _ in rows).encode("utf-8")
+    ).hexdigest()
+    return state_hash, rows
+
+
+async def _latest_published_revision(plan_id: uuid.UUID, db: AsyncSession) -> TestPlanRevision | None:
+    return (
+        await db.execute(
+            select(TestPlanRevision)
+            .where(
+                TestPlanRevision.plan_id == plan_id,
+                TestPlanRevision.status == "published",
+            )
+            .order_by(TestPlanRevision.revision.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+def _plan_to_dict(p: TestPlan, total: int = 0, enabled: int = 0, m2: dict[str, Any] | None = None) -> dict[str, Any]:
+    d = {
         "id": str(p.id),
         "project_id": str(p.project_id),
         "name": p.name,
@@ -92,6 +141,9 @@ def _plan_to_dict(p: TestPlan, total: int = 0, enabled: int = 0) -> dict[str, An
         "updated_at": p.updated_at.isoformat() if p.updated_at else None,
         "stats": {"total_cases": total, "enabled_cases": enabled},
     }
+    if m2:
+        d.update(m2)
+    return d
 
 
 def _plan_case_to_dict(pc: TestPlanCase, asset: TestCaseAsset | None) -> dict[str, Any]:
@@ -180,11 +232,57 @@ async def list_plans(
         for pid_, total_cnt, enabled_cnt in st_rows:
             stats_map[str(pid_)] = (int(total_cnt or 0), int(enabled_cnt or 0))
 
+    # M2：每计划的最新发布修订 + 未发布变更检测
+    m2_map: dict[str, dict[str, Any]] = {}
+    if rows:
+        ids = [r.id for r in rows]
+        # 每计划最新修订（任意状态，取 revision 最大）
+        latest_rows = (
+            await db.execute(
+                select(
+                    TestPlanRevision.plan_id,
+                    func.max(TestPlanRevision.revision).label("max_rev"),
+                )
+                .where(TestPlanRevision.plan_id.in_(ids))
+                .group_by(TestPlanRevision.plan_id)
+            )
+        ).all()
+        latest_map = {str(pid_): int(mr or 0) for pid_, mr in latest_rows}
+        # 最新 published 修订
+        pub_rows = (
+            await db.execute(
+                select(TestPlanRevision)
+                .where(
+                    TestPlanRevision.plan_id.in_(ids),
+                    TestPlanRevision.status == "published",
+                )
+                .order_by(TestPlanRevision.revision.desc())
+            )
+        ).scalars().all()
+        pub_map: dict[str, TestPlanRevision] = {}
+        for r in pub_rows:
+            pub_map.setdefault(str(r.plan_id), r)
+        # 当前编辑态指纹
+        state_map: dict[str, str] = {}
+        for r in rows:
+            h, _ = await _plan_state(r.id, db)
+            state_map[str(r.id)] = h
+        for r in rows:
+            key = str(r.id)
+            pub = pub_map.get(key)
+            m2_map[key] = {
+                "latest_revision": latest_map.get(key, 0),
+                "published_revision": pub.revision if pub else 0,
+                "published_state_hash": pub.plan_state_hash[:12] if pub else None,
+                "has_unpublished_changes": bool(pub is None or pub.plan_state_hash != state_map[key]),
+            }
+
     return {
         "code": 0,
         "data": {
             "list": [
-                _plan_to_dict(r, *stats_map.get(str(r.id), (0, 0))) for r in rows
+                _plan_to_dict(r, *stats_map.get(str(r.id), (0, 0)), m2=m2_map.get(str(r.id)))
+                for r in rows
             ],
             "total": total,
             "page": page,
@@ -266,10 +364,19 @@ async def get_plan(
         )
     ).scalar_one_or_none()
 
+    # M2：修订信息 + 未发布变更检测
+    state_hash, _rows = await _plan_state(plan.id, db)
+    latest_pub = await _latest_published_revision(plan.id, db)
+    m2_info = {
+        "published_revision": latest_pub.revision if latest_pub else 0,
+        "published_state_hash": latest_pub.plan_state_hash[:12] if latest_pub else None,
+        "has_unpublished_changes": bool(latest_pub is None or latest_pub.plan_state_hash != state_hash),
+    }
+
     return {
         "code": 0,
         "data": {
-            **_plan_to_dict(plan),
+            **_plan_to_dict(plan, m2=m2_info),
             "cases": [_plan_case_to_dict(pc, a) for pc, a in plan_cases_rows],
             "latest_execution": {
                 "id": str(latest_exec.id),
@@ -607,10 +714,147 @@ async def list_plan_executions(
     }
 
 
+@router.post("/{plan_id}/publish")
+async def publish_plan(
+    plan_id: str,
+    current_user: User = Depends(require_role(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.TEST_MANAGER)),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """发布计划：固化当前编辑态用例集合为不可变修订版（企业化改造 M2）。
+
+    发布后计划被修改不会影响已发布修订版；执行始终基于最新已发布修订版。
+    """
+    plan = await _require_plan(plan_id, db)
+    if plan.status != "active":
+        raise HTTPException(400, f"Cannot publish {plan.status} plan")
+
+    state_hash, rows = await _plan_state(plan.id, db)
+    enabled_rows = [(pc, a) for pc, a in rows if pc.enabled]
+    if not enabled_rows:
+        raise HTTPException(400, "计划内无启用用例，无法发布")
+
+    # 已发布且状态未变 → 无需重复发布
+    latest = await _latest_published_revision(plan.id, db)
+    if latest is not None and latest.plan_state_hash == state_hash:
+        return {
+            "code": 0,
+            "data": {
+                "revision": latest.revision,
+                "plan_state_hash": latest.plan_state_hash,
+                "unchanged": True,
+                "message": "当前状态与最新已发布修订版一致，无需重新发布",
+            },
+            "message": "unchanged",
+        }
+
+    # 绑定的默认环境（若档案已删除/未发布则置空）
+    env_id = plan.environment_profile_id if hasattr(plan, "environment_profile_id") else None
+
+    max_rev = (
+        await db.execute(
+            select(func.coalesce(func.max(TestPlanRevision.revision), 0)).where(
+                TestPlanRevision.plan_id == plan.id
+            )
+        )
+    ).scalar() or 0
+
+    now = datetime.utcnow()
+    revision = TestPlanRevision(
+        plan_id=plan.id,
+        revision=int(max_rev) + 1,
+        plan_state_hash=state_hash,
+        case_count=len(rows),
+        enabled_count=len(enabled_rows),
+        status="published",
+        created_by=current_user.id,
+        published_at=now,
+        published_by=current_user.id,
+    )
+    db.add(revision)
+    await db.flush()
+
+    for i, (pc, a) in enumerate(rows):
+        db.add(TestPlanRevisionCase(
+            revision_id=revision.id,
+            case_asset_id=pc.case_asset_id,
+            title=(a.title if a else "（用例已删除）"),
+            execution_kind=(a.execution_kind if a else "api"),
+            design_type=(a.design_type or (a.case_type if a else None)),
+            enabled=pc.enabled,
+            sort_order=i,
+            content_hash=_case_content_hash(a),
+        ))
+
+    # 旧 published → superseded（排除当前，规避 autoflush 覆盖——M1 教训）
+    old_revs = (
+        await db.execute(
+            select(TestPlanRevision).where(
+                TestPlanRevision.plan_id == plan.id,
+                TestPlanRevision.status == "published",
+                TestPlanRevision.id != revision.id,
+            )
+        )
+    ).scalars().all()
+    for r in old_revs:
+        r.status = "superseded"
+
+    await db.commit()
+    await db.refresh(revision)
+    logger.info(f"Plan published: plan={plan.id} revision={revision.revision} cases={revision.enabled_count}")
+    return {
+        "code": 0,
+        "data": {
+            "revision": revision.revision,
+            "revision_id": str(revision.id),
+            "plan_state_hash": revision.plan_state_hash,
+            "case_count": revision.case_count,
+            "enabled_count": revision.enabled_count,
+            "published_at": revision.published_at.isoformat(),
+        },
+        "message": "published",
+    }
+
+
+@router.get("/{plan_id}/revisions")
+async def list_plan_revisions(
+    plan_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """计划修订版历史（发布记录）。"""
+    plan = await _require_plan(plan_id, db)
+    revs = (
+        await db.execute(
+            select(TestPlanRevision)
+            .where(TestPlanRevision.plan_id == plan.id)
+            .order_by(TestPlanRevision.revision.desc())
+        )
+    ).scalars().all()
+    return {
+        "code": 0,
+        "data": {
+            "list": [
+                {
+                    "revision": r.revision,
+                    "status": r.status,
+                    "case_count": r.case_count,
+                    "enabled_count": r.enabled_count,
+                    "plan_state_hash": r.plan_state_hash[:12],
+                    "published_at": r.published_at.isoformat() if r.published_at else None,
+                }
+                for r in revs
+            ]
+        },
+        "message": "success",
+    }
+
+
 class ExecutePlanRequest(BaseModel):
     target_service_url: str | None = None
     # M1：环境档案 —— 优先级高于 target_service_url；须为该项目下「已发布」环境
     environment_profile_id: str | None = None
+    # M2：指定执行的修订版（缺省 = 最新已发布修订版）
+    plan_revision_id: str | None = None
 
 
 @router.post("/{plan_id}/execute")
@@ -630,17 +874,35 @@ async def execute_plan(
     if plan.status != "active":
         raise HTTPException(400, f"Cannot execute {plan.status} plan")
 
-    # 检查启用用例数（scalars() 已提取 case_asset_id 列本身，直接是 UUID 列表）
-    case_ids = (
+    # ===== M2：执行基于已发布修订版（质量合同语义） =====
+    if req.plan_revision_id:
+        try:
+            rid = uuid.UUID(req.plan_revision_id)
+        except ValueError:
+            raise HTTPException(400, f"Invalid plan_revision_id: {req.plan_revision_id}")
+        revision = (
+            await db.execute(select(TestPlanRevision).where(TestPlanRevision.id == rid))
+        ).scalar_one_or_none()
+        if revision is None or revision.plan_id != plan.id:
+            raise HTTPException(404, f"Plan revision not found: {req.plan_revision_id}")
+    else:
+        revision = await _latest_published_revision(plan.id, db)
+        if revision is None:
+            raise HTTPException(400, "计划尚未发布：请先在计划管理中发布后再执行（发布固化当前用例集）")
+
+    revision_cases = (
         await db.execute(
-            select(TestPlanCase.case_asset_id).where(
-                TestPlanCase.plan_id == plan.id,
-                TestPlanCase.enabled.is_(True),
+            select(TestPlanRevisionCase)
+            .where(
+                TestPlanRevisionCase.revision_id == revision.id,
+                TestPlanRevisionCase.enabled.is_(True),
             )
+            .order_by(TestPlanRevisionCase.sort_order.asc())
         )
     ).scalars().all()
+    case_ids = [c.case_asset_id for c in revision_cases]
     if not case_ids:
-        raise HTTPException(400, "计划内无启用用例，请先加入用例")
+        raise HTTPException(400, f"修订版 r{revision.revision} 内无启用用例，请修改计划并重新发布")
 
     # ===== M1：环境解析（档案 > 显式 URL > source_config 回退） =====
     env_profile_id: uuid.UUID | None = None
@@ -715,6 +977,8 @@ async def execute_plan(
         args=[str(run.id), {
             "source_type": "plan",
             "plan_id": str(plan.id),
+            "plan_revision_id": str(revision.id),
+            "plan_revision": revision.revision,
             "case_asset_ids": [str(c) for c in case_ids],
             "project_id": str(plan.project_id),
             "target_service_url": target_url,
@@ -730,6 +994,8 @@ async def execute_plan(
         "data": {
             "test_run_id": str(run.id),
             "plan_id": str(plan.id),
+            "plan_revision_id": str(revision.id),
+            "plan_revision": revision.revision,
             "case_count": len(case_ids),
             "status": "dispatched",
         },

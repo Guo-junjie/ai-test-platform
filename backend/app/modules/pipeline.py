@@ -221,12 +221,10 @@ def run_test_pipeline(self, test_run_id: str, req_dict: dict[str, Any]) -> dict[
                             )
                         ).scalars().all()
                         buckets = {"api": [], "performance": [], "integration": []}
-                        # case_type 枚举是 positive/negative/boundary/exception
-                        # （设计语义是"测试类型"），但 buckets 用 api/performance/integration
-                        # （设计语义是"测试器类型"）——所有用例默认走 API 测试器
-                        _CT_MAP = {"performance": "performance", "integration": "integration"}
+                        # M2：execution_kind 决定执行器（api/performance/integration/...），
+                        # design_type（正向/反向/边界/异常）只表达设计维度，不再混用
                         for a in rows:
-                            t = _CT_MAP.get(a.case_type, "api")
+                            t = (a.execution_kind or "api") if a.execution_kind in ("api", "performance", "integration") else "api"
                             buckets.setdefault(t, []).append({
                                 "case_id": str(a.id),
                                 "case_name": a.title,
