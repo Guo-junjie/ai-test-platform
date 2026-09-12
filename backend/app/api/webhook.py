@@ -361,6 +361,10 @@ async def _dispatch_pipeline_for_project(
         status=TestStatus.PULLING,
         progress=0,
         started_at=_dt.utcnow(),
+        # M3：CI/提交触发的全自动链标记为 webhook 触发源
+        # （该链路属于「快速探索运行」，M5 起将切换为选择已发布计划）
+        trigger_type="webhook",
+        trigger_context={"repo_url": repo_url, "branch": run.branch or "", "commit_sha": commit_sha or ""},
     )
     db.add(run)
     await db.flush()

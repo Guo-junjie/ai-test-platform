@@ -759,6 +759,36 @@ def aggregate_results(
     }})
     _set_task_progress_sync(test_run_id, 100, "测试完成")
 
+    # M3：运行完成事件（时间线）
+    try:
+        import asyncio as _aio
+        import uuid as _uuid
+
+        from app.models.database import RunEvent as _RunEvent
+        from sqlalchemy import func as _func, select as _select
+        from app.utils.database import AsyncSessionLocal as _ASL
+
+        async def _evt():
+            async with _ASL() as session:
+                max_seq = (
+                    await session.execute(
+                        _select(_func.coalesce(_func.max(_RunEvent.sequence), -1)).where(
+                            _RunEvent.test_run_id == _uuid.UUID(test_run_id)
+                        )
+                    )
+                ).scalar() or -1
+                session.add(_RunEvent(
+                    test_run_id=_uuid.UUID(test_run_id),
+                    sequence=int(max_seq) + 1,
+                    event_type="run.completed",
+                    payload={"total": summary["total_tests"], "passed": summary["total_passed"], "failed": summary["total_failed"]},
+                ))
+                await session.commit()
+
+        _aio.run(_evt())
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[{test_run_id}] run.completed event write failed: {e}")
+
     logger.info(
         f"[{test_run_id}] Test execution completed: "
         f"total={summary['total_tests']}, "

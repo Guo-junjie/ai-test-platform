@@ -312,6 +312,25 @@
           </el-steps>
         </div>
 
+        <!-- M3：运行事件时间线 -->
+        <div v-if="runEvents.length > 0" class="step-timeline-box">
+          <div class="timeline-title-row">
+            <span class="timeline-title">运行时间线</span>
+            <span class="timeline-hint">触发来源: <b>{{ triggerLabel }}</b></span>
+          </div>
+          <el-timeline style="padding-left: 4px">
+            <el-timeline-item
+              v-for="e in runEvents"
+              :key="e.sequence"
+              :timestamp="formatTime(e.created_at)"
+              :type="eventTagType(e.event_type)"
+            >
+              <b>{{ eventLabel(e.event_type) }}</b>
+              <span v-if="eventBrief(e)" style="color: #909399; font-size: 12px; margin-left: 6px">{{ eventBrief(e) }}</span>
+            </el-timeline-item>
+          </el-timeline>
+        </div>
+
         <!-- 执行结果概览与快捷闭环出口（当任务完成或已有用例执行结果时呈现） -->
         <div v-if="execSummary || selectedRun.status === 'completed'" class="exec-summary-card" v-loading="execSummaryLoading">
           <div class="summary-header">
@@ -609,6 +628,7 @@ export default defineComponent({
       planExecs: [] as any[],
       planExecsLoading: false,
       publishing: false,
+      runEvents: [] as any[],
 
       STATUS_OPTIONS,
       AUTO_STEPS,
@@ -627,6 +647,10 @@ export default defineComponent({
     },
   },
   computed: {
+    triggerLabel(): string {
+      const m: Record<string, string> = { manual: '手动触发', schedule: '定时触发', webhook: 'CI/Webhook', retry: '重试' }
+      return m[this.selectedRun?.trigger_type || 'manual'] || '手动触发'
+    },
     selectedPlan(): any {
       return this.plans.find((p: any) => p.id === this.selectedPlanId) || null
     },
@@ -812,7 +836,47 @@ export default defineComponent({
       } catch {
         /* 忽略 */
       }
+      // M3：并行拉取运行事件时间线
+      try {
+        const res2: any = await testRunApi.getEvents(runId)
+        this.runEvents = res2?.data?.list || []
+      } catch {
+        this.runEvents = []
+      }
     },
+
+    eventLabel(t: string): string {
+      const map: Record<string, string> = {
+        'run.created': '运行创建',
+        'run.queued': '进入队列',
+        'run.fetch_started': '开始获取代码',
+        'plan.cases_loaded': '计划用例已加载',
+        'analysis.started': '代码解析开始',
+        'execution.dispatched': '测试执行已派发',
+        'execution.started': '执行开始',
+        'run.completed': '运行完成',
+        'run.failed': '运行失败',
+      }
+      return map[t] || t
+    },
+    eventTagType(t: string): string {
+      if (t === 'run.completed') return 'success'
+      if (t === 'run.failed') return 'danger'
+      return 'primary'
+    },
+    eventBrief(e: any): string {
+      const p = e.payload || {}
+      if (e.event_type === 'run.completed') return `共 ${p.total ?? 0} 条，通过 ${p.passed ?? 0}，失败 ${p.failed ?? 0}`
+      if (e.event_type === 'run.failed') return p.error || ''
+      if (e.event_type === 'run.queued' && p.environment) {
+        return p.environment.archived ? '执行环境: 项目回退配置（无档案，证据不完整）' : `环境: ${p.environment.base_url || ''}`
+      }
+      if (e.event_type === 'plan.cases_loaded' && p.counts) {
+        return `用例分布: ${Object.entries(p.counts).map(([k, v]) => `${k}=${v}`).join(' / ')}`
+      }
+      return ''
+    },
+
 
     async loadExecSummary(runId: string): Promise<void> {
       this.execSummaryLoading = true

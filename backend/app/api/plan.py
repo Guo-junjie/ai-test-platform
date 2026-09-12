@@ -870,134 +870,27 @@ async def execute_plan(
     目标环境解析优先级：环境档案（须已发布）> 显式 target_service_url（废弃标记）>
     项目 source_config 回退。
     """
-    plan = await _require_plan(plan_id, db)
-    if plan.status != "active":
-        raise HTTPException(400, f"Cannot execute {plan.status} plan")
+    from app.modules.runs.orchestrator import RunBlocked, RunOrchestrator
 
-    # ===== M2：执行基于已发布修订版（质量合同语义） =====
-    if req.plan_revision_id:
-        try:
-            rid = uuid.UUID(req.plan_revision_id)
-        except ValueError:
-            raise HTTPException(400, f"Invalid plan_revision_id: {req.plan_revision_id}")
-        revision = (
-            await db.execute(select(TestPlanRevision).where(TestPlanRevision.id == rid))
-        ).scalar_one_or_none()
-        if revision is None or revision.plan_id != plan.id:
-            raise HTTPException(404, f"Plan revision not found: {req.plan_revision_id}")
-    else:
-        revision = await _latest_published_revision(plan.id, db)
-        if revision is None:
-            raise HTTPException(400, "计划尚未发布：请先在计划管理中发布后再执行（发布固化当前用例集）")
-
-    revision_cases = (
-        await db.execute(
-            select(TestPlanRevisionCase)
-            .where(
-                TestPlanRevisionCase.revision_id == revision.id,
-                TestPlanRevisionCase.enabled.is_(True),
-            )
-            .order_by(TestPlanRevisionCase.sort_order.asc())
-        )
-    ).scalars().all()
-    case_ids = [c.case_asset_id for c in revision_cases]
-    if not case_ids:
-        raise HTTPException(400, f"修订版 r{revision.revision} 内无启用用例，请修改计划并重新发布")
-
-    # ===== M1：环境解析（档案 > 显式 URL > source_config 回退） =====
-    env_profile_id: uuid.UUID | None = None
-    env_revision_id: uuid.UUID | None = None
-    target_url: str | None = None
-
-    if req.environment_profile_id:
-        from app.models.database import EnvironmentProfile, EnvironmentProfileRevision
-
-        try:
-            epid = uuid.UUID(req.environment_profile_id)
-        except ValueError:
-            raise HTTPException(400, f"Invalid environment_profile_id: {req.environment_profile_id}")
-        env = (
-            await db.execute(select(EnvironmentProfile).where(EnvironmentProfile.id == epid))
-        ).scalar_one_or_none()
-        if env is None:
-            raise HTTPException(404, f"Environment not found: {req.environment_profile_id}")
-        if env.project_id != plan.project_id:
-            raise HTTPException(400, "环境档案不属于该计划所在项目")
-        if env.status != "published" or not env.current_revision_id:
-            raise HTTPException(400, f"环境「{env.name}」尚未发布，请先在项目详情中发布后再执行")
-        rev = (
-            await db.execute(
-                select(EnvironmentProfileRevision).where(
-                    EnvironmentProfileRevision.id == env.current_revision_id
-                )
-            )
-        ).scalar_one_or_none()
-        if rev is None or rev.status != "published":
-            raise HTTPException(400, f"环境「{env.name}」的已发布修订版缺失，请重新发布")
-        cfg = rev.config_json or {}
-        if not cfg.get("base_url"):
-            raise HTTPException(400, f"环境「{env.name}」修订版缺少 base_url，请重新发布")
-        env_profile_id = env.id
-        env_revision_id = rev.id
-        target_url = cfg["base_url"]
-    else:
-        # 旧路径（兼容）：显式 URL > 项目 source_config 回退
-        target_url = (req.target_service_url or "").strip() or None
-        if not target_url and plan.project_id:
-            from app.models.database import Project as _Proj
-            p_row = (await db.execute(select(_Proj).where(_Proj.id == plan.project_id))).scalar_one_or_none()
-            if p_row and p_row.source_config:
-                target_url = p_row.source_config.get("target_service_url")
-
-    # 创建 TestRun（plan_id 标记新模式，source_type=upload 兼容老链路）
-    run = TestRun(
-        id=uuid.uuid4(),
-        project_id=plan.project_id,
-        user_id=current_user.id,
-        source_type="upload",  # 兼容老 source_type 枚举（plan 模式由 plan_id 决定）
-        source_ref=f"plan:{plan.id}",
-        status=TestStatus.PULLING,
-        progress=0,
-        plan_id=plan.id,
-        current_step="pending",
-        target_service_url=target_url,
-        environment_profile_id=env_profile_id,
-        environment_revision_id=env_revision_id,
-    )
-    db.add(run)
-    await db.commit()
-    await db.refresh(run)
-
-    # 派发流水线（plan 模式由 engine 在阶段3支持）
-    from app.celery_app import celery_app as _celery
-    from app.utils.redis_client import get_async_redis
-
-    async_result = _celery.send_task(
-        "app.modules.pipeline.run_test_pipeline",
-        args=[str(run.id), {
-            "source_type": "plan",
-            "plan_id": str(plan.id),
-            "plan_revision_id": str(revision.id),
-            "plan_revision": revision.revision,
-            "case_asset_ids": [str(c) for c in case_ids],
-            "project_id": str(plan.project_id),
-            "target_service_url": target_url,
-        }],
-    )
     try:
-        redis = await get_async_redis()
-        await redis.set(f"task:celery:{run.id}", async_result.id, ex=7 * 24 * 3600)
-    except Exception:  # noqa: BLE001
-        pass
+        result = await RunOrchestrator.create_plan_run(
+            plan_id=plan_id,
+            db=db,
+            environment_profile_id=req.environment_profile_id,
+            plan_revision_id=req.plan_revision_id,
+            trigger_type="manual",
+            trigger_context={"via": "plan-execute", "user": current_user.username},
+            user_id=current_user.id,
+            legacy_target_url=req.target_service_url,
+        )
+    except RunBlocked as e:
+        status = 404 if "不存在" in e.reason else 400
+        raise HTTPException(status, e.reason)
+
     return {
         "code": 0,
         "data": {
-            "test_run_id": str(run.id),
-            "plan_id": str(plan.id),
-            "plan_revision_id": str(revision.id),
-            "plan_revision": revision.revision,
-            "case_count": len(case_ids),
-            "status": "dispatched",
+            **result,
         },
         "message": "test plan execution dispatched",
     }

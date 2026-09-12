@@ -139,46 +139,35 @@ async def execute_scheduled_chain(task_id: str) -> dict[str, Any]:
             test_type = "api"
 
         elif task.target_type.value == "plan":
-            # R3：测试计划周期回归 —— 取计划内 enabled 用例资产，复用用例集合执行路径
+            # M3：定时计划回归转调统一运行编排器（与手动触发同构；
+            # 快照/事件/报告由主流水线产出，本函数不再自行执行用例）
             if not task.target_id:
                 return {"status": "failed", "error": "未绑定测试计划 ID",
                         "test_run_id": None, "total": 0, "passed": 0, "failed": 0}
-            from app.models.database import TestPlan, TestPlanCase
 
-            plan = (
-                await session.execute(
-                    select(TestPlan).where(TestPlan.id == task.target_id)
-                )
-            ).scalar_one_or_none()
-            if plan is None:
-                return {"status": "failed", "error": f"测试计划不存在: {task.target_id}",
+            try:
+                from app.modules.runs.orchestrator import RunBlocked, RunOrchestrator
+
+                async with AsyncSessionLocal() as session:
+                    result = await RunOrchestrator.create_plan_run(
+                        plan_id=task.target_id,
+                        db=session,
+                        trigger_type="schedule",
+                        trigger_context={"scheduled_task_id": task_id, "scheduled_task_name": task.name},
+                        user_id=owner_id,
+                    )
+            except RunBlocked as e:
+                return {"status": "failed", "error": str(e),
                         "test_run_id": None, "total": 0, "passed": 0, "failed": 0}
-            if plan.status != "active":
-                return {"status": "failed", "error": f"测试计划已归档: {plan.name}",
+            except Exception as e:  # noqa: BLE001
+                logger.exception(f"[sched:{task_id}] plan dispatch failed: {e}")
+                return {"status": "failed", "error": f"计划执行派发失败: {e}",
                         "test_run_id": None, "total": 0, "passed": 0, "failed": 0}
-            plan_rows = (
-                await session.execute(
-                    select(TestPlanCase, TestCaseAsset)
-                    .join(TestCaseAsset, TestCaseAsset.id == TestPlanCase.case_asset_id)
-                    .where(TestPlanCase.plan_id == plan.id, TestPlanCase.enabled == True)  # noqa: E712
-                    .order_by(TestPlanCase.sort_order.asc(), TestPlanCase.added_at.asc())
-                )
-            ).all()
-            assets = [asset for _, asset in plan_rows]
-            if not assets:
-                return {
-                    "status": "failed",
-                    "error": f"计划「{plan.name}」内没有启用的用例（请在计划管理中检查）",
-                    "test_run_id": None, "total": 0, "passed": 0, "failed": 0,
-                }
-            cases = [_asset_to_api_case(a) for a in assets]
-            persist_cases = {"api": cases}
 
-            async def run_plan_api():
-                return await APITester().run_tests(cases, service_url)
-
-            run_async = run_plan_api
-            test_type = "api"
+            logger.info(f"[sched:{task_id}] plan run dispatched via orchestrator: {result['test_run_id']}")
+            # 派发即返回；运行结果由主流水线异步产出（test_runs/报告/门禁）
+            return {"status": "dispatched", "test_run_id": result["test_run_id"],
+                    "total": 0, "passed": 0, "failed": 0, "error": None}
 
         elif task.target_type.value == "scenario":
             if not task.target_id:

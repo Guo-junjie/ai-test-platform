@@ -336,6 +336,10 @@ class TestRun(Base):
     # M1：执行所选环境档案及其固化修订版（计划化运行的可复现引用）
     environment_profile_id = Column(UUID(as_uuid=True), nullable=True)
     environment_revision_id = Column(UUID(as_uuid=True), nullable=True)
+    # M3：触发来源统一化 —— manual / schedule / webhook / retry
+    trigger_type = Column(String(20), default="manual", nullable=False)
+    trigger_context = Column(JSONB, default={})
+    run_snapshot_id = Column(UUID(as_uuid=True), nullable=True)
     # 快照 ID
     snapshot_id = Column(String(64))
 
@@ -863,6 +867,11 @@ class TestPlanExecution(Base):
     plan = relationship("TestPlan", back_populates="executions")
     test_run = relationship("TestRun")
 
+    __table_args__ = (
+        Index("idx_test_plan_exec_plan", "plan_id"),
+        Index("idx_test_plan_exec_run", "test_run_id"),
+    )
+
 
 class TestPlanRevision(Base):
     """测试计划修订版（企业化改造 M2）—— 计划即质量合同。
@@ -907,10 +916,32 @@ class TestPlanRevisionCase(Base):
     # 发布时点用例内容指纹（检测内容漂移；内容固化在 P1 资产版本化落地）
     content_hash = Column(String(64), nullable=False)
 
-    __table_args__ = (
-        Index("idx_test_plan_exec_plan", "plan_id"),
-        Index("idx_test_plan_exec_run", "test_run_id"),
-    )
+
+class RunSnapshot(Base):
+    """运行快照（企业化改造 M3）—— 执行前固化全部引用，历史可复现可审计。
+
+    计划修订版、环境修订版、用例集合与内容指纹、引擎版本在进入 preparing
+    前固化；后续计划/环境/资产被修改不影响本快照。
+    """
+    __tablename__ = "run_snapshots"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    test_run_id = Column(UUID(as_uuid=True), ForeignKey("test_runs.id"), nullable=False, index=True)
+    snapshot_json = Column(JSONB, nullable=False, default={})
+    engine_version = Column(String(50), default="pipeline-v1")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class RunEvent(Base):
+    """运行事件时间线（M3）—— 状态迁移与关键节点的追加式记录。"""
+    __tablename__ = "run_events"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    test_run_id = Column(UUID(as_uuid=True), ForeignKey("test_runs.id"), nullable=False, index=True)
+    sequence = Column(Integer, nullable=False, default=0)
+    event_type = Column(String(50), nullable=False)
+    payload = Column(JSONB, default={})
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class Scenario(Base):
@@ -1550,6 +1581,25 @@ async def init_db():
                 logger.info(f"M1 migration: created {created_envs} default environment draft(s) from legacy target_service_url")
     except Exception as e:
         logger.warning(f"Skip default environment seeding: {e}")
+
+    # M3 迁移：test_runs 补触发统一化三列（幂等 ADD COLUMN）。
+    # 存量 Run 一律视为 manual 触发；快照仅新 Run 生成，历史 Run 显示"历史版本，证据可能不完整"。
+    try:
+        async with async_engine.connect() as conn:
+            ac = await conn.execution_options(isolation_level="AUTOCOMMIT")
+            for col_sql in (
+                "ALTER TABLE test_runs ADD COLUMN IF NOT EXISTS trigger_type VARCHAR(20) NOT NULL DEFAULT 'manual'",
+                "ALTER TABLE test_runs ADD COLUMN IF NOT EXISTS trigger_context JSONB DEFAULT '{}'",
+                "ALTER TABLE test_runs ADD COLUMN IF NOT EXISTS run_snapshot_id UUID",
+            ):
+                try:
+                    await ac.execute(text(col_sql))
+                except Exception as e:
+                    logger.warning(f"Failed ({col_sql[:60]}...): {e}")
+    except Exception as e:
+        logger.warning(f"Skip M3 test_runs trigger columns sync: {e}")
+    else:
+        logger.info("M3 TestRun trigger_type/trigger_context/run_snapshot_id columns ensured")
 
     # M2 迁移：用例类型语义拆分 + 计划修订版回填（幂等）。
     # 1) TestCaseAsset 加 execution_kind / design_type 两列并把旧 case_type 迁入；

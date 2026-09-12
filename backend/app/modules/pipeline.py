@@ -32,6 +32,37 @@ from app.modules.execution.engine import (
 from app.modules.ai.model_router import ModelNotConfiguredError
 from app.utils.logger import get_logger
 
+
+def _append_run_event(run_id: str, event_type: str, payload: dict | None = None) -> None:
+    """M3：向 run_events 追加事件（best-effort，失败仅记日志不阻断流水线）。"""
+    try:
+        import asyncio as _aio
+
+        from app.models.database import RunEvent as _RunEvent
+        from sqlalchemy import func as _func, select as _select
+        from app.utils.database import AsyncSessionLocal as _ASL
+
+        async def _write():
+            async with _ASL() as session:
+                max_seq = (
+                    await session.execute(
+                        _select(_func.coalesce(_func.max(_RunEvent.sequence), -1)).where(
+                            _RunEvent.test_run_id == uuid.UUID(run_id)
+                        )
+                    )
+                ).scalar() or -1
+                session.add(_RunEvent(
+                    test_run_id=uuid.UUID(run_id),
+                    sequence=int(max_seq) + 1,
+                    event_type=event_type,
+                    payload=payload or {},
+                ))
+                await session.commit()
+
+        _aio.run(_write())
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[{run_id}] run event '{event_type}' write failed: {e}")
+
 logger = get_logger(__name__)
 
 
@@ -236,6 +267,7 @@ def run_test_pipeline(self, test_run_id: str, req_dict: dict[str, Any]) -> dict[
                 plan_cases, plan_row = asyncio.run(_load_plan_cases())
                 _set_task_status_sync(test_run_id, "loading_cases", {"step": "loading_plan_cases"})
                 _set_task_progress_sync(test_run_id, 30, f"加载计划用例 ({sum(len(v) for v in plan_cases.values())} 条)")
+                _append_run_event(test_run_id, "plan.cases_loaded", {"counts": {k: len(v) for k, v in plan_cases.items()}})
                 if _is_cancelled(test_run_id):
                     raise RunCancelled(test_run_id)
                 logger.info(
@@ -255,6 +287,7 @@ def run_test_pipeline(self, test_run_id: str, req_dict: dict[str, Any]) -> dict[
         if not plan_cases:
             _set_task_status_sync(test_run_id, "pulling", {"step": "fetching_code"})
             _set_task_progress_sync(test_run_id, 10, "拉取代码")
+            _append_run_event(test_run_id, "run.fetch_started", {})
 
         from app.modules.source import SourceAdapterFactory, SourceConfig, SourceType
 
@@ -311,6 +344,7 @@ def run_test_pipeline(self, test_run_id: str, req_dict: dict[str, Any]) -> dict[
             # Step 2: 代码解析（非 plan 模式）
             _set_task_status_sync(test_run_id, "analyzing", {"step": "code_analysis"})
             _set_task_progress_sync(test_run_id, 25, "代码解析")
+            _append_run_event(test_run_id, "analysis.started", {"stack": (stack_info or {}).get("stack") if False else None})
 
             if _is_cancelled(test_run_id):
                 raise RunCancelled(test_run_id)
@@ -428,6 +462,9 @@ def run_test_pipeline(self, test_run_id: str, req_dict: dict[str, Any]) -> dict[
         # Step 4: 测试执行（内部为 Celery chain 的 apply_async，非阻塞）
         _set_task_status_sync(test_run_id, "executing", {"step": "test_execution"})
         _set_task_progress_sync(test_run_id, 50, "调度测试执行")
+        _append_run_event(test_run_id, "execution.dispatched", {
+            "target_service_url": analysis_result.get("service_url_override") or analysis_result.get("repo_path"),
+        })
 
         from app.modules.execution.engine import TestExecutionEngine
 
@@ -451,6 +488,7 @@ def run_test_pipeline(self, test_run_id: str, req_dict: dict[str, Any]) -> dict[
 
         _set_task_status_sync(test_run_id, "failed", {"error": str(e)})
         _set_task_progress_sync(test_run_id, 0, f"失败: {str(e)[:100]}")
+        _append_run_event(test_run_id, "run.failed", {"error": str(e)[:500]})
 
         _mark_run_failed(test_run_id, str(e))
 

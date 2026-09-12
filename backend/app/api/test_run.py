@@ -17,7 +17,15 @@ from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.database import Project, TestRun, TestStatus, User, SourceType as ModelSourceType
+from app.models.database import (
+    Project,
+    RunEvent,
+    RunSnapshot,
+    TestRun,
+    TestStatus,
+    User,
+    SourceType as ModelSourceType,
+)
 from app.modules.auth.dependencies import get_current_user
 from app.utils.database import get_db_session
 from app.utils.logger import get_logger
@@ -313,6 +321,74 @@ async def get_test_run(
             "started_at": run.started_at.isoformat() if run.started_at else None,
             "completed_at": run.completed_at.isoformat() if run.completed_at else None,
             "created_at": run.created_at.isoformat() if run.created_at else None,
+            # M3：触发统一化与快照引用
+            "trigger_type": run.trigger_type or "manual",
+            "trigger_context": run.trigger_context or {},
+            "environment_profile_id": str(run.environment_profile_id) if run.environment_profile_id else None,
+            "environment_revision_id": str(run.environment_revision_id) if run.environment_revision_id else None,
+            "run_snapshot_id": str(run.run_snapshot_id) if run.run_snapshot_id else None,
+        },
+        "message": "success",
+    }
+
+
+@router.get("/{test_run_id}/events")
+async def get_run_events(
+    test_run_id: str,
+    db: AsyncSession = Depends(get_db_session),
+):
+    """运行事件时间线（M3）—— 按序返回状态迁移与关键节点事件。"""
+    try:
+        rid = uuid.UUID(test_run_id)
+    except ValueError:
+        raise HTTPException(400, f"Invalid test_run_id: {test_run_id}")
+    events = (
+        await db.execute(
+            select(RunEvent)
+            .where(RunEvent.test_run_id == rid)
+            .order_by(RunEvent.sequence.asc(), RunEvent.created_at.asc())
+        )
+    ).scalars().all()
+    return {
+        "code": 0,
+        "data": {
+            "list": [
+                {
+                    "sequence": e.sequence,
+                    "event_type": e.event_type,
+                    "payload": e.payload or {},
+                    "created_at": e.created_at.isoformat() if e.created_at else None,
+                }
+                for e in events
+            ],
+            "total": len(events),
+        },
+        "message": "success",
+    }
+
+
+@router.get("/{test_run_id}/snapshot")
+async def get_run_snapshot(
+    test_run_id: str,
+    db: AsyncSession = Depends(get_db_session),
+):
+    """运行快照（M3）—— 执行时固化的计划/环境/用例集合引用。"""
+    try:
+        rid = uuid.UUID(test_run_id)
+    except ValueError:
+        raise HTTPException(400, f"Invalid test_run_id: {test_run_id}")
+    snap = (
+        await db.execute(select(RunSnapshot).where(RunSnapshot.test_run_id == rid))
+    ).scalar_one_or_none()
+    if snap is None:
+        return {"code": 0, "data": None, "message": "no snapshot (历史运行，证据可能不完整)"}
+    return {
+        "code": 0,
+        "data": {
+            "id": str(snap.id),
+            "engine_version": snap.engine_version,
+            "created_at": snap.created_at.isoformat() if snap.created_at else None,
+            "snapshot": snap.snapshot_json or {},
         },
         "message": "success",
     }
