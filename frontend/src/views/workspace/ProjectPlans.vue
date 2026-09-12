@@ -4,7 +4,10 @@
       <template #header>
         <div class="card-row">
           <span>测试计划（发布后的计划可执行；修改后需重新发布）</span>
-          <el-button size="small" @click="loadPlans" :loading="loading">刷新</el-button>
+          <div>
+            <el-button size="small" type="primary" @click="openCreate">新建计划</el-button>
+            <el-button size="small" @click="loadPlans" :loading="loading">刷新</el-button>
+          </div>
         </div>
       </template>
 
@@ -50,7 +53,9 @@
       </el-table>
 
       <el-empty v-if="!loading && plans.length === 0"
-        description="还没有测试计划 —— 用例库中选勾用例后「加入计划」创建" :image-size="70" />
+        description="还没有测试计划 —— 点击「新建计划」创建（可一键纳入已采纳用例），或到用例库勾选用例后「加入计划」" :image-size="70">
+        <el-button type="primary" @click="openCreate">新建计划</el-button>
+      </el-empty>
     </el-card>
 
     <!-- 执行对话框：选择已发布环境 -->
@@ -71,6 +76,31 @@
         <el-button type="primary" :loading="executing" :disabled="!execEnvId" @click="submitExecute">
           启动执行
         </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 新建计划对话框 -->
+    <el-dialog v-model="createVisible" title="新建测试计划" width="520px" :close-on-click-modal="false">
+      <el-form label-width="100px">
+        <el-form-item label="计划名称" required>
+          <el-input v-model="createForm.name" placeholder="例如：订单核心回归 / 全量夜间回归" maxlength="200" show-word-limit />
+        </el-form-item>
+        <el-form-item label="描述">
+          <el-input v-model="createForm.description" type="textarea" :rows="2" placeholder="计划用途（可选）" />
+        </el-form-item>
+        <el-form-item label="纳入用例">
+          <el-checkbox v-model="createForm.autoAdopt">
+            自动纳入本项目全部已采纳用例
+          </el-checkbox>
+          <div class="form-tip">
+            勾选后创建即把用例库中「已采纳」的用例一键收编（上限 500 条）；
+            也可之后到用例库勾选用例「加入计划」。
+          </div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="createVisible = false">取消</el-button>
+        <el-button type="primary" :loading="creating" @click="submitCreate">创建</el-button>
       </template>
     </el-dialog>
   </div>
@@ -95,6 +125,13 @@ export default defineComponent({
       execEnvId: '',
       envs: [] as any[],
       envsLoading: false,
+      createVisible: false,
+      creating: false,
+      createForm: {
+        name: '',
+        description: '',
+        autoAdopt: true,
+      },
     }
   },
   methods: {
@@ -121,6 +158,47 @@ export default defineComponent({
         this.envs = []
       } finally {
         this.envsLoading = false
+      }
+    },
+    openCreate(): void {
+      this.createForm = { name: '', description: '', autoAdopt: true }
+      this.createVisible = true
+    },
+    async submitCreate(): Promise<void> {
+      const name = this.createForm.name.trim()
+      if (name.length < 2) {
+        ElMessage.warning('计划名称至少 2 个字符')
+        return
+      }
+      this.creating = true
+      try {
+        const res: any = await planApi.create({
+          name,
+          description: this.createForm.description?.trim() || undefined,
+          project_id: this.projectId,
+        })
+        const newId = res?.data?.id
+        ElMessage.success(`计划「${name}」创建成功`)
+        // 一键纳入已采纳用例
+        if (newId && this.createForm.autoAdopt) {
+          try {
+            const ba: any = await planApi.bulkAdd(newId, { status: 'adopted', limit: 500 })
+            const added = ba?.data?.added ?? ba?.data?.count ?? 0
+            if (added > 0) {
+              ElMessage.success(`已自动纳入 ${added} 条已采纳用例`)
+            } else {
+              ElMessage.info('项目中暂无已采纳用例 —— 到用例库生成并采纳后再加入')
+            }
+          } catch {
+            /* 拦截器已提示 */
+          }
+        }
+        this.createVisible = false
+        this.loadPlans()
+      } catch {
+        /* 拦截器已提示（重名 409 / 无权限 403） */
+      } finally {
+        this.creating = false
       }
     },
     openExecute(row: any): void {
