@@ -19,6 +19,7 @@ celery_app = Celery(
         "app.modules.scheduler.tasks",
         "app.modules.knowledge.tasks",
         "app.modules.report.tasks",
+        "app.modules.webhook_tasks",
     ],
 )
 

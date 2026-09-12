@@ -16,6 +16,7 @@ SVN Post-commit Hook：
 import hashlib
 import hmac
 import json
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -32,6 +33,52 @@ from app.utils.logger import get_logger
 logger = get_logger()
 
 router = APIRouter()
+
+
+# ==================== 入站事件查询（M5） ====================
+
+
+@router.get("/events")
+async def list_inbound_events(
+    project_id: str | None = None,
+    limit: int = 20,
+    db: AsyncSession = Depends(get_db_session),
+):
+    """入站 Webhook 事件列表（含处理状态与计划选择原因）。"""
+    from sqlalchemy import select as _select
+
+    from app.models.database import InboundEvent as _Inbound
+
+    q = _select(_Inbound).order_by(_Inbound.received_at.desc()).limit(max(1, min(limit, 100)))
+    if project_id:
+        try:
+            q = q.where(_Inbound.project_id == uuid.UUID(project_id))
+        except ValueError:
+            raise HTTPException(400, f"Invalid project_id: {project_id}")
+    rows = (await db.execute(q)).scalars().all()
+    return {
+        "code": 0,
+        "data": {
+            "list": [
+                {
+                    "id": str(e.id),
+                    "provider": e.provider,
+                    "delivery_id": e.delivery_id,
+                    "project_id": str(e.project_id) if e.project_id else None,
+                    "event_type": e.event_type,
+                    "summary": e.payload_summary or {},
+                    "status": e.status,
+                    "status_detail": e.status_detail,
+                    "test_run_id": str(e.test_run_id) if e.test_run_id else None,
+                    "plan_selection": e.plan_selection or {},
+                    "received_at": e.received_at.isoformat() if e.received_at else None,
+                }
+                for e in rows
+            ],
+            "total": len(rows),
+        },
+        "message": "success",
+    }
 
 
 # ==================== GitHub Webhook ====================
@@ -78,78 +125,72 @@ async def github_webhook(
         return {"code": 0, "message": f"Event {x_github_event} ignored"}
 
     # 4. 解析 Push Event
-    payload: dict[str, Any] = json.loads(body)
-    repo_url = payload.get("repository", {}).get("clone_url")
+    payload_data: dict[str, Any] = json.loads(body)
+    repo_url = payload_data.get("repository", {}).get("clone_url")
     if not repo_url:
         raise HTTPException(400, "Cannot extract repository URL from payload")
 
-    ref = payload.get("ref", "refs/heads/main")
+    ref = payload_data.get("ref", "refs/heads/main")
     branch = ref.replace("refs/heads/", "") if ref.startswith("refs/heads/") else "main"
-    commit_sha = payload.get("after")
-    repo_name = payload.get("repository", {}).get("full_name", "unknown")
+    commit_sha = payload_data.get("after")
+    repo_name = payload_data.get("repository", {}).get("full_name", "unknown")
+    delivery_id = request.headers.get("X-GitHub-Delivery") or uuid.uuid4().hex
 
-    logger.info(
-        f"GitHub push event: repo={repo_name}, branch={branch}, commit={commit_sha[:8] if commit_sha else 'N/A'}"
-    )
+    # 5. 匹配项目
+    project = await _match_project(db, repo_url)
 
-    # 5. 从数据库查找匹配的项目配置（获取 GitHub Token）
-    github_token = await _lookup_github_token(db, repo_url)
+    # 6. M5：仅持久化入站事件（幂等：provider+delivery_id 唯一），异步处理
+    from sqlalchemy import select as _select
 
-    # 6. 触发代码拉取
-    config = SourceConfig(
-        source_type=SourceType.GITHUB,
-        repo_url=repo_url,
-        github_token=github_token,
-        branch=branch,
-        commit_sha=commit_sha,
-        incremental=True,
-    )
-
-    # 匹配到项目且开启 auto_trigger 时，直接触发完整测试流水线
-    # （pipeline 第一步就是拉代码，此处跳过手工 fetch 避免重复）
-    trigger_project = await _find_project_by_repo(db, repo_url)
-    if trigger_project is not None and _auto_trigger_matches(trigger_project, branch):
-        run_id = await _dispatch_pipeline_for_project(
-            db, trigger_project, branch=branch, commit_sha=commit_sha
+    from app.models.database import InboundEvent as _Inbound
+    dup = (
+        await db.execute(
+            _select(_Inbound).where(
+                _Inbound.provider == "github",
+                _Inbound.delivery_id == delivery_id,
+            )
         )
-        if run_id:
-            return {
-                "code": 0,
-                "data": {
-                    "event": "push", "repo": repo_name, "branch": branch,
-                    "commit": commit_sha, "triggered_test_run_id": run_id,
-                },
-                "message": "push 已自动触发完整测试流水线",
-            }
+    ).scalar_one_or_none()
+    if dup is not None:
+        logger.info(f"GitHub webhook duplicate delivery ignored: {delivery_id}")
+        return {"code": 0, "data": {"duplicate": True, "event_id": str(dup.id)},
+                "message": "duplicate delivery ignored"}
 
-    try:
-        result = SourceAdapterFactory.fetch_code(config)
-        return {
-            "code": 0,
-            "data": {
-                "event": "push",
-                "repo": repo_name,
-                "branch": branch,
-                "commit": commit_sha,
-                "result": {
-                    "local_path": result.get("local_path"),
-                    "version_id": result.get("version_id"),
-                    "snapshot_id": result.get("snapshot_id"),
-                    "total_files": result.get("total_files"),
-                },
-            },
-            "message": "Webhook processed, code fetched successfully",
-        }
-    except Exception as e:
-        logger.error(f"Webhook-triggered fetch failed: {e}")
-        return {
-            "code": 1,
-            "data": {"event": "push", "repo": repo_name, "error": str(e)},
-            "message": f"Webhook received but fetch failed: {e}",
-        }
+    event = _Inbound(
+        provider="github",
+        delivery_id=delivery_id,
+        project_id=project.id if project else None,
+        event_type="push",
+        payload_summary={
+            "repo_name": repo_name,
+            "repo_url": repo_url,
+            "branch": branch,
+            "commit_sha": commit_sha,
+        },
+        status="received",
+    )
+    if project is None:
+        event.status = "blocked"
+        event.status_detail = f"未找到仓库 {repo_url} 对应的项目配置（请先在项目管理/仓库配置中绑定）"
+        db.add(event)
+        await db.commit()
+        return {"code": 0, "data": {"blocked": True, "event_id": str(event.id)},
+                "message": event.status_detail}
 
+    db.add(event)
+    await db.commit()
+    await db.refresh(event)
 
-# ==================== SVN Webhook ====================
+    # 7. 派发异步处理（celery worker：拉代码→计划选择→计划化 Run）
+    from app.celery_app import celery_app as _celery
+    _celery.send_task("app.modules.webhook_tasks.process_inbound_event", args=[str(event.id)])
+
+    logger.info(f"GitHub webhook accepted: delivery={delivery_id} project={project.id}")
+    return {
+        "code": 0,
+        "data": {"accepted": True, "event_id": str(event.id), "delivery_id": delivery_id},
+        "message": "webhook accepted, processing async (plan-based run)",
+    }
 
 
 @router.post("/svn")
@@ -189,43 +230,78 @@ async def svn_webhook(request: Request):
         f"SVN post-commit webhook: url={svn_url}, revision={revision}"
     )
 
-    # 触发代码拉取
-    config = SourceConfig(
-        source_type=SourceType.SVN,
-        svn_url=svn_url,
-        svn_username=username,
-        svn_password=password,
-        svn_revision=revision,
-        incremental=True,
+    logger.info(
+        f"SVN post-commit webhook: url={svn_url}, revision={revision}"
     )
 
-    # TODO: Phase 4 改为 Celery 异步任务
-    try:
-        result = SourceAdapterFactory.fetch_code(config)
-        return {
-            "code": 0,
-            "data": {
-                "svn_url": svn_url,
-                "revision": revision,
-                "result": {
-                    "local_path": result.get("local_path"),
-                    "version_id": result.get("version_id"),
-                    "snapshot_id": result.get("snapshot_id"),
-                    "total_files": result.get("total_files"),
-                },
-            },
-            "message": "SVN webhook processed, code fetched successfully",
-        }
-    except Exception as e:
-        logger.error(f"SVN webhook-triggered fetch failed: {e}")
-        return {
-            "code": 1,
-            "data": {"svn_url": svn_url, "error": str(e)},
-            "message": f"SVN webhook received but fetch failed: {e}",
-        }
+    # M5：入站事件持久化 + 异步处理（与 GitHub 同构）
+    from sqlalchemy import select as _select
+
+    from app.models.database import InboundEvent as _Inbound
+    delivery_id = uuid.uuid4().hex
+    event = _Inbound(
+        provider="svn",
+        delivery_id=delivery_id,
+        event_type="post-commit",
+        payload_summary={
+            "svn_url": svn_url,
+            "revision": revision,
+            "svn_username": username,
+            "svn_password": password,
+        },
+        status="received",
+    )
+
+    # 按svn_url 匹配项目
+    matched = None
+    result = await db.execute(select(Project).where(Project.is_active == True))  # noqa: E712
+    for proj in result.scalars().all():
+        cfg = proj.source_config or {}
+        stored = cfg.get("svn_url", "")
+        if stored and stored.rstrip("/") == (svn_url or "").rstrip("/"):
+            matched = proj
+            break
+    event.project_id = matched.id if matched else None
+
+    if matched is None:
+        event.status = "blocked"
+        event.status_detail = f"未找到 SVN 地址 {svn_url} 对应的项目配置"
+        db.add(event)
+        await db.commit()
+        return {"code": 0, "data": {"blocked": True, "event_id": str(event.id)},
+                "message": event.status_detail}
+
+    db.add(event)
+    await db.commit()
+    await db.refresh(event)
+
+    from app.celery_app import celery_app as _celery
+    _celery.send_task("app.modules.webhook_tasks.process_inbound_event", args=[str(event.id)])
+
+    logger.info(f"SVN webhook accepted: delivery={delivery_id} project={matched.id}")
+    return {
+        "code": 0,
+        "data": {"accepted": True, "event_id": str(event.id), "delivery_id": delivery_id},
+        "message": "webhook accepted, processing async (plan-based run)",
+    }
+
 
 
 # ==================== 工具函数 ====================
+
+
+async def _match_project(db: AsyncSession, repo_url: str) -> Project | None:
+    """按仓库 URL 匹配项目（与 _lookup_github_token 同样的归一化规则）。"""
+    result = await db.execute(
+        select(Project).where(Project.is_active == True)  # noqa: E712
+    )
+    projects = result.scalars().all()
+    for proj in projects:
+        cfg = proj.source_config or {}
+        stored = cfg.get("repo_url", "")
+        if stored and _normalize_url(stored) == _normalize_url(repo_url):
+            return proj
+    return None
 
 
 async def _lookup_github_token(db: AsyncSession, repo_url: str) -> str:

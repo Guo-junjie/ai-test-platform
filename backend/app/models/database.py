@@ -944,6 +944,34 @@ class RunEvent(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class InboundEvent(Base):
+    """入站 Webhook 事件（企业化改造 M5）—— 验签后先持久化，异步处理。
+
+    provider + delivery_id 唯一（幂等重放）；status 记录处理进度，
+    selection 记录计划选择原因，让用户能回答「为什么这次跑了这个计划」。
+    """
+    __tablename__ = "inbound_events"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    provider = Column(String(30), nullable=False)  # github / svn
+    delivery_id = Column(String(120), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=True, index=True)
+    event_type = Column(String(50), default="push")
+    payload_summary = Column(JSONB, default={})  # repo/branch/commit 摘要（不含完整 payload）
+    # received / processing / processed / blocked / failed / duplicate
+    status = Column(String(20), default="received", nullable=False)
+    status_detail = Column(Text)
+    code_version_id = Column(UUID(as_uuid=True), nullable=True)
+    test_run_id = Column(UUID(as_uuid=True), nullable=True)
+    plan_selection = Column(JSONB, default={})
+    received_at = Column(DateTime, default=datetime.utcnow)
+    processed_at = Column(DateTime)
+
+    __table_args__ = (
+        Index("uq_inbound_delivery", "provider", "delivery_id", unique=True),
+    )
+
+
 class Scenario(Base):
     """测试场景表 — 自然语言编排出的多步串联场景（steps 以 JSONB 存于单表）"""
     __tablename__ = "scenarios"

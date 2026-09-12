@@ -8,7 +8,35 @@
         </div>
       </template>
 
-      <el-table :data="runs" v-loading="loading" stripe row-key="id">
+      <el-collapse class="hook-panel" v-if="hookEvents.length > 0">
+        <el-collapse-item :title="`Webhook 事件（${hookEvents.length}）—— 代码推送触发的计划化运行`">
+          <el-table :data="hookEvents" size="small" stripe>
+            <el-table-column label="来源" width="90" align="center">
+              <template #default="{ row }"><el-tag size="small" effect="plain">{{ row.provider }}</el-tag></template>
+            </el-table-column>
+            <el-table-column label="分支/提交" min-width="150" show-overflow-tooltip>
+              <template #default="{ row }">
+                <span class="mono">{{ row.summary?.branch || '—' }} @ {{ (row.summary?.commit_sha || '').substring(0, 7) }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="状态" width="110" align="center">
+              <template #default="{ row }">
+                <el-tag size="small" :type="hookStatusType(row.status)">{{ hookStatusLabel(row.status) }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="计划选择原因" min-width="220" show-overflow-tooltip>
+              <template #default="{ row }">{{ row.plan_selection?.reason || row.status_detail || '—' }}</template>
+            </el-table-column>
+            <el-table-column label="时间" width="150">
+              <template #default="{ row }">
+                <span class="muted">{{ formatTime(row.received_at) }}</span>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-collapse-item>
+      </el-collapse>
+
+      <el-table :data="runs" v-loading="loading" stripe row-key="id" style="margin-top: 8px">
         <el-table-column type="expand">
           <template #default="{ row }">
             <div class="expand-body" v-loading="row._eventsLoading">
@@ -85,6 +113,7 @@ export default defineComponent({
       projectId: (this.$route.params.id as string) || '',
       runs: [] as any[],
       loading: false,
+      hookEvents: [] as any[],
     }
   },
   methods: {
@@ -116,6 +145,25 @@ export default defineComponent({
         this.loading = false
       }
     },
+    async loadHookEvents(): Promise<void> {
+      try {
+        const api = (await import('@/api')).default
+        const res: any = await api.get('/webhook/events', { params: { project_id: this.projectId, limit: 10 } })
+        this.hookEvents = res?.data?.list || []
+      } catch {
+        this.hookEvents = []
+      }
+    },
+    hookStatusType(s: string): string {
+      return s === 'processed' ? 'success' : s === 'blocked' || s === 'failed' ? 'danger' : 'warning'
+    },
+    hookStatusLabel(s: string): string {
+      const m: Record<string, string> = {
+        received: '已接收', processing: '处理中', processed: '已运行',
+        blocked: '已阻塞', failed: '失败', duplicate: '重复忽略',
+      }
+      return m[s] || s
+    },
     async loadEvents(row: any): Promise<void> {
       if (row._events) return
       row._eventsLoading = true
@@ -144,11 +192,19 @@ export default defineComponent({
   },
   mounted() {
     this.loadRuns()
+    this.loadHookEvents()
   },
 })
 </script>
 
 <style scoped>
+.hook-panel {
+  margin-bottom: 8px;
+}
+.mono {
+  font-family: 'Courier New', Consolas, monospace;
+  font-size: 12px;
+}
 .card-row {
   display: flex;
   justify-content: space-between;
