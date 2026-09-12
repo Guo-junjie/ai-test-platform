@@ -553,7 +553,7 @@ class ReportGenerator:
                 await session.commit()
                 logger.info(f"Report saved to DB for test_run: {test_run_id}")
         except Exception as e:
-            logger.error(f"Failed to save report to DB: {e}")
+            logger.error(f"Failed to save report to DB: {e}", exc_info=True)  # exc_info 定位偶发 KeyError（如历史 'userId'）
 
 
 CATEGORY_TO_DEFECT_TYPE: dict[str, DefectType] = {
