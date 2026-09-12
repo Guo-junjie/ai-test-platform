@@ -25,6 +25,19 @@ const routes = [
     meta: { title: '项目管理' },
   },
   {
+    // M4：项目工作区 —— 项目上下文内的统一壳
+    path: '/projects/:id',
+    component: () => import('@/views/workspace/ProjectWorkspace.vue'),
+    children: [
+      { path: '', redirect: { name: 'ws-overview' } },
+      { path: 'overview', name: 'ws-overview', component: () => import('@/views/workspace/ProjectOverview.vue'), meta: { title: '项目概览' } },
+      { path: 'context', name: 'ws-context', component: () => import('@/views/workspace/ProjectContext.vue'), meta: { title: '测试上下文' } },
+      { path: 'plans', name: 'ws-plans', component: () => import('@/views/workspace/ProjectPlans.vue'), meta: { title: '测试计划' } },
+      { path: 'runs', name: 'ws-runs', component: () => import('@/views/workspace/ProjectRuns.vue'), meta: { title: '运行中心' } },
+      { path: 'quality', name: 'ws-quality', component: () => import('@/views/workspace/ProjectQuality.vue'), meta: { title: '质量结果' } },
+    ],
+  },
+  {
     path: '/test-run',
     name: 'TestRun',
     component: () => import('@/views/TestRun.vue'),
