@@ -155,6 +155,23 @@ class RunOrchestrator:
                 target_url = proj.source_config.get("target_service_url")
             target_url = target_url or (legacy_target_url or "").strip() or None
 
+        # ---- user_id 兜底：调度/Webhook 路径可能无明确操作者 ----
+        if user_id is None:
+            proj = (
+                await db.execute(select(Project).where(Project.id == plan.project_id))
+            ).scalar_one_or_none()
+            user_id = proj.owner_id if proj else None
+            if user_id is None:
+                from app.models.database import User as _User, UserRole as _UserRole
+
+                user_id = (
+                    await db.execute(
+                        select(_User.id)
+                        .where(_User.role == _UserRole.SUPER_ADMIN)
+                        .limit(1)
+                    )
+                ).scalar()
+
         # ---- 创建 Run ----
         now = datetime.utcnow()
         run = TestRun(

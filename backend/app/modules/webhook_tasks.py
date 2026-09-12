@@ -15,7 +15,7 @@ M5 计划选择规则（可解释）：
 import uuid
 from datetime import datetime
 
-from app.celery_app import app
+from app.celery_app import celery_app as app
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -58,8 +58,15 @@ async def _process_async(event_id: str) -> dict:
         await session.commit()
         pid = event.project_id
 
-        # ---- 1. 同步代码 → ProjectCodeVersion ----
+        # ---- 1. 同步代码 → ProjectCodeVersion（项目级 advisory lock 串行化，
+        #         避免并发事件对同一仓库目录并发 clone/pull 互踩）----
         code_version_id: uuid.UUID | None = None
+
+        from sqlalchemy import text as _text
+
+        lock_session = AsyncSessionLocal()
+        lock_conn = await lock_session.connection()
+        await lock_conn.execute(_text("SELECT pg_advisory_lock(hashtext('fetch:' || :k))"), {"k": str(pid)})
         try:
             summary = event.payload_summary or {}
             if event.provider == "github":
@@ -75,7 +82,7 @@ async def _process_async(event_id: str) -> dict:
                     github_token=cfg.get("github_token") or "",
                     branch=summary.get("branch") or "main",
                     commit_sha=summary.get("commit_sha"),
-                    incremental=False,
+                    incremental=True,  # 已有目录走 git pull，避免并发全量克隆互踩
                 ))
             elif event.provider == "svn":
                 # SVN 凭据来自事件摘要（post-commit hook 携带）
@@ -112,6 +119,9 @@ async def _process_async(event_id: str) -> dict:
                 code_version_id = cv.id
         except Exception as e:  # noqa: BLE001
             logger.warning(f"[inbound:{event_id}] code fetch failed (non-fatal): {e}")
+        finally:
+            await lock_conn.execute(_text("SELECT pg_advisory_unlock(hashtext('fetch:' || :k))"), {"k": str(pid)})
+            await lock_session.close()
 
         # ---- 2. 可解释计划选择 ----
         plans = (
