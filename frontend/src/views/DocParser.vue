@@ -294,17 +294,29 @@ async function generateCases() {
     ElMessage.warning('请先选择项目')
     return
   }
+  if (!currentDoc.value?.doc_id) {
+    ElMessage.warning('请先解析接口文档')
+    return
+  }
   try {
     await ElMessageBox.confirm(
-      '将按该项目已导入的接口 AI 生成测试用例，结果存入「用例库」。是否继续？',
+      '将自动导入当前文档的全部接口（已导入的会更新，不重复），然后 AI 生成测试用例并存入「用例库」。是否继续？',
       '生成测试用例',
-      { confirmButtonText: '生成', cancelButtonText: '取消', type: 'info' },
+      { confirmButtonText: '导入并生成', cancelButtonText: '取消', type: 'info' },
     )
   } catch {
     return
   }
   generating.value = true
   try {
+    // 第一步：导入全部接口（幂等——重复导入按 overwrite 更新），避免
+    // 「只解析未导入 → 生成时查不到接口资产」的断链
+    const impRes: any = await docApi.import(currentDoc.value.doc_id, { import_all: true, overwrite: overwrite.value })
+    const imp = impRes?.data || {}
+    ElMessage.success(`接口导入完成：新增 ${imp.imported ?? 0} / 更新 ${imp.updated ?? 0}`)
+    await loadAssets()
+
+    // 第二步：按项目生成用例（覆盖刚导入的接口）
     const res: any = await caseApi.generate({ project_id: projectId.value })
     const cnt = res?.data?.inserted ?? 0
     try {
