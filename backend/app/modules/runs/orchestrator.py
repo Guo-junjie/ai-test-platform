@@ -32,6 +32,7 @@ from app.models.database import (
     TestStatus,
 )
 from app.utils.logger import get_logger
+from app.modules.runs.case_snapshot import case_content_hash, resolve_revision_case_payload
 
 logger = get_logger(__name__)
 
@@ -172,6 +173,28 @@ class RunOrchestrator:
                     )
                 ).scalar()
 
+        # 在创建 Run 前解析完整用例载荷，旧修订版内容漂移时直接阻止执行。
+        case_assets = (
+            await db.execute(
+                select(TestCaseAsset).where(TestCaseAsset.id.in_([c.case_asset_id for c in rev_cases]))
+            )
+        ).scalars().all()
+        asset_map = {a.id: a for a in case_assets}
+        try:
+            snapshot_cases = [
+                {
+                    "case_asset_id": str(c.case_asset_id),
+                    "title": c.title,
+                    "execution_kind": c.execution_kind,
+                    "content_hash": c.content_hash,
+                    "current_content_hash": case_content_hash(asset_map.get(c.case_asset_id)),
+                    "payload": resolve_revision_case_payload(c, asset_map.get(c.case_asset_id)),
+                }
+                for c in rev_cases
+            ]
+        except ValueError as exc:
+            raise RunBlocked(str(exc)) from exc
+
         # ---- 创建 Run ----
         now = datetime.utcnow()
         run = TestRun(
@@ -194,38 +217,9 @@ class RunOrchestrator:
         await db.flush()
 
         # ---- 固化运行快照 ----
-        case_assets = (
-            await db.execute(
-                select(TestCaseAsset).where(TestCaseAsset.id.in_([c.case_asset_id for c in rev_cases]))
-            )
-        ).scalars().all()
-        asset_map = {a.id: a for a in case_assets}
-
-        def _case_hash(a: TestCaseAsset | None) -> str:
-            if a is None:
-                return "deleted"
-            import hashlib
-            import json as _json
-            payload = _json.dumps({
-                "title": a.title,
-                "request_data": a.request_data or {},
-                "expected_result": a.expected_result or {},
-                "priority": a.priority,
-            }, sort_keys=True, ensure_ascii=False, default=str)
-            return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-        snapshot_cases = [
-            {
-                "case_asset_id": str(c.case_asset_id),
-                "title": c.title,
-                "execution_kind": c.execution_kind,
-                "content_hash": c.content_hash,
-                "current_content_hash": _case_hash(asset_map.get(c.case_asset_id)),
-            }
-            for c in rev_cases
-        ]
         snapshot_json = {
             "plan_id": str(plan.id),
+            "plan_name": plan.name,
             "plan_revision_id": str(revision.id),
             "plan_revision": revision.revision,
             "cases": snapshot_cases,

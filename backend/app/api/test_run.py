@@ -179,6 +179,29 @@ async def create_test_run(
         f"repo_url={req.repo_url}, user={current_user.username}"
     )
 
+    # 兼容旧入口的 plan 模式，也必须经统一编排器固化修订版与运行快照。
+    if req.mode == "plan" or req.plan_id:
+        if not req.plan_id:
+            raise HTTPException(400, "plan mode requires plan_id")
+        from app.modules.runs.orchestrator import RunBlocked, RunOrchestrator
+
+        try:
+            result = await RunOrchestrator.create_plan_run(
+                plan_id=req.plan_id,
+                db=db,
+                trigger_type="manual",
+                trigger_context={"via": "test-runs", "user": current_user.username},
+                user_id=current_user.id,
+                legacy_target_url=req.target_service_url,
+            )
+        except RunBlocked as exc:
+            raise HTTPException(400, exc.reason) from exc
+        return {
+            "code": 0,
+            "data": {**result, "status": "pulling"},
+            "message": "Test run created successfully",
+        }
+
     # 1. 解析 source_type
     try:
         source_type = ModelSourceType(req.source_type)

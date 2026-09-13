@@ -878,7 +878,7 @@ class TestPlanRevision(Base):
 
     发布时固化当前编辑态的用例集合与启停状态为不可变修订版；
     执行必须基于已发布修订版，保证「计划被编辑后历史执行含义不变」。
-    M2 固化范围（用例集合/启停/顺序），用例内容固化随资产版本化在 P1 落地。
+    新发布的修订版同时固化执行所需的用例内容。
     """
     __tablename__ = "test_plan_revisions"
 
@@ -902,7 +902,7 @@ class TestPlanRevision(Base):
 
 
 class TestPlanRevisionCase(Base):
-    """计划修订版内的用例快照（固化集合/启停/顺序与发布时点内容指纹）。"""
+    """计划修订版内的用例快照（集合、顺序、内容与指纹）。"""
     __tablename__ = "test_plan_revision_cases"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -913,7 +913,9 @@ class TestPlanRevisionCase(Base):
     design_type = Column(String(50))
     enabled = Column(Boolean, default=True, nullable=False)
     sort_order = Column(Integer, default=0)
-    # 发布时点用例内容指纹（检测内容漂移；内容固化在 P1 资产版本化落地）
+    # 历史修订版该列为空；执行前须核对资产指纹，禁止使用已漂移内容。
+    case_payload = Column(JSONB, nullable=True)
+    # 发布时点用例内容指纹
     content_hash = Column(String(64), nullable=False)
 
 
@@ -1628,6 +1630,16 @@ async def init_db():
         logger.warning(f"Skip M3 test_runs trigger columns sync: {e}")
     else:
         logger.info("M3 TestRun trigger_type/trigger_context/run_snapshot_id columns ensured")
+
+    # 旧库运行时兜底；历史修订版保持 NULL，由运行入口校验内容指纹后补构快照。
+    try:
+        async with async_engine.connect() as conn:
+            ac = await conn.execution_options(isolation_level="AUTOCOMMIT")
+            await ac.execute(text(
+                "ALTER TABLE test_plan_revision_cases ADD COLUMN IF NOT EXISTS case_payload JSONB"
+            ))
+    except Exception as e:
+        logger.warning(f"Skip plan revision case_payload column sync: {e}")
 
     # M2 迁移：用例类型语义拆分 + 计划修订版回填（幂等）。
     # 1) TestCaseAsset 加 execution_kind / design_type 两列并把旧 case_type 迁入；

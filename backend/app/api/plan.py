@@ -39,6 +39,7 @@ from app.models.database import (
     UserRole,
 )
 from app.modules.auth.dependencies import get_current_user, require_role
+from app.modules.runs.case_snapshot import case_content_hash, executable_case_payload
 from app.utils.database import get_db_session
 from app.utils.logger import get_logger
 
@@ -84,20 +85,6 @@ class PlanBulkAdd(BaseModel):
 # ==================== 内部工具 ====================
 
 
-def _case_content_hash(a: TestCaseAsset | None) -> str:
-    """用例内容指纹（发布时点）。内容固化随资产版本化在 P1 落地。"""
-    if a is None:
-        return "deleted"
-    payload = json.dumps({
-        "title": a.title,
-        "request_data": a.request_data or {},
-        "expected_result": a.expected_result or {},
-        "priority": a.priority,
-        "case_type": a.case_type,
-    }, sort_keys=True, ensure_ascii=False, default=str)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
 async def _plan_state(plan_id: uuid.UUID, db: AsyncSession) -> tuple[str, list]:
     """计算计划当前编辑态指纹与启停用例行（TestPlanCase, TestCaseAsset）。"""
     rows = (
@@ -108,8 +95,18 @@ async def _plan_state(plan_id: uuid.UUID, db: AsyncSession) -> tuple[str, list]:
             .order_by(TestPlanCase.sort_order.asc(), TestPlanCase.added_at.asc())
         )
     ).all()
+    state = [
+        {
+            "case_asset_id": str(pc.case_asset_id),
+            "enabled": pc.enabled,
+            "execution_kind": a.execution_kind if a else None,
+            "description": a.description if a else None,
+            "content_hash": case_content_hash(a),
+        }
+        for pc, a in rows
+    ]
     state_hash = hashlib.sha256(
-        "|".join(f"{pc.case_asset_id}:{pc.enabled}" for pc, _ in rows).encode("utf-8")
+        json.dumps(state, sort_keys=True, ensure_ascii=False).encode("utf-8")
     ).hexdigest()
     return state_hash, rows
 
@@ -782,7 +779,8 @@ async def publish_plan(
             design_type=(a.design_type or (a.case_type if a else None)),
             enabled=pc.enabled,
             sort_order=i,
-            content_hash=_case_content_hash(a),
+            content_hash=case_content_hash(a),
+            case_payload=executable_case_payload(a) if a else None,
         ))
 
     # 旧 published → superseded（排除当前，规避 autoflush 覆盖——M1 教训）
@@ -866,7 +864,7 @@ async def execute_plan(
 ):
     """触发执行测试计划：建 TestRun(plan_id=this)，派发完整流水线。
 
-    用例来源从 test_plan_cases 读取：仅 enabled=True 的 case_asset_id。
+    用例来源为已发布修订版，并在运行快照中固化完整执行载荷。
     目标环境解析优先级：环境档案（须已发布）> 显式 target_service_url（废弃标记）>
     项目 source_config 回退。
     """

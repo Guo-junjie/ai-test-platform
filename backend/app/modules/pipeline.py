@@ -220,51 +220,40 @@ def run_test_pipeline(self, test_run_id: str, req_dict: dict[str, Any]) -> dict[
             raise RunCancelled(test_run_id)
 
         # ==================== P0 模式分支 ====================
-        # plan 模式：跳过 fetch/analyze/generate，直接用计划内用例资产入 test_cases
+        # plan 模式：跳过 fetch/analyze/generate，只消费创建 Run 时固化的用例快照。
         plan_id_str = req_dict.get("plan_id")
         plan_cases = None
         if plan_id_str:
             try:
-                from app.models.database import TestCaseAsset, TestPlan, TestPlanCase
+                from app.models.database import RunSnapshot
 
                 async def _load_plan_cases():
-                    """从 test_plan_cases + test_case_assets 取 enabled 用例，按 case_type 分桶。"""
+                    """从运行快照读取已发布修订版的完整执行载荷。"""
                     async with AsyncSessionLocal() as s:
                         pid_uuid = uuid.UUID(plan_id_str)
-                        plan_row = (
+                        run = (
+                            await s.execute(select(TestRun).where(TestRun.id == uuid.UUID(test_run_id)))
+                        ).scalar_one_or_none()
+                        if run is None or run.plan_id != pid_uuid or not run.run_snapshot_id:
+                            raise ValueError("计划运行缺少有效快照，请从已发布计划重新发起执行")
+                        snapshot = (
                             await s.execute(
-                                select(TestPlan).where(TestPlan.id == pid_uuid)
+                                select(RunSnapshot).where(
+                                    RunSnapshot.id == run.run_snapshot_id,
+                                    RunSnapshot.test_run_id == run.id,
+                                )
                             )
                         ).scalar_one_or_none()
-                        if plan_row is None:
-                            raise Exception("plan not found")
-                        if plan_row.status != "active":
-                            raise Exception(f"plan {plan_id_str} is {plan_row.status}, not active")
-                        rows = (
-                            await s.execute(
-                                select(TestCaseAsset)
-                                .join(TestPlanCase, TestPlanCase.case_asset_id == TestCaseAsset.id)
-                                .where(
-                                    TestPlanCase.plan_id == pid_uuid,
-                                    TestPlanCase.enabled.is_(True),
-                                )
-                                .order_by(TestPlanCase.sort_order.asc())
-                            )
-                        ).scalars().all()
-                        buckets = {"api": [], "performance": [], "integration": []}
-                        # M2：execution_kind 决定执行器（api/performance/integration/...），
-                        # design_type（正向/反向/边界/异常）只表达设计维度，不再混用
-                        for a in rows:
-                            t = (a.execution_kind or "api") if a.execution_kind in ("api", "performance", "integration") else "api"
-                            buckets.setdefault(t, []).append({
-                                "case_id": str(a.id),
-                                "case_name": a.title,
-                                "request": a.request_data or {},
-                                "expected": a.expected_result or {},
-                            })
-                        return buckets, plan_row
+                        from app.modules.runs.case_snapshot import cases_from_run_snapshot
 
-                plan_cases, plan_row = asyncio.run(_load_plan_cases())
+                        data = snapshot.snapshot_json if snapshot else None
+                        buckets = cases_from_run_snapshot(
+                            data, plan_id_str, req_dict.get("plan_revision_id"),
+                            req_dict.get("case_asset_ids"),
+                        )
+                        return buckets, data.get("plan_name") or "测试计划", str(run.project_id)
+
+                plan_cases, plan_name_for_result, project_id_for_result = asyncio.run(_load_plan_cases())
                 _set_task_status_sync(test_run_id, "loading_cases", {"step": "loading_plan_cases"})
                 _set_task_progress_sync(test_run_id, 30, f"加载计划用例 ({sum(len(v) for v in plan_cases.values())} 条)")
                 _append_run_event(test_run_id, "plan.cases_loaded", {"counts": {k: len(v) for k, v in plan_cases.items()}})
@@ -277,11 +266,9 @@ def run_test_pipeline(self, test_run_id: str, req_dict: dict[str, Any]) -> dict[
                 )
                 # 计划元数据（供 analysis_result 传递给报告/缺陷）
                 plan_id_for_result = plan_id_str
-                plan_name_for_result = plan_row.name
-                project_id_for_result = str(plan_row.project_id)
             except Exception as e:
                 logger.error(f"[{test_run_id}] plan mode load failed: {e}", exc_info=True)
-                raise RunCancelled  # 走失败路径标 FAILED
+                raise
 
         # Step 1: 代码拉取（非 plan 模式）
         if not plan_cases:
