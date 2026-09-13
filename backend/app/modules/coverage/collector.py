@@ -1,12 +1,9 @@
 """
 coverage/collector — 企业级代码覆盖率探针与采集引擎（能力11）
 
-支持多源覆盖率采集：
-1. 远程 JaCoCo TCP 探针（JVM 远程外挂 -javaagent:output=tcpserver,port=6300，纯 Python Socket 抓取与二进制解析）
-2. 远程 HTTP Dump 端点（如 Spring Boot Actuator / 探针 HTTP 接口获取 XML）
-3. 代码仓库 / 构建产物覆盖率报告自动扫描（jacoco.xml / coverage.xml / cobertura.xml）
-4. 本地 Docker 容器挂载探针采集（原有兼容路径）
-5. 自动化测试执行覆盖率反推（基于测试执行结果与已解析 API 路由的多维度覆盖计算）
+只将真实代码覆盖率报告入库：HTTP 报告地址或关联测试任务工作空间中的
+JaCoCo/Cobertura XML、Go coverprofile。JaCoCo TCP .exec 缺少类文件映射，
+接口测试结果也不能当作代码行覆盖率。
 """
 
 import asyncio
@@ -225,17 +222,21 @@ async def fetch_http_coverage(dump_url: str, timeout: float = 8.0) -> Optional[t
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=3.0), verify=False, follow_redirects=True) as client:
                 resp = await client.get(cand, headers={"User-Agent": "AITP-CoverageCollector/2.0"})
+                resp.raise_for_status()
                 data = resp.content
-
+            if len(data) > 20 * 1024 * 1024:
+                raise ValueError("覆盖率报告超过 20MB")
             if data.startswith(b"\xc0\xc0"):
-                parsed = parse_jacoco_exec(data)
-                return "jacoco_binary", json.dumps(parsed)
-
-            raw_text = data.decode("utf-8", errors="ignore")
-            if "<report" in raw_text or "jacoco" in cand.lower():
+                raise ValueError("JaCoCo .exec 只有探针数据，需先用类文件生成 jacoco.xml")
+            raw_text = data.decode("utf-8-sig")
+            parsed = parse_coverage_report("", raw_text)
+            if parsed["total_lines"] <= 0:
+                raise ValueError("报告没有有效代码行")
+            if raw_text.lstrip().startswith("mode:"):
+                return "go_cover", raw_text
+            if "<report" in raw_text:
                 return "jacoco", raw_text
-            if "<coverage" in raw_text:
-                return "cobertura", raw_text
+            return "cobertura", raw_text
         except Exception as e:
             logger.debug(f"[coverage] candidate {cand} failed: {e}")
             continue
@@ -252,6 +253,8 @@ def scan_workspace_coverage(repo_path: str) -> Optional[tuple[str, str]]:
         "coverage.xml",
         "cobertura.xml",
         "clover.xml",
+        "coverage.out",
+        "cover.out",
     ]
 
     for root, _, files in os.walk(repo_path):
@@ -261,7 +264,7 @@ def scan_workspace_coverage(repo_path: str) -> Optional[tuple[str, str]]:
                 try:
                     with open(p, "r", encoding="utf-8", errors="ignore") as fp:
                         content = fp.read(5 * 1024 * 1024)  # 5MB max
-                    tool = "jacoco" if "jacoco" in f.lower() else "cobertura"
+                    tool = "go_cover" if f.lower().endswith(".out") else "jacoco" if "jacoco" in f.lower() else "cobertura"
                     logger.info(f"[coverage] Found workspace coverage report: {p} ({tool})")
                     return tool, content
                 except Exception as e:
@@ -397,7 +400,7 @@ async def probe_coverage_target(
                 "strategy": "remote_tcp",
                 "target": f"{h}:{p}",
                 "response_time_ms": ms,
-                "message": f"TCP 探针连通成功 ({h}:{p}, 耗时 {ms}ms)",
+                "message": f"TCP 端口可连接 ({h}:{p})；JaCoCo .exec 还需结合类文件生成 jacoco.xml，不能直接计算行覆盖率",
             }
         except Exception as e:
             return {
@@ -427,6 +430,8 @@ async def probe_coverage_target(
             try:
                 async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=2.5), verify=False, follow_redirects=True) as client:
                     resp = await client.get(cand, headers={"User-Agent": "AITP-CoverageProbe/2.0"})
+                    resp.raise_for_status()
+                    parse_coverage_report("", resp.text)
                     ms = round((time.time() - start) * 1000, 2)
                     return {
                         "ok": True,
@@ -435,7 +440,7 @@ async def probe_coverage_target(
                         "target": cand,
                         "status_code": resp.status_code,
                         "response_time_ms": ms,
-                        "message": f"HTTP Dump 端点响应正常 (状态码 {resp.status_code}, 耗时 {ms}ms)",
+                        "message": f"HTTP 地址返回有效覆盖率报告 (状态码 {resp.status_code}, 耗时 {ms}ms)",
                     }
             except Exception as e:
                 last_err = str(e)
@@ -445,9 +450,12 @@ async def probe_coverage_target(
             "strategy": "http_dump",
             "target": url,
             "error": last_err,
-            "message": f"HTTP Dump 端点无法连接: {last_err}",
+            "message": f"HTTP 地址未返回有效覆盖率报告: {last_err}",
         }
 
+    if strategy == "repo_file":
+        return {"ok": False, "reachable": False,
+                "message": "仓库扫描仅在关联测试任务且工作空间存在真实覆盖率报告时可用；请先运行带覆盖率的构建测试"}
     return {"ok": False, "reachable": False, "message": f"未知策略: {strategy}"}
 
 
@@ -462,12 +470,8 @@ async def collect_coverage_for_run(
     """
     全自动覆盖率采集入口（在测试执行流水线完成后或用户点击「立即采集」时调用）。
     
-    采集优先级策略：
-    1. 远程 JaCoCo TCP 探针（若配置了 probe_host 或 target_service_url 支持探针端口）
-    2. 远程 HTTP Dump 端点（若配置了 dump_url）
-    3. 工作空间已有报告扫描（jacoco.xml / coverage.xml）
-    4. 本地 Docker 容器挂载抽取
-    5. 自动化测试执行用例覆盖率反推（保底）
+    严格按项目配置的 HTTP 报告地址或关联测试任务工作空间报告采集；
+    未取得真实报告时返回 None，不生成推算结果。
     """
     logger.info(f"[{test_run_id}] Starting coverage collection...")
     try:
@@ -493,45 +497,32 @@ async def collect_coverage_for_run(
 
     src_cfg = (proj.source_config or {}) if proj else {}
     cov_cfg = src_cfg.get("coverage_config") or {}
-    tool = cov_cfg.get("tool") or src_cfg.get("coverage_tool") or "jacoco"
-    target_url = getattr(run, "target_service_url", None) or src_cfg.get("target_service_url") or ""
+    if run and (cov_cfg.get("enabled") is False or (proj.quality_gate_config or {}).get("auto_coverage") is False):
+        logger.info(f"[{test_run_id}] Automatic coverage collection disabled")
+        return None
+    strategy = cov_cfg.get("strategy") or "repo_file"
+    tool = cov_cfg.get("tool") or src_cfg.get("coverage_tool") or "cobertura"
 
     parsed_result: Optional[dict[str, Any]] = None
     applied_source = CoverageSource.AUTO
 
-    # 1. 尝试远程 JaCoCo TCP Socket 采集
-    probe_host = cov_cfg.get("probe_host") or src_cfg.get("coverage_probe_host")
-    probe_port = cov_cfg.get("probe_port") or src_cfg.get("coverage_probe_port") or 6300
-    if not probe_host and target_url:
-        parsed_u = urllib.parse.urlparse(target_url)
-        probe_host = parsed_u.hostname
-
-    if probe_host:
-        try:
-            raw_exec = dump_jacoco_remote(probe_host, int(probe_port), timeout=5.0)
-            if raw_exec and len(raw_exec) > 4:
-                parsed_result = parse_jacoco_exec(raw_exec)
-                tool = "jacoco"
-                logger.info(f"[{test_run_id}] Remote JaCoCo dump successful: {parsed_result['line_rate']}%")
-        except Exception as e:
-            logger.info(f"[{test_run_id}] Remote JaCoCo TCP dump skipped: {e}")
+    # JaCoCo .exec 只有探针位图，不包含源码行映射，不能冒充行覆盖率。
+    if strategy == "remote_tcp":
+        logger.warning(f"[{test_run_id}] JaCoCo TCP dump requires class files; use an XML report instead")
+        return None
 
     # 2. 尝试远程 HTTP Dump 端点采集
-    if not parsed_result:
+    if strategy == "http_dump":
         dump_url = cov_cfg.get("dump_url") or src_cfg.get("coverage_dump_url")
         if dump_url:
             http_res = await fetch_http_coverage(dump_url)
             if http_res:
                 t_name, text_or_json = http_res
-                if t_name == "jacoco_binary":
-                    parsed_result = json.loads(text_or_json)
-                    tool = "jacoco"
-                else:
-                    parsed_result = parse_coverage_report(t_name, text_or_json)
-                    tool = t_name
+                parsed_result = parse_coverage_report(t_name, text_or_json)
+                tool = t_name
 
     # 3. 尝试工作空间已有 XML 报告扫描
-    if not parsed_result and run:
+    if strategy == "repo_file" and run:
         repo_path = (run.analysis_result or {}).get("repo_path") or ""
         ws_res = scan_workspace_coverage(repo_path)
         if ws_res:
@@ -542,25 +533,12 @@ async def collect_coverage_for_run(
             except Exception as e:
                 logger.warning(f"[{test_run_id}] Parse workspace report failed: {e}")
 
-    # 4. 尝试基于测试用例结果进行 API 场景覆盖率反推（保底策略）
     if not parsed_result:
-        test_results: list[dict[str, Any]] = []
-        if summary_data:
-            for k in ("api_tests", "performance_tests", "integration_tests"):
-                if summary_data.get(k):
-                    test_results.append(summary_data[k])
-        analysis_res = (run.analysis_result if run else {}) or {}
-        proj_name = proj.name if proj else ""
-        parsed_result = synthesize_api_coverage(test_results, analysis_res, proj_name)
-        tool = "jacoco" if "java" in str(analysis_res.get("tech_stack")).lower() else "coverage.py"
-        logger.info(f"[{test_run_id}] Synthesized API coverage: {parsed_result['line_rate']}%")
-
-    if not parsed_result:
-        logger.warning(f"[{test_run_id}] No coverage produced")
+        logger.warning(f"[{test_run_id}] No real coverage report produced (strategy={strategy})")
         return None
 
     # 入库到 coverage_reports 表
-    tool_enum = CoverageTool.JACOCO if tool == "jacoco" else CoverageTool.COBERTURA
+    tool_enum = CoverageTool(tool)
     files_summary = [
         {k: v for k, v in f.items() if k != "lines"}
         for f in parsed_result["files"][:2000]
@@ -575,7 +553,7 @@ async def collect_coverage_for_run(
             project_id=uuid.UUID(pid) if pid else (run.project_id if run else uuid.uuid4()),
             test_run_id=run.id if run else None,
             tool=tool_enum,
-            language="java" if tool == "jacoco" else "python",
+            language={"jacoco": "java", "go_cover": "go", "coverage.py": "python"}.get(tool),
             source=applied_source,
             line_rate=parsed_result["line_rate"],
             branch_rate=parsed_result["branch_rate"],

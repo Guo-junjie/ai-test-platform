@@ -44,11 +44,19 @@ logger = get_logger(__name__)
 
 router = APIRouter()
 
+
+def _is_legacy_estimate(report: CoverageReport) -> bool:
+    """隐藏旧版本把接口执行数伪装为代码行的历史报告，不删除原始数据。"""
+    return report.source == CoverageSource.AUTO and any(
+        item.get("path") == "api/endpoints_tested.py"
+        for item in (report.files_json or [])
+    )
+
 COV_DIR = os.path.join("/app", "data", "uploads", "coverage")
 os.makedirs(COV_DIR, exist_ok=True)
 
 MAX_UPLOAD_SIZE = 20 * 1024 * 1024  # 20MB
-ALLOWED_EXT = {".xml"}
+ALLOWED_EXT = {".xml", ".out"}
 
 
 class DeleteResponse(BaseModel):
@@ -68,7 +76,7 @@ async def upload_coverage(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ):
-    """上传覆盖率报告 XML 并解析入库。"""
+    """上传 JaCoCo/Cobertura XML 或 Go coverprofile 并解析入库。"""
     proj = (
         await db.execute(select(Project).where(Project.id == project_id))
     ).scalar_one_or_none()
@@ -77,30 +85,38 @@ async def upload_coverage(
 
     ext = os.path.splitext(file.filename or "")[1].lower()
     if ext not in ALLOWED_EXT:
-        raise HTTPException(400, "仅支持 .xml 覆盖率报告")
+        raise HTTPException(400, "仅支持 .xml 或 Go coverprofile .out 报告")
 
     content = await file.read()
     if len(content) > MAX_UPLOAD_SIZE:
         raise HTTPException(400, "文件超过 20MB 限制")
-    raw_xml = content.decode("utf-8", errors="ignore")
+    try:
+        raw_xml = content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(400, "报告不是 UTF-8 文本；JaCoCo .exec 需先转换为 jacoco.xml")
 
     # 解析
     try:
         result = parse_coverage_report(tool, raw_xml)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    if tool == "go_cover" and not raw_xml.lstrip().startswith("mode:"):
+        raise HTTPException(400, "选择 Go coverprofile 时请上传 go test -coverprofile 生成的 .out 文件")
 
     # 落盘原始报告
-    stored_name = f"{uuid.uuid4()}.xml"
+    stored_name = f"{uuid.uuid4()}{ext}"
     storage_path = os.path.join(COV_DIR, stored_name)
     with open(storage_path, "wb") as f:
         f.write(content)
 
     # 工具枚举
+    actual_tool = "go_cover" if raw_xml.lstrip().startswith("mode:") else (
+        "jacoco" if "<report" in raw_xml else tool
+    )
     try:
-        tool_enum = CoverageTool(tool)
+        tool_enum = CoverageTool(actual_tool)
     except ValueError:
-        tool_enum = CoverageTool.COBERTURA
+        raise HTTPException(400, f"不支持的覆盖率工具: {tool}")
 
     run_uuid = None
     if test_run_id:
@@ -114,7 +130,7 @@ async def upload_coverage(
         test_run_id=run_uuid,
         uploader_id=current_user.id,
         tool=tool_enum,
-        language=language,
+        language=language or ("go" if actual_tool == "go_cover" else "java" if actual_tool == "jacoco" else None),
         source=CoverageSource.UPLOAD,
         line_rate=result["line_rate"],
         branch_rate=result["branch_rate"],
@@ -171,7 +187,7 @@ async def list_coverage(
     if test_run_id:
         stmt = stmt.where(CoverageReport.test_run_id == uuid.UUID(test_run_id))
     stmt = stmt.order_by(CoverageReport.created_at.desc())
-    rows = (await db.execute(stmt)).scalars().all()
+    rows = [r for r in (await db.execute(stmt)).scalars().all() if not _is_legacy_estimate(r)]
     return {
         "code": 0,
         "data": [
@@ -265,9 +281,8 @@ async def coverage_dashboard(
         select(CoverageReport)
         .where(CoverageReport.project_id == project_id)
         .order_by(CoverageReport.created_at.desc())
-        .limit(2)
     )
-    rows = (await db.execute(stmt)).scalars().all()
+    rows = [r for r in (await db.execute(stmt)).scalars().all() if not _is_legacy_estimate(r)]
     if not rows:
         return {
             "code": 0,
@@ -280,6 +295,8 @@ async def coverage_dashboard(
             },
             "message": "暂无覆盖率报告",
         }
+    report_count = len(rows)
+    rows = rows[:2]
     latest = rows[0]
     prev = rows[1] if len(rows) > 1 else None
     files = latest.files_json or []
@@ -292,7 +309,7 @@ async def coverage_dashboard(
                 "language": latest.language,
                 "source": latest.source.value,
                 "line_rate": latest.line_rate or 0.0,
-                "branch_rate": latest.branch_rate or 0.0,
+                "branch_rate": latest.branch_rate,
                 "total_lines": latest.total_lines or 0,
                 "covered_lines": latest.covered_lines or 0,
                 "total_branches": latest.total_branches or 0,
@@ -304,8 +321,8 @@ async def coverage_dashboard(
             ) if prev else 0.0,
             "diff_branch_rate": round(
                 (latest.branch_rate or 0.0) - (prev.branch_rate or 0.0), 2
-            ) if prev else 0.0,
-            "report_count": len(rows),
+            ) if prev and latest.branch_rate is not None and prev.branch_rate is not None else None,
+            "report_count": report_count,
             "file_count": len(files),
         },
         "message": "success",
@@ -330,7 +347,7 @@ async def coverage_trend(
         )
         .order_by(CoverageReport.created_at.asc())
     )
-    rows = (await db.execute(stmt)).scalars().all()
+    rows = [r for r in (await db.execute(stmt)).scalars().all() if not _is_legacy_estimate(r)]
     return {
         "code": 0,
         "data": {
@@ -339,7 +356,7 @@ async def coverage_trend(
                 for r in rows
             ],
             "line_rate": [float(r.line_rate or 0.0) for r in rows],
-            "branch_rate": [float(r.branch_rate or 0.0) for r in rows],
+            "branch_rate": [float(r.branch_rate) if r.branch_rate is not None else None for r in rows],
         },
         "message": "success",
     }
@@ -482,7 +499,7 @@ async def trigger_collect_coverage(
         project_id=req.project_id,
     )
     if not report_id:
-        raise HTTPException(500, "覆盖率采集失败，请检查项目探针配置或被测环境状态")
+        raise HTTPException(422, "未采集到真实覆盖率报告。请配置返回 XML/Go coverprofile 的 HTTP 地址，或在关联测试任务的代码工作空间生成报告；普通服务 URL 不提供代码覆盖率。")
     return {
         "code": 0,
         "data": {"report_id": report_id},

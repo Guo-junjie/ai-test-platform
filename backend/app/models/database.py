@@ -729,6 +729,7 @@ class CoverageTool(PyEnum):
     JACOCO = "jacoco"             # Java, 输出 JaCoCo XML
     ISTANBUL = "istanbul"         # Node, 输出 lcov / cobertura
     COBERTURA = "cobertura"       # 通用 Cobertura XML
+    GO_COVER = "go_cover"          # Go coverprofile
 
 
 class CoverageSource(PyEnum):
@@ -752,7 +753,7 @@ class CoverageReport(Base):
 
     # 汇总指标（百分比，0-100，保留 2 位）
     line_rate = Column(Float, default=0.0)       # 行覆盖率 %
-    branch_rate = Column(Float, default=0.0)     # 分支覆盖率 %
+    branch_rate = Column(Float, nullable=True)   # Go coverprofile 等格式不提供分支率
     total_lines = Column(Integer, default=0)
     covered_lines = Column(Integer, default=0)
     total_branches = Column(Integer, default=0)

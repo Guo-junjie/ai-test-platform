@@ -48,7 +48,7 @@
           </div>
         </el-tooltip>
         <el-button :disabled="!projectId" @click="refreshAll">刷新</el-button>
-        <el-button type="success" :icon="Odometer" :loading="collecting" :disabled="!projectId" @click="handleCollectNow">立即采集</el-button>
+        <el-button type="success" :icon="Odometer" :loading="collecting" :disabled="!projectId" @click="handleCollectNow">按配置采集</el-button>
         <el-button :icon="Setting" :disabled="!projectId" @click="openProbeConfigDrawer">探针配置</el-button>
         <el-button type="primary" :icon="UploadFilled" :disabled="!projectId" @click="openUploadDialog">上传报告</el-button>
       </div>
@@ -63,7 +63,7 @@
         <el-empty description="该项目暂无覆盖率报告">
           <el-button type="primary" :icon="UploadFilled" @click="openUploadDialog">上传覆盖率报告</el-button>
           <div class="empty-tip">
-            支持 coverage.py / JaCoCo / istanbul / Cobertura 格式的 XML 报告
+            支持 coverage.py / JaCoCo / Cobertura XML，以及 Go <code>go test -coverprofile=coverage.out ./...</code> 生成的报告。普通服务 URL 无法直接提供代码覆盖率。
           </div>
         </el-empty>
       </el-card>
@@ -73,7 +73,7 @@
       <!-- 报告元数据条 -->
       <div v-if="dashboard?.latest" class="report-meta-bar">
         <el-tag :type="dashboard.latest.source === 'auto' ? 'success' : 'info'" size="small" effect="dark">
-          {{ dashboard.latest.source === 'auto' ? '探针自动采集' : '手动上传' }}
+          {{ dashboard.latest.source === 'auto' ? '自动采集' : '手动上传' }}
         </el-tag>
         <span class="meta-item">工具: <b>{{ dashboard.latest.tool }}</b></span>
         <span class="meta-item" v-if="dashboard.latest.language">语言: {{ dashboard.latest.language }}</span>
@@ -92,7 +92,7 @@
       <el-row :gutter="16" class="metric-row">
         <el-col :xs="12" :sm="6">
           <el-card shadow="hover" class="metric-card">
-            <div class="metric-label">行覆盖率</div>
+            <div class="metric-label">{{ dashboard?.latest?.language === 'go' ? '语句覆盖率' : '行覆盖率' }}</div>
             <div class="metric-value" :class="rateClass(dashboard?.latest?.line_rate)">
               {{ fmt(dashboard?.latest?.line_rate) }}<span class="metric-unit">%</span>
             </div>
@@ -113,7 +113,7 @@
           <el-card shadow="hover" class="metric-card">
             <div class="metric-label">分支覆盖率</div>
             <div class="metric-value" :class="rateClass(dashboard?.latest?.branch_rate)">
-              {{ fmt(dashboard?.latest?.branch_rate) }}<span class="metric-unit">%</span>
+              {{ dashboard?.latest?.branch_rate == null ? '未提供' : fmt(dashboard?.latest?.branch_rate) }}<span v-if="dashboard?.latest?.branch_rate != null" class="metric-unit">%</span>
             </div>
             <div class="metric-diff" v-if="dashboard?.diff_branch_rate != null">
               <el-tag
@@ -130,7 +130,7 @@
         </el-col>
         <el-col :xs="12" :sm="6">
           <el-card shadow="hover" class="metric-card">
-            <div class="metric-label">已覆盖行 / 总行</div>
+            <div class="metric-label">{{ dashboard?.latest?.language === 'go' ? '已覆盖语句 / 总语句' : '已覆盖行 / 总行' }}</div>
             <div class="metric-value neutral">
               {{ dashboard?.latest?.covered_lines ?? 0 }}
               <span class="metric-unit-sm">/ {{ dashboard?.latest?.total_lines ?? 0 }}</span>
@@ -327,24 +327,25 @@
             <el-option label="JaCoCo (Java)" value="jacoco" />
             <el-option label="istanbul / nyc (Node)" value="istanbul" />
             <el-option label="Cobertura (通用)" value="cobertura" />
+            <el-option label="Go coverprofile" value="go_cover" />
           </el-select>
         </el-form-item>
         <el-form-item label="语言">
-          <el-input v-model="uploadForm.language" placeholder="可选：python / java / javascript" />
+          <el-input v-model="uploadForm.language" placeholder="可选：python / java / javascript / go" />
         </el-form-item>
-        <el-form-item label="XML 报告" required>
+        <el-form-item label="报告文件" required>
           <el-upload
             :auto-upload="false"
             :limit="1"
             :show-file-list="true"
-            accept=".xml"
+            accept=".xml,.out"
             :on-change="onUploadFileChange"
             :on-exceed="() => ElMessage.warning('每次仅可上传一个文件')"
           >
             <el-button :icon="UploadFilled">选择文件</el-button>
             <template #tip>
               <div class="el-upload__tip">
-                coverage.py 执行 <code>coverage xml</code>、JaCoCo 执行 <code>jacoco:report</code> 生成 XML 后上传（≤ 20MB）
+                Python: <code>coverage xml</code>；Java: <code>jacoco:report</code>；Go: <code>go test -coverprofile=coverage.out ./...</code>（≤ 20MB）。Go 报告为语句覆盖率，不提供分支率。
               </div>
             </template>
           </el-upload>
@@ -369,15 +370,16 @@
             <el-radio-button value="jacoco">JaCoCo</el-radio-button>
             <el-radio-button value="coverage.py">coverage.py</el-radio-button>
             <el-radio-button value="cobertura">Cobertura</el-radio-button>
+            <el-radio-button value="go_cover">Go coverprofile</el-radio-button>
           </el-radio-group>
         </el-form-item>
         <el-form-item label="采集策略">
           <el-select v-model="probeForm.strategy" style="width: 100%">
-            <el-option label="远程 JaCoCo TCP 探针 (6300)" value="remote_tcp" />
-            <el-option label="远程 HTTP Dump 端点 (如 Actuator)" value="http_dump" />
-            <el-option label="代码仓库构建产物自动扫描" value="repo_file" />
+            <el-option label="HTTP 报告地址（返回 XML 或 Go coverprofile）" value="http_dump" />
+            <el-option label="关联测试任务的工作空间报告" value="repo_file" />
           </el-select>
         </el-form-item>
+        <el-alert v-if="probeForm.strategy === 'remote_tcp'" title="JaCoCo TCP 只返回 .exec 探针位图，无法直接计算代码行覆盖率。请改用 XML 报告地址。" type="warning" :closable="false" />
         <template v-if="probeForm.strategy === 'remote_tcp'">
           <el-form-item label="探针主机 IP">
             <el-input v-model="probeForm.probe_host" placeholder="如 192.168.125.128 或被测服务 IP" />
@@ -392,8 +394,8 @@
           </el-form-item>
         </template>
         <el-form-item>
-          <el-button type="info" plain :loading="probing" @click="testProbeConnectivity">
-            测试探针连通性
+          <el-button type="info" plain :loading="probing" :disabled="probeForm.strategy !== 'http_dump'" @click="testProbeConnectivity">
+            校验报告来源
           </el-button>
         </el-form-item>
       </el-form>
@@ -462,10 +464,13 @@ const loadingReports = ref(false)
 
 const dashboard = ref<any>(null)
 const trend = ref<any>({ labels: [], line_rate: [], branch_rate: [] })
-const trendSeries = computed(() => [
-  { name: '行覆盖率', data: trend.value.line_rate || [], color: '#67c23a' },
-  { name: '分支覆盖率', data: trend.value.branch_rate || [], color: '#409eff' },
-])
+const trendSeries = computed(() => {
+  const series = [{ name: '行/语句覆盖率', data: trend.value.line_rate || [], color: '#67c23a' }]
+  if ((trend.value.branch_rate || []).some((rate: number | null) => rate != null)) {
+    series.push({ name: '分支覆盖率', data: trend.value.branch_rate, color: '#409eff' })
+  }
+  return series
+})
 
 const files = ref<any[]>([])
 const filesTotal = ref(0)
@@ -525,8 +530,8 @@ function openProbeConfigDrawer() {
   const cfg = curProj?.coverage_config || curProj?.source_config?.coverage_config || {}
   probeForm.value = {
     enabled: cfg.enabled !== false,
-    tool: cfg.tool || 'jacoco',
-    strategy: cfg.strategy || 'remote_tcp',
+    tool: cfg.tool || 'cobertura',
+    strategy: cfg.strategy || 'repo_file',
     probe_host: cfg.probe_host || curProj?.target_service_url?.replace(/^https?:\/\//, '').split(':')[0] || '',
     probe_port: cfg.probe_port || 6300,
     dump_url: cfg.dump_url || '',
@@ -558,6 +563,14 @@ async function testProbeConnectivity() {
 
 async function saveProbeConfig() {
   if (!projectId.value) return
+  if (probeForm.value.strategy === 'remote_tcp') {
+    ElMessage.warning('JaCoCo TCP .exec 不能直接计算行覆盖率，请选择 XML 报告地址')
+    return
+  }
+  if (probeForm.value.strategy === 'http_dump' && !probeForm.value.dump_url.trim()) {
+    ElMessage.warning('请填写返回覆盖率报告的完整 HTTP 地址')
+    return
+  }
   savingConfig.value = true
   try {
     const res: any = await coverageApi.updateConfig(projectId.value, probeForm.value)
@@ -589,7 +602,8 @@ async function handleCollectNow() {
   try {
     const res: any = await coverageApi.collect({ project_id: projectId.value })
     if (res?.code === 0) {
-      ElMessage.success(res.message || '采集成功！已生成最新覆盖率报告')
+      ElMessage.success(res.message || '真实覆盖率报告已入库')
+      selectedReportId.value = ''
       await refreshAll()
     } else {
       ElMessage.error(res?.message || '采集失败')
@@ -626,7 +640,7 @@ function progressColor(rate: number | null | undefined): string {
 }
 function reportLabel(r: any): string {
   const date = (r.created_at || '').slice(0, 16).replace('T', ' ')
-  return `${date} · ${r.tool} · 行 ${r.line_rate}% / 分支 ${r.branch_rate}% · ${r.covered_lines}/${r.total_lines} 行`
+  return `${date} · ${r.tool} · ${r.language === 'go' ? '语句' : '行'} ${r.line_rate}% · ${r.covered_lines}/${r.total_lines}`
 }
 function lineClass(line: any): string {
   if (line.hits > 0 && line.total_branches > 0 && line.covered_branches < line.total_branches) {
@@ -664,12 +678,14 @@ async function loadReports() {
     const res: any = await coverageApi.list(params)
     const list = res?.data || []
     reports.value = Array.isArray(list) ? list : []
-    if (reports.value.length && !selectedReportId.value) {
+    if (reports.value.length && !reports.value.some((r: any) => r.id === selectedReportId.value)) {
       selectedReportId.value = reports.value[0].id
       latestReportId.value = reports.value[0].id
     } else if (!reports.value.length) {
       selectedReportId.value = ''
       latestReportId.value = ''
+    } else {
+      latestReportId.value = selectedReportId.value
     }
   } catch {
     reports.value = []
@@ -683,6 +699,15 @@ async function loadDashboard() {
   try {
     const res: any = await coverageApi.dashboard(projectId.value)
     dashboard.value = res?.data || null
+    const selected = reports.value.find((r: any) => r.id === selectedReportId.value)
+    if (dashboard.value && selected && selected.id !== dashboard.value.latest?.id) {
+      dashboard.value = { ...dashboard.value, latest: selected,
+        diff_line_rate: null, diff_branch_rate: null }
+    }
+    if (dashboard.value) {
+      dashboard.value.report_count = reports.value.length
+      dashboard.value.file_count = selectedReportId.value ? filesTotal.value : 0
+    }
   } catch {
     dashboard.value = null
   }
@@ -712,6 +737,7 @@ async function loadFiles() {
     const d = res?.data || {}
     files.value = d.files || []
     filesTotal.value = d.total || 0
+    if (dashboard.value) dashboard.value.file_count = filesTotal.value
   } catch {
     files.value = []
     filesTotal.value = 0
@@ -737,6 +763,7 @@ async function onFileRowClick(row: any) {
 }
 
 async function onProjectChange() {
+  runFilter.value = ''
   selectedReportId.value = ''
   latestReportId.value = ''
   files.value = []
@@ -752,6 +779,7 @@ async function onProjectChange() {
 async function onReportChange() {
   latestReportId.value = selectedReportId.value
   page.value = 1
+  await loadDashboard()
   await loadFiles()
 }
 
@@ -774,11 +802,15 @@ function openUploadDialog() {
 function onUploadFileChange(file: any) {
   // el-upload 的 file 对象在 raw
   uploadForm.value.file = file?.raw || null
+  if (uploadForm.value.file?.name.toLowerCase().endsWith('.out')) {
+    uploadForm.value.tool = 'go_cover'
+    uploadForm.value.language = 'go'
+  }
 }
 
 async function submitUpload() {
   if (!uploadForm.value.file || !uploadForm.value.tool) {
-    ElMessage.warning('请选择工具和 XML 文件')
+    ElMessage.warning('请选择工具和报告文件')
     return
   }
   uploading.value = true
@@ -790,9 +822,10 @@ async function submitUpload() {
     })
     const d = res?.data || {}
     ElMessage.success(
-      `已入库：行覆盖 ${d.line_rate}% / 分支 ${d.branch_rate}%（${d.file_count} 个文件）`
+      `已入库：${d.tool === 'go_cover' ? '语句' : '行'}覆盖 ${d.line_rate}%（${d.file_count} 个文件）`
     )
     uploadDialogVisible.value = false
+    selectedReportId.value = ''
     await refreshAll()
   } catch {
     /* 拦截器已提示 */
@@ -818,12 +851,6 @@ function onPageSizeChange(s: number) {
   page.value = 1
   loadFiles()
 }
-
-watch(projectId, (val) => {
-  if (val) {
-    onProjectChange()
-  }
-})
 
 async function initCoverageFromRoute() {
   await loadProjects()

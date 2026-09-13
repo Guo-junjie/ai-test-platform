@@ -34,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 # 与 init_db._ENUM_CASE_PAIRS 保持一致 — 不要忘加新的 PyEnum 列
 _PAIR_LIST: Tuple[Tuple[str, type], ...] = (
+    ("coveragetool", __import__("app.models.database", fromlist=["CoverageTool"]).CoverageTool),
     ("kbchunktype", __import__("app.models.database", fromlist=["KBChunkType"]).KBChunkType),
     ("casesource", __import__("app.models.database", fromlist=["CaseSource"]).CaseSource),
     ("caseassetstatus", __import__("app.models.database", fromlist=["CaseAssetStatus"]).CaseAssetStatus),

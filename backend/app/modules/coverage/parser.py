@@ -120,6 +120,18 @@ def _parse_cobertura(root: ET.Element) -> dict[str, Any]:
                 "lines": f_lines,
             }
         )
+    if not total_lines and files:
+        total_lines = sum(f["total_lines"] for f in files)
+        covered_lines = sum(f["covered_lines"] for f in files)
+        line_rate = _to_pct(covered_lines, total_lines)
+    if not total_branches and files:
+        total_branches = sum(
+            line["total_branches"] for f in files for line in f["lines"]
+        )
+        covered_branches = sum(
+            line["covered_branches"] for f in files for line in f["lines"]
+        )
+        branch_rate = _to_pct(covered_branches, total_branches) if total_branches else None
     return {
         "line_rate": line_rate,
         "branch_rate": branch_rate,
@@ -134,7 +146,7 @@ def _parse_cobertura(root: ET.Element) -> dict[str, Any]:
 def _parse_jacoco(root: ET.Element) -> dict[str, Any]:
     """解析 JaCoCo 原生格式（<report><counter type=LINE/BRANCH>）。"""
     total_lines = total_branches = covered_lines = covered_branches = 0
-    for counter in root.iter("counter"):
+    for counter in root.findall("counter"):
         ctype = (counter.get("type") or "").upper()
         try:
             missed = int(counter.get("missed", "0"))
@@ -215,27 +227,63 @@ def parse_coverage_report(tool: str, raw_xml: str) -> dict[str, Any]:
     if not raw_xml or not raw_xml.strip():
         raise ValueError("覆盖率报告内容为空")
 
+    if raw_xml.lstrip().lower().startswith(("<!doctype html", "<html")):
+        raise ValueError("返回的是网页 HTML，不是覆盖率报告；请配置专门的报告地址或上传报告文件")
+
+    if raw_xml.lstrip().startswith("mode:"):
+        return _parse_go_coverprofile(raw_xml)
+
     try:
         root = ET.fromstring(raw_xml)
     except ET.ParseError as e:
         raise ValueError(f"覆盖率 XML 解析失败: {e}")
 
-    tool_l = (tool or "").lower()
-    tag = root.tag.lower()
+    tag = root.tag.rsplit("}", 1)[-1].lower()
+    if tag == "report" and root.find(".//counter[@type='LINE']") is not None:
+        result = _parse_jacoco(root)
+    elif tag == "coverage":
+        result = _parse_cobertura(root)
+    else:
+        raise ValueError("无法识别的覆盖率报告格式：需要 JaCoCo/Cobertura XML 或 Go coverprofile")
+    if result["total_lines"] <= 0 or not result["files"]:
+        raise ValueError("报告没有有效的文件和代码行，请检查生成命令或报告格式")
+    return result
 
-    # JaCoCo 原生：根标签 <report> 且含 <counter type=...>
-    is_jacoco = tool_l == "jacoco" or (
-        tag.endswith("report") and root.find(".//counter[@type='LINE']") is not None
-    )
-    if is_jacoco:
-        try:
-            return _parse_jacoco(root)
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"JaCoCo parse failed, try cobertura: {e}")
 
-    # Cobertura：根标签 <coverage>
-    try:
-        return _parse_cobertura(root)
-    except Exception as e:  # noqa: BLE001
-        logger.error(f"Cobertura parse failed: {e}")
-        raise ValueError(f"无法识别的覆盖率报告格式（tool={tool}）: {e}")
+def _parse_go_coverprofile(raw_text: str) -> dict[str, Any]:
+    """解析 go test -coverprofile 输出；语句块按 numStmt 加权，避免把块数冒充代码行。"""
+    import re
+
+    rows = raw_text.splitlines()
+    if not rows or rows[0].strip() not in {"mode: set", "mode: count", "mode: atomic"}:
+        raise ValueError("无效的 Go coverprofile 模式")
+    pattern = re.compile(r"^(.+):(\d+)\.(\d+),(\d+)\.(\d+)\s+(\d+)\s+(\d+)$")
+    grouped: dict[str, dict[int, dict[str, Any]]] = {}
+    total = covered = 0
+    for row in rows[1:]:
+        match = pattern.match(row.strip())
+        if not match:
+            raise ValueError(f"无效的 Go coverprofile 数据行: {row[:120]}")
+        path, start, _start_col, end, _end_col, statements, hits = match.groups()
+        start, end, statements, hits = map(int, (start, end, statements, hits))
+        if end < start or statements < 0:
+            raise ValueError("Go coverprofile 行范围或语句数无效")
+        total += statements
+        covered += statements if hits > 0 else 0
+        lines = grouped.setdefault(path, {})
+        for number in range(start, end + 1):
+            if number not in lines or hits > lines[number]["hits"]:
+                lines[number] = {"number": number, "hits": hits, "branch": False,
+                                 "covered_branches": 0, "total_branches": 0}
+    if total <= 0:
+        raise ValueError("Go coverprofile 没有有效的语句块")
+    files = []
+    for path, line_map in grouped.items():
+        lines = sorted(line_map.values(), key=lambda item: item["number"])
+        count = sum(line["hits"] > 0 for line in lines)
+        files.append({"path": path, "line_rate": _to_pct(count, len(lines)),
+                      "branch_rate": None, "total_lines": len(lines),
+                      "covered_lines": count, "lines": lines})
+    return {"line_rate": _to_pct(covered, total), "branch_rate": None,
+            "total_lines": total, "covered_lines": covered,
+            "total_branches": 0, "covered_branches": 0, "files": files}
