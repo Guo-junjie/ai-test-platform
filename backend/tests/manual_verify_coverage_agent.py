@@ -1,6 +1,6 @@
 """在已部署的平台容器内触发 Python 或 Go 样例的真实 Celery 测试链路。
 
-运行：python tests/manual_verify_coverage_agent.py [--language python|go]
+运行：python tests/manual_verify_coverage_agent.py [--language python|go|iotfast]
 需要先启动对应的 test-agent/compose.*example.yml，并将令牌注入 worker。
 此脚本只创建独立验收项目和测试任务，不修改现有项目。
 """
@@ -27,12 +27,19 @@ SAMPLES = {
     "go": {"name": "覆盖率验收样例（Go）", "service": "sample-go",
            "url": "http://host.docker.internal:8766", "token": "COVERAGE_AGENT_GO_SAMPLE_TOKEN",
            "tool": "go_cover"},
+    "iotfast": {"name": "覆盖率验收样例（IoTFast）", "service": "iotfast-go",
+                "url": "http://host.docker.internal:8768", "token": "COVERAGE_AGENT_IOTFAST_TOKEN",
+                "tool": "go_cover", "language": "go", "path": "/swagger",
+                "case_name": "访问 IoTFast Swagger 页面"},
 }
 
 
 async def main(language: str = "python") -> None:
     sample = SAMPLES[language]
-    case = {"case_name": "查询已支付订单", "request": {"method": "GET", "url": "/orders/1"},
+    target_language = sample.get("language", language)
+    path = sample.get("path", "/orders/1")
+    case = {"case_name": sample.get("case_name", "查询已支付订单"),
+            "request": {"method": "GET", "url": path},
             "expected": {"status_code": 200}}
     project_id, run_id = uuid.uuid4(), uuid.uuid4()
     async with AsyncSessionLocal() as db:
@@ -46,19 +53,19 @@ async def main(language: str = "python") -> None:
                            source_type=SourceType.UPLOAD,
                            source_config={"coverage_config": {"enabled": True, "required": True,
                                "services": [{"name": sample["service"], "agent_url": sample["url"],
-                                             "token_env": sample["token"], "language": language,
+                                             "token_env": sample["token"], "language": target_language,
                                              "tool": sample["tool"], "primary": True}]}},
                            quality_gate_config={"auto_coverage": True}))
         db.add(TestRun(id=run_id, project_id=project_id, user_id=user.id,
                        source_type=SourceType.UPLOAD, status=TestStatus.PENDING,
-                       analysis_result={"tech_stack": {"stack": language}}))
+                       analysis_result={"tech_stack": {"stack": target_language}}))
         db.add(TestCase(test_run_id=run_id, case_type="api", case_name=case["case_name"],
                         request_data=case["request"], expected_result=case["expected"],
-                        api_path="/orders/1", http_method="GET"))
+                        api_path=path, http_method="GET"))
         await db.commit()
 
     root_task_id = TestExecutionEngine().execute_all(
-        str(run_id), {"tech_stack": {"stack": language}},
+        str(run_id), {"tech_stack": {"stack": target_language}},
         {"api": [case], "performance": [], "integration": []})
     print(json.dumps({"project_id": str(project_id), "test_run_id": str(run_id),
                       "celery_task_id": root_task_id}, ensure_ascii=False), flush=True)
