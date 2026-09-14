@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -58,7 +58,7 @@ class CreateTestRunRequest(BaseModel):
     source_type: str = "github"  # github / svn / upload
     repo_url: str | None = None
     branch: str = "main"
-    commit_sha: str | None = None
+    commit_sha: str | None = Field(default=None, max_length=40)
     svn_url: str | None = None
     svn_username: str | None = None
     svn_password: str | None = None
@@ -194,6 +194,7 @@ async def create_test_run(
                 trigger_context={"via": "test-runs", "user": current_user.username},
                 user_id=current_user.id,
                 legacy_target_url=req.target_service_url,
+                commit_sha=req.commit_sha,
             )
         except RunBlocked as exc:
             raise HTTPException(400, exc.reason) from exc

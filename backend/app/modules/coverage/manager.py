@@ -202,6 +202,9 @@ class CoverageManager:
                 if coverage_run.commit_sha and deployed_commit and deployed_commit != coverage_run.commit_sha:
                     raise CoverageLifecycleError(
                         f"{service.name}: 部署版本 {deployed_commit} 与测试版本 {coverage_run.commit_sha} 不一致")
+                # 常驻 Java 服务在清零前完成 HTTP 健康检查，避免探测请求计入本次用例覆盖率。
+                if service.language == "java":
+                    await _wait_service_ready(prepared.get("health_url") or prepared.get("service_url"))
                 started_result = (await _agent_request(service, "start", coverage_run.id)).json()
                 if started_result.get("status") != "RUNNING":
                     raise CoverageLifecycleError(f"{service.name}: 插桩服务启动失败")
@@ -209,7 +212,8 @@ class CoverageManager:
                 service_url = started_result.get("service_url") or prepared.get("service_url")
                 if not service_url:
                     raise CoverageLifecycleError(f"{service.name}: Agent 未返回被测服务 URL")
-                await _wait_service_ready(started_result.get("health_url") or prepared.get("health_url") or service_url)
+                if service.language != "java":
+                    await _wait_service_ready(started_result.get("health_url") or prepared.get("health_url") or service_url)
                 await asyncio.sleep(0.5)
                 health = (await _agent_request(service, "status", coverage_run.id)).json()
                 if not health.get("process_alive"):

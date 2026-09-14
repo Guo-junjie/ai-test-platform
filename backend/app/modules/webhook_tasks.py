@@ -61,6 +61,8 @@ async def _process_async(event_id: str) -> dict:
         # ---- 1. 同步代码 → ProjectCodeVersion（项目级 advisory lock 串行化，
         #         避免并发事件对同一仓库目录并发 clone/pull 互踩）----
         code_version_id: uuid.UUID | None = None
+        fetched_version_sha: str | None = None
+        summary = event.payload_summary or {}
 
         from sqlalchemy import text as _text
 
@@ -68,7 +70,6 @@ async def _process_async(event_id: str) -> dict:
         lock_conn = await lock_session.connection()
         await lock_conn.execute(_text("SELECT pg_advisory_lock(hashtext('fetch:' || :k))"), {"k": str(pid)})
         try:
-            summary = event.payload_summary or {}
             if event.provider == "github":
                 from app.modules.source import SourceConfig, SourceAdapterFactory, SourceType
 
@@ -100,6 +101,8 @@ async def _process_async(event_id: str) -> dict:
                 result = None
 
             if result and result.get("local_path"):
+                if event.provider == "github":
+                    fetched_version_sha = result.get("version_id")
                 from app.models.database import ProjectCodeVersion, SourceType as ModelSourceType
 
                 cv = ProjectCodeVersion(
@@ -170,6 +173,7 @@ async def _process_async(event_id: str) -> dict:
                 plan_id=sel_plan.id,
                 db=orch_session,
                 plan_revision_id=sel_rev.id,
+                commit_sha=summary.get("commit_sha") or fetched_version_sha,
                 trigger_type="webhook",
                 trigger_context={
                     "via": "webhook",

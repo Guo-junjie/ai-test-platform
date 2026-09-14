@@ -34,6 +34,17 @@ Java 使用不同的常驻模式：CI 先部署带 JaCoCo Java Agent 的测试�
    ```
 
 4. 在平台后端和 Celery Worker 注入相同的 `COVERAGE_AGENT_...` 令牌变量，配置 Agent 主机白名单和 HTTPS。项目的“探针配置”选择 **远程 Agent → Java（JaCoCo 常驻服务）**，设置唯一测试入口与严格模式。Jenkins 部署成功且健康检查通过后，调用平台创建测试任务；任务所带 Git commit 必须与 Agent 登记的部署 commit 一致。
+   Jenkins 可使用专用 `tester` 账号和凭据库，在部署完成的阶段运行仓库的 [CI 触发脚本](examples/ci_trigger_java_plan.py)。脚本登录平台、向 `POST /api/plans/{plan_id}/execute` 传 `commit_sha`，轮询 Test Run 与 Coverage Run；采集失败或覆盖率门槛未通过时以非零状态退出：
+
+   ```bash
+   export AITP_URL=https://test-platform.example.com
+   export AITP_PLAN_ID=计划的 UUID
+   export DEPLOY_COMMIT_SHA="$GIT_COMMIT"
+   # AITP_USER / AITP_PASSWORD 由 Jenkins Credentials 注入，不写入仓库或构建日志
+   python3 test-agent/examples/ci_trigger_java_plan.py
+   ```
+
+   流程顺序是 **构建 → 部署 JaCoCo 测试 JVM 与相同版本 classfiles → 更新并重启 Agent → 健康检查 → 触发脚本**。GitHub Push Webhook 会在推送时触发计划，可能早于 Jenkins 部署完成；正式接入应选用部署完成后的 CI 触发入口，避免两个入口同时执行同一套用例。
 5. 平台执行 `prepare → start(清零) → API/集成/性能用例 → stop(导出+清零) → JaCoCo CLI report → 解析入库`。Coverage Run 与 Test Run 绑定；采集失败或低于配置的行/分支覆盖率门槛时，严格模式使任务失败，CI 可据此阻断后续部署。**同一 JaCoCo 服务一次仅允许一个采集会话**。要统计“本次请求”必须使用隔离测试环境，防止其他用户、健康探测和并发流水线的请求混入计数器。
 
 仓库提供持续运行的 Java HTTP 验收样例，JaCoCo TCP 只在平台 Docker 内网可达：
@@ -44,6 +55,7 @@ sudo docker compose --env-file .env -f test-agent/compose.java.example.yml up -d
 sudo docker compose up -d --no-deps --force-recreate backend celery-worker
 sudo docker exec -e PYTHONPATH=/app aitp-backend python /app/tests/manual_verify_coverage_agent.py --language java
 sudo docker exec -e PYTHONPATH=/app aitp-backend python /app/tests/manual_verify_java_plan_coverage.py
+sudo docker exec -e PYTHONPATH=/app aitp-backend python /app/tests/manual_verify_java_plan_coverage.py --mismatch
 ```
 
 验收后 `http://<虚拟机>:8204/orders/1` 仍应返回 200；重复执行应得到不同 Test Run 的报告。样例中的 Agent 为内网演示使用 HTTP，正式部署应使用 HTTPS。

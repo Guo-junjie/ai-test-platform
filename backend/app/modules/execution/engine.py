@@ -111,18 +111,14 @@ def _set_task_progress_sync(task_id: str, progress: int, step: str = "") -> None
         json.dumps({"progress": progress, "step": step}, ensure_ascii=False),
         ex=7 * 24 * 3600,
     )
+    # 进度不决定终态：接口/性能等子步骤也会包含“完成”，覆盖率尚未封存。
     # 同步落库：用 raw psycopg2 独立连接（绕开 ORM engine，避免 worker 子进程连接失效）
     try:
         import psycopg2
         from app.config import settings as _s
         _dsn = f"host={_s.POSTGRES_HOST} port={_s.POSTGRES_PORT} dbname={_s.POSTGRES_DB} user={_s.POSTGRES_USER} password={_s.POSTGRES_PASSWORD}"
         with psycopg2.connect(_dsn) as _c, _c.cursor() as _cur:
-            if int(progress) >= 100 or ("完成" in (step or "")):
-                _cur.execute(
-                    "UPDATE test_runs SET progress = %s, current_step = %s, status = 'COMPLETED'::teststatus, completed_at = COALESCE(completed_at, NOW()) WHERE id = %s",
-                    (int(progress), (step or "测试完成")[:50], task_id),
-                )
-            elif step:
+            if step:
                 _cur.execute(
                     "UPDATE test_runs SET progress = %s, current_step = %s WHERE id = %s",
                     (int(progress), step[:50], task_id),
@@ -404,6 +400,11 @@ def prepare_environment(
 
             _mark_run_failed(test_run_id, str(exc))
             raise RuntimeError(str(exc)) from exc
+
+    if instrumented_url:
+        # CoverageManager 已完成服务健康检查；重复发 HTTP 请求会污染 Java 清零后的统计窗口。
+        _set_task_progress_sync(test_run_id, 60, "覆盖率被测环境就绪")
+        return {"service_url": instrumented_url.rstrip("/"), "analysis_result": analysis_result}
 
     if override_url == "http://plan-mode-no-sut":
         logger.info(f"[{test_run_id}] plan mode without SUT or coverage agent: use placeholder URL")

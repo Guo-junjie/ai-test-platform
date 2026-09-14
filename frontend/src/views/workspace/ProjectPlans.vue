@@ -70,6 +70,10 @@
             按已发布修订版 r{{ execPlan?.published_revision }} 执行；环境来自项目环境档案（发布时的配置快照）
           </div>
         </el-form-item>
+        <el-form-item label="部署提交 SHA">
+          <el-input v-model="execCommitSha" placeholder="与 Jenkins 部署版本一致；手动执行可选" />
+          <div class="form-tip">填写后，覆盖率 Agent 会核对部署版本；不一致时拒绝采集。</div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="execVisible = false">取消</el-button>
@@ -123,6 +127,7 @@ export default defineComponent({
       executing: false,
       execPlan: null as any,
       execEnvId: '',
+      execCommitSha: '',
       envs: [] as any[],
       envsLoading: false,
       createVisible: false,
@@ -204,6 +209,7 @@ export default defineComponent({
     openExecute(row: any): void {
       this.execPlan = row
       this.execEnvId = ''
+      this.execCommitSha = ''
       this.execVisible = true
       this.loadEnvs()
     },
@@ -213,6 +219,7 @@ export default defineComponent({
       try {
         const res: any = await planApi.execute(this.execPlan.id, {
           environment_profile_id: this.execEnvId,
+          commit_sha: this.execCommitSha.trim() || undefined,
         })
         ElMessage.success('计划已启动 —— 到「运行中心」查看时间线与结果')
         this.execVisible = false

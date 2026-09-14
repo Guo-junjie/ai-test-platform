@@ -60,6 +60,7 @@ class RunOrchestrator:
         trigger_context: dict[str, Any] | None = None,
         user_id: uuid.UUID | None = None,
         legacy_target_url: str | None = None,
+        commit_sha: str | None = None,
     ) -> dict[str, Any]:
         """创建计划化 Run：预检 → 固化快照 → 建 Run/事件 → 派发流水线。
 
@@ -204,6 +205,7 @@ class RunOrchestrator:
             source_type="upload",  # 兼容老枚举（plan 模式由 plan_id 决定）
             source_ref=f"plan:{plan.id}",
             status=TestStatus.PULLING,
+            commit_sha=commit_sha,
             progress=0,
             plan_id=plan.id,
             current_step="pending",
@@ -230,6 +232,7 @@ class RunOrchestrator:
                 "archived": env_profile is None,  # 无档案=回退路径，证据不完整
             },
             "trigger": {"type": trigger_type, "context": trigger_context or {}},
+            "commit_sha": commit_sha,
         }
         snapshot = RunSnapshot(
             test_run_id=run.id,
@@ -278,6 +281,7 @@ class RunOrchestrator:
                 "case_asset_ids": [str(c.case_asset_id) for c in rev_cases],
                 "project_id": str(plan.project_id),
                 "target_service_url": target_url,
+                "commit_sha": commit_sha,
             }],
         )
         try:

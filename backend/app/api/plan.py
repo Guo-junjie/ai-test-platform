@@ -849,6 +849,7 @@ async def list_plan_revisions(
 
 class ExecutePlanRequest(BaseModel):
     target_service_url: str | None = None
+    commit_sha: str | None = Field(default=None, max_length=40)
     # M1：环境档案 —— 优先级高于 target_service_url；须为该项目下「已发布」环境
     environment_profile_id: str | None = None
     # M2：指定执行的修订版（缺省 = 最新已发布修订版）
@@ -880,6 +881,7 @@ async def execute_plan(
             trigger_context={"via": "plan-execute", "user": current_user.username},
             user_id=current_user.id,
             legacy_target_url=req.target_service_url,
+            commit_sha=req.commit_sha,
         )
     except RunBlocked as e:
         status = 404 if "不存在" in e.reason else 400
