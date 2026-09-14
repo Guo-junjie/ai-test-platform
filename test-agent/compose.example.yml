@@ -1,0 +1,16 @@
+services:
+  coverage-agent-sample:
+    build: .
+    container_name: aitp-coverage-agent-sample
+    environment:
+      COVERAGE_AGENT_TOKEN: ${COVERAGE_AGENT_SAMPLE_TOKEN:?set COVERAGE_AGENT_SAMPLE_TOKEN}
+      COVERAGE_AGENT_CONFIG: /opt/sample/agent.json
+    ports:
+      - "8765:8765"
+      - "8202:8202"
+    volumes:
+      - sample_artifacts:/var/lib/aitp-coverage
+    restart: unless-stopped
+
+volumes:
+  sample_artifacts:

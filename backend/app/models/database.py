@@ -746,6 +746,8 @@ class CoverageReport(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
     test_run_id = Column(UUID(as_uuid=True), ForeignKey("test_runs.id"), nullable=True)
+    coverage_run_id = Column(UUID(as_uuid=True), ForeignKey("coverage_runs.id", ondelete="SET NULL"), nullable=True, index=True)
+    service_name = Column(String(200), nullable=True)
     uploader_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     tool = Column(SAEnum(CoverageTool, name="coveragetool"), nullable=False)
     language = Column(String(50), nullable=True)  # python / java / javascript ...
@@ -768,6 +770,50 @@ class CoverageReport(Base):
         Index("idx_coverage_reports_project", "project_id"),
         Index("idx_coverage_reports_test_run", "test_run_id"),
     )
+
+
+class CoverageRun(Base):
+    """一次测试任务对应的一次覆盖率采集会话；失败与无数据不混同于 0%。"""
+
+    __tablename__ = "coverage_runs"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    test_run_id = Column(UUID(as_uuid=True), ForeignKey("test_runs.id"), unique=True, nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False, index=True)
+    commit_sha = Column(String(40), nullable=True)
+    mode = Column(String(30), nullable=False, default="remote")
+    status = Column(String(30), nullable=False, default="CREATED")
+    required = Column(Boolean, nullable=False, default=False)
+    error_message = Column(Text, nullable=True)
+    total_lines = Column(Integer, nullable=True)
+    covered_lines = Column(Integer, nullable=True)
+    line_rate = Column(Float, nullable=True)
+    total_branches = Column(Integer, nullable=True)
+    covered_branches = Column(Integer, nullable=True)
+    branch_rate = Column(Float, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+
+
+class CoverageService(Base):
+    """一份采集会话中的被测服务及其 Artifact 状态。"""
+
+    __tablename__ = "coverage_services"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    coverage_run_id = Column(UUID(as_uuid=True), ForeignKey("coverage_runs.id"), nullable=False, index=True)
+    name = Column(String(200), nullable=False)
+    primary = Column(Boolean, nullable=False, default=False)
+    language = Column(String(50), nullable=False)
+    tool = Column(String(50), nullable=False)
+    agent_url = Column(String(500), nullable=False)
+    token_env = Column(String(100), nullable=False)
+    service_url = Column(String(500), nullable=True)
+    deployed_commit_sha = Column(String(40), nullable=True)
+    status = Column(String(30), nullable=False, default="CREATED")
+    error_message = Column(Text, nullable=True)
+    artifact_sha256 = Column(String(64), nullable=True)
+    report_id = Column(UUID(as_uuid=True), ForeignKey("coverage_reports.id", ondelete="SET NULL"), nullable=True)
+    __table_args__ = (UniqueConstraint("coverage_run_id", "name", name="uq_coverage_service_run_name"),)
 
 
 
@@ -1256,6 +1302,17 @@ async def init_db():
         await conn.run_sync(Base.metadata.create_all)
 
     logger.info("Database tables created (via Base.metadata.create_all)")
+
+    # create_all 不会给既有表补列；先补齐 Coverage Run 与旧报告的关联字段。
+    async with async_engine.begin() as conn:
+        await conn.execute(text("ALTER TABLE coverage_reports ADD COLUMN IF NOT EXISTS coverage_run_id UUID"))
+        await conn.execute(text("ALTER TABLE coverage_reports ADD COLUMN IF NOT EXISTS service_name VARCHAR(200)"))
+        await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_coverage_reports_coverage_run_id ON coverage_reports (coverage_run_id)"))
+        from sqlalchemy import inspect
+        foreign_keys = await conn.run_sync(lambda sync_conn: inspect(sync_conn).get_foreign_keys("coverage_reports"))
+        if not any(fk.get("constrained_columns") == ["coverage_run_id"] for fk in foreign_keys):
+            await conn.execute(text("""ALTER TABLE coverage_reports ADD CONSTRAINT fk_coverage_reports_run
+                FOREIGN KEY (coverage_run_id) REFERENCES coverage_runs(id) ON DELETE SET NULL"""))
 
     # 旧库补齐 userrole 枚举新增值（新库由 create_all 一次建全，此处为幂等兜底）。
     #

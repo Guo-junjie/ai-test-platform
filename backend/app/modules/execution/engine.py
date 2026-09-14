@@ -391,19 +391,34 @@ def prepare_environment(
 
     # 1. 真实被测环境 URL / 计划占位 URL 处理
     override_url = analysis_result.get("service_url_override") or analysis_result.get("target_service_url")
-    if override_url:
-        if override_url == "http://plan-mode-no-sut":
-            logger.info(f"[{test_run_id}] plan mode without SUT: skip SUT launch, use placeholder URL")
-            return {
-                "service_url": override_url,
-                "analysis_result": analysis_result,
-            }
+    if override_url == "http://plan-mode-no-sut":
+        logger.info(f"[{test_run_id}] plan mode without SUT: skip SUT launch, use placeholder URL")
+        return {"service_url": override_url, "analysis_result": analysis_result}
 
+    # Agent 配置可直接给出被测 URL，无需在项目中重复填写目标地址。
+    from app.modules.coverage.manager import CoverageLifecycleError, CoverageManager
+    try:
+        instrumented_url = asyncio.run(CoverageManager.begin(test_run_id))
+        if instrumented_url:
+            override_url = instrumented_url
+    except CoverageLifecycleError as exc:
+        logger.error(f"[{test_run_id}] {exc}")
+        if exc.required:
+            from app.modules.pipeline import _mark_run_failed
+
+            _mark_run_failed(test_run_id, str(exc))
+            raise RuntimeError(str(exc)) from exc
+
+    if override_url:
         # 真实被测环境 URL：执行预检探针守卫
         logger.info(f"[{test_run_id}] Target service URL configured: {override_url}, probing connectivity...")
         _set_task_progress_sync(test_run_id, 55, f"连通性预检: {override_url}")
         ok, msg, effective_url = _probe_service_url(override_url, timeout=5.0)
         if not ok:
+            try:
+                asyncio.run(CoverageManager.abort(test_run_id, msg))
+            except Exception as cleanup_error:  # noqa: BLE001
+                logger.warning(f"[{test_run_id}] coverage cleanup failed: {cleanup_error}")
             err_text = (
                 f"目标被测服务无法连接 ({override_url}): {msg}。"
                 f"请检查被测服务是否正常启动且测试平台内网可达。"
@@ -488,8 +503,6 @@ def prepare_environment(
                         await s.execute(select(TestRun.project_id).where(TestRun.id == test_run_id))
                     ).scalar_one_or_none()
                     return str(r) if r else None
-
-            import asyncio
 
             pid = asyncio.run(_pid())
             if pid:
@@ -707,6 +720,11 @@ def aggregate_results(
     try:
         _check_cancelled(test_run_id)
     except RunCancelled:
+        try:
+            from app.modules.coverage.manager import CoverageManager
+            asyncio.run(CoverageManager.abort(test_run_id, "测试任务已取消", cancelled=True))
+        except Exception as cleanup_error:  # noqa: BLE001
+            logger.warning(f"[{test_run_id}] coverage cancellation cleanup failed: {cleanup_error}")
         logger.info(f"[{test_run_id}] aggregate aborted: run cancelled")
         return {"cancelled": True}
     _set_task_progress_sync(test_run_id, 95, "汇总测试结果")
@@ -752,6 +770,27 @@ def aggregate_results(
     #   Redis 摘要数据是有，但「逐条用例明细」本来没有，导致 test_results 表空）
     _persist_test_results(test_run_id, test_results)
 
+    # 覆盖率必须在测试任务宣告完成前封存；严格模式的采集失败会使任务失败。
+    try:
+        from app.modules.coverage.manager import CoverageLifecycleError, CoverageManager
+        coverage_run = asyncio.run(CoverageManager.finish(test_run_id))
+        if coverage_run is None:
+            from app.modules.coverage.collector import collect_coverage_for_run
+            asyncio.run(collect_coverage_for_run(test_run_id, summary_data=summary))
+    except CoverageLifecycleError as exc:
+        logger.error(f"[{test_run_id}] coverage collection failed: {exc}")
+        if exc.required:
+            from app.modules.pipeline import _mark_run_failed
+
+            _mark_run_failed(test_run_id, str(exc))
+            raise RuntimeError(str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[{test_run_id}] coverage collection error: {exc}")
+        try:
+            asyncio.run(CoverageManager.abort(test_run_id, str(exc)))
+        except Exception as cleanup_error:  # noqa: BLE001
+            logger.warning(f"[{test_run_id}] coverage error cleanup failed: {cleanup_error}")
+
     _set_task_status_sync(test_run_id, "completed", {"summary": {
         "total": summary["total_tests"],
         "passed": summary["total_passed"],
@@ -795,18 +834,6 @@ def aggregate_results(
         f"passed={summary['total_passed']}, "
         f"failed={summary['total_failed']}"
     )
-
-    # 能力11：测试完成后自动采集覆盖率并入库（支持远程探针、HTTP Dump、仓库扫描与用例执行反推）
-    try:
-        import asyncio
-        from app.modules.coverage.collector import collect_coverage_for_run
-
-        _get_sync_redis().delete(f"coverage:meta:{test_run_id}")
-        rid = asyncio.run(collect_coverage_for_run(test_run_id, summary_data=summary))
-        if rid:
-            logger.info(f"[{test_run_id}] auto coverage report {rid} collected and stored")
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"[{test_run_id}] aggregate auto-collect error (non-fatal): {e}")
 
     # 自动生成测试报告（测试完成均自动触发；异步任务，不阻塞本阶段）
     try:

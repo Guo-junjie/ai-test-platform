@@ -54,6 +54,41 @@
       </div>
     </el-card>
 
+    <el-card v-if="projectId && coverageRuns.length" shadow="never">
+      <template #header>测试任务覆盖率会话</template>
+      <el-table :data="coverageRuns" size="small" max-height="240">
+        <el-table-column label="测试任务" width="130">
+          <template #default="{ row }">{{ row.test_run_id.slice(0, 8) }}</template>
+        </el-table-column>
+        <el-table-column label="采集状态" width="130">
+          <template #default="{ row }">
+            <el-tag :type="coverageStatusType(row.status)">{{ coverageStatusLabel(row.status) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="代码行覆盖率" width="150">
+          <template #default="{ row }">{{ row.line_rate == null ? '暂无产物' : `${row.line_rate}% (${row.covered_lines}/${row.total_lines})` }}</template>
+        </el-table-column>
+        <el-table-column prop="error_message" label="采集说明" show-overflow-tooltip />
+        <el-table-column label="详情" width="90">
+          <template #default="{ row }"><el-button link type="primary" @click="showCoverageRun(row.test_run_id)">查看</el-button></template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
+    <el-dialog v-model="runDialogVisible" title="覆盖率采集详情" width="650px">
+      <template v-if="selectedCoverageRun">
+        <p>测试任务 {{ selectedCoverageRun.test_run_id }} · {{ coverageStatusLabel(selectedCoverageRun.status) }}</p>
+        <el-alert v-if="selectedCoverageRun.error_message" :title="selectedCoverageRun.error_message" type="warning" :closable="false" />
+        <el-table :data="selectedCoverageRun.services || []" style="margin-top: 12px">
+          <el-table-column prop="name" label="服务" />
+          <el-table-column label="状态"><template #default="{ row }">{{ coverageStatusLabel(row.status) }}</template></el-table-column>
+          <el-table-column prop="deployed_commit_sha" label="部署版本" show-overflow-tooltip />
+          <el-table-column label="报告"><template #default="{ row }"><el-button v-if="row.report_id" link type="primary" @click="selectServiceReport(row.report_id)">查看报告</el-button><span v-else>无产物</span></template></el-table-column>
+          <el-table-column prop="error_message" label="错误" show-overflow-tooltip />
+        </el-table>
+      </template>
+    </el-dialog>
+
     <template v-if="!projectId">
       <el-empty description="请先选择项目" />
     </template>
@@ -360,11 +395,37 @@
     </el-dialog>
 
     <!-- 探针配置抽屉 -->
-    <el-drawer v-model="probeDrawerVisible" title="代码覆盖率探针配置" size="480px">
+    <el-drawer v-model="probeDrawerVisible" title="代码覆盖率采集配置" size="520px">
       <el-form label-width="110px" label-position="left">
         <el-form-item label="自动采集">
-          <el-switch v-model="probeForm.enabled" active-text="测试完成后自动采集" />
+          <el-switch v-model="probeForm.enabled" active-text="执行测试时自动采集" />
         </el-form-item>
+        <el-form-item label="采集方式">
+          <el-select v-model="probeForm.strategy" style="width: 100%">
+            <el-option label="远程 Python Agent（测试前启动，测试后回收）" value="agent" />
+            <el-option label="现有 XML 报告地址" value="http_dump" />
+            <el-option label="现有工作空间报告" value="repo_file" />
+          </el-select>
+        </el-form-item>
+        <template v-if="probeForm.strategy === 'agent'">
+          <el-alert title="Agent 需要部署在被测 Python 服务主机。服务启动命令只在 Agent 配置文件中定义，平台不会下发命令。" type="info" :closable="false" style="margin-bottom: 16px" />
+          <el-form-item label="严格模式"><el-switch v-model="probeForm.required" /><span style="margin-left: 8px">采集失败则测试任务失败</span></el-form-item>
+          <el-form-item label="服务名"><el-input v-model="probeForm.agent_service_name" placeholder="与 Agent 登记名一致" /></el-form-item>
+          <el-form-item label="Agent URL"><el-input v-model="probeForm.agent_url" placeholder="https://coverage-agent.example.com" /></el-form-item>
+          <el-form-item label="令牌环境变量"><el-input v-model="probeForm.token_env" placeholder="COVERAGE_AGENT_TOKEN" /></el-form-item>
+          <el-form-item label="测试入口"><el-switch v-model="probeForm.agent_primary" /></el-form-item>
+          <template v-for="(item, index) in extraAgentServices" :key="index">
+            <el-divider>附加服务 {{ index + 1 }}</el-divider>
+            <el-form-item label="服务名"><el-input v-model="item.name" /></el-form-item>
+            <el-form-item label="Agent URL"><el-input v-model="item.agent_url" /></el-form-item>
+            <el-form-item label="令牌环境变量"><el-input v-model="item.token_env" /></el-form-item>
+            <el-form-item label="测试入口"><el-switch v-model="item.primary" /></el-form-item>
+            <el-form-item><el-button type="danger" text @click="extraAgentServices.splice(index, 1)">移除服务</el-button></el-form-item>
+          </template>
+          <el-form-item><el-button @click="addAgentService">添加服务</el-button></el-form-item>
+          <el-form-item><el-button :loading="probing" @click="testAgentConnectivity">校验 Agent</el-button></el-form-item>
+        </template>
+        <template v-else>
         <el-form-item label="覆盖率工具">
           <el-radio-group v-model="probeForm.tool">
             <el-radio-button value="jacoco">JaCoCo</el-radio-button>
@@ -372,12 +433,6 @@
             <el-radio-button value="cobertura">Cobertura</el-radio-button>
             <el-radio-button value="go_cover">Go coverprofile</el-radio-button>
           </el-radio-group>
-        </el-form-item>
-        <el-form-item label="采集策略">
-          <el-select v-model="probeForm.strategy" style="width: 100%">
-            <el-option label="HTTP 报告地址（返回 XML 或 Go coverprofile）" value="http_dump" />
-            <el-option label="关联测试任务的工作空间报告" value="repo_file" />
-          </el-select>
         </el-form-item>
         <el-alert v-if="probeForm.strategy === 'remote_tcp'" title="JaCoCo TCP 只返回 .exec 探针位图，无法直接计算代码行覆盖率。请改用 XML 报告地址。" type="warning" :closable="false" />
         <template v-if="probeForm.strategy === 'remote_tcp'">
@@ -398,6 +453,7 @@
             校验报告来源
           </el-button>
         </el-form-item>
+        </template>
       </el-form>
       <template #footer>
         <el-button @click="probeDrawerVisible = false">取消</el-button>
@@ -458,6 +514,9 @@ async function onAutoCoverageChange(val: boolean): Promise<void> {
   }
 }
 const reports = ref<any[]>([])
+const coverageRuns = ref<any[]>([])
+const selectedCoverageRun = ref<any>(null)
+const runDialogVisible = ref(false)
 const selectedReportId = ref<string>('')
 const latestReportId = ref<string>('')  // 看板数据绑定的报告（默认最新一份）
 const loadingReports = ref(false)
@@ -505,6 +564,7 @@ const collecting = ref(false)
 const probeDrawerVisible = ref(false)
 const probing = ref(false)
 const savingConfig = ref(false)
+const extraAgentServices = ref<any[]>([])
 const probeForm = ref<{
   enabled: boolean
   tool: string
@@ -512,6 +572,11 @@ const probeForm = ref<{
   probe_host: string
   probe_port: number
   dump_url: string
+  required: boolean
+  agent_service_name: string
+  agent_url: string
+  token_env: string
+  agent_primary: boolean
 }>({
   enabled: true,
   tool: 'jacoco',
@@ -519,6 +584,11 @@ const probeForm = ref<{
   probe_host: '',
   probe_port: 6300,
   dump_url: '',
+  required: false,
+  agent_service_name: '',
+  agent_url: '',
+  token_env: 'COVERAGE_AGENT_TOKEN',
+  agent_primary: true,
 })
 
 function openProbeConfigDrawer() {
@@ -528,13 +598,20 @@ function openProbeConfigDrawer() {
   }
   const curProj = projects.value.find((p) => p.id === projectId.value)
   const cfg = curProj?.coverage_config || curProj?.source_config?.coverage_config || {}
+  const agent = cfg.services?.[0] || {}
+  extraAgentServices.value = (cfg.services || []).slice(1).map((item: any) => ({ ...item }))
   probeForm.value = {
     enabled: cfg.enabled !== false,
     tool: cfg.tool || 'cobertura',
-    strategy: cfg.strategy || 'repo_file',
+    strategy: cfg.services?.length ? 'agent' : cfg.strategy || 'repo_file',
     probe_host: cfg.probe_host || curProj?.target_service_url?.replace(/^https?:\/\//, '').split(':')[0] || '',
     probe_port: cfg.probe_port || 6300,
     dump_url: cfg.dump_url || '',
+    required: cfg.required === true,
+    agent_service_name: agent.name || '',
+    agent_url: agent.agent_url || '',
+    token_env: agent.token_env || 'COVERAGE_AGENT_TOKEN',
+    agent_primary: agent.primary !== false,
   }
   probeDrawerVisible.value = true
 }
@@ -561,8 +638,52 @@ async function testProbeConnectivity() {
   }
 }
 
+function agentPayload() {
+  return {
+    name: probeForm.value.agent_service_name.trim(),
+    agent_url: probeForm.value.agent_url.trim(),
+    token_env: probeForm.value.token_env.trim(),
+    language: 'python',
+    tool: 'coverage.py',
+    primary: probeForm.value.agent_primary,
+  }
+}
+
+function addAgentService() {
+  extraAgentServices.value.push({ name: '', agent_url: '', token_env: 'COVERAGE_AGENT_TOKEN',
+    language: 'python', tool: 'coverage.py', primary: false })
+}
+
+async function testAgentConnectivity() {
+  probing.value = true
+  try {
+    const res: any = await coverageApi.probeAgent(agentPayload())
+    ElMessage.success(res?.data?.status === 'READY' ? 'Agent 已就绪' : 'Agent 未就绪')
+  } catch (e: any) {
+    ElMessage.error(e?.message || 'Agent 校验失败')
+  } finally {
+    probing.value = false
+  }
+}
+
 async function saveProbeConfig() {
   if (!projectId.value) return
+  if (probeForm.value.strategy === 'agent' &&
+      (!probeForm.value.agent_service_name.trim() || !probeForm.value.agent_url.trim() || !probeForm.value.token_env.trim())) {
+    ElMessage.warning('请填写 Agent 服务名、地址和令牌环境变量')
+    return
+  }
+  if (probeForm.value.strategy === 'agent') {
+    const services = [agentPayload(), ...extraAgentServices.value]
+    if (services.some((item) => !item.name?.trim() || !item.agent_url?.trim() || !item.token_env?.trim())) {
+      ElMessage.warning('请填写全部 Agent 服务的名称、地址和令牌环境变量')
+      return
+    }
+    if (services.filter((item) => item.primary).length !== 1) {
+      ElMessage.warning('请选择唯一的测试入口服务')
+      return
+    }
+  }
   if (probeForm.value.strategy === 'remote_tcp') {
     ElMessage.warning('JaCoCo TCP .exec 不能直接计算行覆盖率，请选择 XML 报告地址')
     return
@@ -573,14 +694,19 @@ async function saveProbeConfig() {
   }
   savingConfig.value = true
   try {
-    const res: any = await coverageApi.updateConfig(projectId.value, probeForm.value)
+    const payload = {
+      ...probeForm.value,
+      tool: probeForm.value.strategy === 'agent' ? 'coverage.py' : probeForm.value.tool,
+      services: probeForm.value.strategy === 'agent' ? [agentPayload(), ...extraAgentServices.value] : [],
+    }
+    const res: any = await coverageApi.updateConfig(projectId.value, payload)
     if (res?.code === 0) {
       ElMessage.success('探针配置已保存')
       const curProj = projects.value.find((p) => p.id === projectId.value)
       if (curProj) {
-        curProj.coverage_config = { ...probeForm.value }
+        curProj.coverage_config = { ...payload }
         if (!curProj.source_config) curProj.source_config = {}
-        curProj.source_config.coverage_config = { ...probeForm.value }
+        curProj.source_config.coverage_config = { ...payload }
       }
       probeDrawerVisible.value = false
     } else {
@@ -640,7 +766,39 @@ function progressColor(rate: number | null | undefined): string {
 }
 function reportLabel(r: any): string {
   const date = (r.created_at || '').slice(0, 16).replace('T', ' ')
-  return `${date} · ${r.tool} · ${r.language === 'go' ? '语句' : '行'} ${r.line_rate}% · ${r.covered_lines}/${r.total_lines}`
+  return `${date} · ${r.service_name ? `${r.service_name} · ` : ''}${r.tool} · ${r.language === 'go' ? '语句' : '行'} ${r.line_rate}% · ${r.covered_lines}/${r.total_lines}`
+}
+function coverageStatusLabel(status: string): string {
+  return ({ PREPARING: '准备中', RUNNING: '采集中', COLLECTING: '解析中',
+    COMPLETED: '已完成', PARTIAL: '部分成功', FAILED: '失败',
+    NO_ARTIFACT: '无覆盖率产物', CANCELLED: '已取消' } as Record<string, string>)[status] || status
+}
+function coverageStatusType(status: string): 'success' | 'warning' | 'danger' | 'info' {
+  return status === 'COMPLETED' ? 'success' : status === 'PARTIAL' || status === 'NO_ARTIFACT'
+    ? 'warning' : status === 'FAILED' ? 'danger' : 'info'
+}
+async function loadCoverageRuns() {
+  if (!projectId.value) return
+  try {
+    const res: any = await coverageApi.runs(projectId.value)
+    coverageRuns.value = Array.isArray(res?.data) ? res.data : []
+  } catch {
+    coverageRuns.value = []
+  }
+}
+async function showCoverageRun(testRunId: string) {
+  try {
+    const res: any = await coverageApi.run(testRunId)
+    selectedCoverageRun.value = res?.data || null
+    runDialogVisible.value = true
+  } catch (e: any) {
+    ElMessage.error(e?.message || '加载采集详情失败')
+  }
+}
+async function selectServiceReport(reportId: string) {
+  runDialogVisible.value = false
+  selectedReportId.value = reportId
+  await onReportChange()
 }
 function lineClass(line: any): string {
   if (line.hits > 0 && line.total_branches > 0 && line.covered_branches < line.total_branches) {
@@ -770,6 +928,8 @@ async function onProjectChange() {
   filesTotal.value = 0
   dashboard.value = null
   trend.value = { labels: [], line_rate: [], branch_rate: [] }
+  coverageRuns.value = []
+  await loadCoverageRuns()
   await loadReports()
   await loadDashboard()
   await loadTrend()
@@ -784,6 +944,7 @@ async function onReportChange() {
 }
 
 async function refreshAll() {
+  await loadCoverageRuns()
   await loadReports()
   await loadDashboard()
   await loadTrend()
@@ -861,6 +1022,7 @@ async function initCoverageFromRoute() {
     await onProjectChange()
   } else if (rid) {
     runFilter.value = rid
+    await showCoverageRun(rid).catch(() => undefined)
     await loadReports()
   } else if (projects.value.length > 0) {
     projectId.value = projects.value[0].id

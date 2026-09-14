@@ -1,0 +1,15 @@
+{
+  "artifact_root": "/var/lib/aitp-coverage",
+  "services": [
+    {
+      "name": "sample-python",
+      "workdir": "/opt/sample",
+      "source": "/opt/sample",
+      "python_executable": "/usr/local/bin/python",
+      "command": ["-m", "uvicorn", "sample_service:app", "--host", "0.0.0.0", "--port", "8202"],
+      "service_url": "http://host.docker.internal:8202",
+      "health_url": "http://host.docker.internal:8202/health",
+      "max_run_seconds": 1800
+    }
+  ]
+}

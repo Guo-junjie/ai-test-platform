@@ -340,6 +340,9 @@ export const coverageApi = {
     api.post('/coverage/collect', data, { timeout: 60000 }),
   updateConfig: (projectId: string, data: any) =>
     api.put(`/coverage/projects/${projectId}/config`, data),
+  probeAgent: (data: any) => api.post('/coverage/probe-agent', data),
+  runs: (projectId: string) => api.get(`/coverage/projects/${projectId}/runs`),
+  run: (testRunId: string) => api.get(`/coverage/runs/${testRunId}`),
 }
 
 // ============ 质量门禁 ============

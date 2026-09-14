@@ -501,6 +501,13 @@ async def cancel_test_run(
     except Exception as exc:  # noqa: BLE001 - Redis/MQ 异常时 DB 状态已改，仅告警
         logger.warning(f"Cancel flag/revoke failed (DB status already set): {exc}")
 
+    # 已启动的远程插桩进程与 Celery 任务分离，取消时必须主动通知 Agent 停止。
+    try:
+        from app.modules.coverage.manager import CoverageManager
+        await CoverageManager.abort(test_run_id, "测试任务已取消", cancelled=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"Coverage cleanup after cancellation failed: {exc}")
+
     return {
         "code": 0,
         "data": {"test_run_id": test_run_id, "status": "cancelled"},

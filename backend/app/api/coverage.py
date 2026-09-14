@@ -23,19 +23,22 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import (
     AuditLog,
     CoverageReport,
+    CoverageRun,
+    CoverageService,
     CoverageSource,
     CoverageTool,
     Project,
     User,
+    UserRole,
 )
-from app.modules.auth.dependencies import get_current_user
+from app.modules.auth.dependencies import get_current_user, require_role
 from app.modules.coverage.parser import parse_coverage_report
 from app.utils.database import get_db_session
 from app.utils.logger import get_logger
@@ -203,6 +206,8 @@ async def list_coverage(
                 "total_branches": r.total_branches,
                 "covered_branches": r.covered_branches,
                 "test_run_id": str(r.test_run_id) if r.test_run_id else None,
+                "coverage_run_id": str(r.coverage_run_id) if r.coverage_run_id else None,
+                "service_name": r.service_name,
                 "created_at": r.created_at.isoformat() if r.created_at else None,
             }
             for r in rows
@@ -238,6 +243,8 @@ async def get_coverage(
             "covered_branches": r.covered_branches,
             "files": r.files_json or [],
             "test_run_id": str(r.test_run_id) if r.test_run_id else None,
+            "coverage_run_id": str(r.coverage_run_id) if r.coverage_run_id else None,
+            "service_name": r.service_name,
             "created_at": r.created_at.isoformat() if r.created_at else None,
         },
         "message": "success",
@@ -514,13 +521,43 @@ class UpdateCoverageConfigRequest(BaseModel):
     probe_host: str | None = None
     probe_port: int | None = 6300
     dump_url: str | None = None
+    required: bool = False
+    services: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ProbeAgentRequest(BaseModel):
+    name: str
+    agent_url: str
+    token_env: str
+    language: str = "python"
+    tool: str = "coverage.py"
+
+
+@router.post("/probe-agent")
+async def probe_agent_config(
+    req: ProbeAgentRequest,
+    current_user: User = Depends(require_role(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.TEST_MANAGER)),
+):
+    """校验 Agent 凭据、服务白名单与代码目录；不会启动被测服务。"""
+    from app.modules.coverage.manager import _agent_request, validate_agent_service
+
+    try:
+        config = validate_agent_service(req.model_dump())
+        service = CoverageService(name=config["name"], agent_url=config["agent_url"],
+                                  token_env=config["token_env"], language="python", tool="coverage.py")
+        result = await _agent_request(service, "prepare", uuid.uuid4())
+        return {"code": 0, "data": result.json(), "message": "Agent 配置可用"}
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(422, f"Agent 预检失败: {exc}") from exc
 
 
 @router.put("/projects/{project_id}/config")
 async def update_project_coverage_config(
     project_id: str,
     req: UpdateCoverageConfigRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_role(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.TEST_MANAGER)),
     db: AsyncSession = Depends(get_db_session),
 ):
     """更新项目的覆盖率探针配置。"""
@@ -533,8 +570,26 @@ async def update_project_coverage_config(
     if not proj:
         raise HTTPException(404, "项目不存在")
 
+    if req.enabled and req.required and not req.services:
+        raise HTTPException(422, "严格模式需要至少配置一个 Agent 服务")
+
+    if req.services:
+        from app.modules.coverage.manager import validate_agent_service
+
+        try:
+            services = [validate_agent_service(item) for item in req.services]
+            if len({item["name"] for item in services}) != len(services):
+                raise ValueError("覆盖率服务名不能重复")
+            if len(services) > 1 and sum(item["primary"] for item in services) != 1:
+                raise ValueError("多服务配置必须指定唯一 primary 测试入口")
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+    else:
+        services = []
+
     cfg = dict(proj.source_config or {})
     cfg["coverage_config"] = req.model_dump()
+    cfg["coverage_config"]["services"] = services
     cfg["coverage_enabled"] = req.enabled
     proj.source_config = cfg
     await db.commit()
@@ -543,3 +598,60 @@ async def update_project_coverage_config(
         "data": cfg["coverage_config"],
         "message": "覆盖率配置已更新",
     }
+
+
+@router.get("/runs/{test_run_id}")
+async def get_coverage_run(
+    test_run_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """查询一次自动化测试的覆盖率生命周期及每个服务的采集结果。"""
+    try:
+        run_uuid = uuid.UUID(test_run_id)
+    except ValueError as exc:
+        raise HTTPException(400, "test_run_id 格式错误") from exc
+    run = (await db.execute(select(CoverageRun).where(CoverageRun.test_run_id == run_uuid))).scalar_one_or_none()
+    if not run:
+        raise HTTPException(404, "该测试任务没有 Coverage Run")
+    services = (await db.execute(select(CoverageService).where(
+        CoverageService.coverage_run_id == run.id).order_by(CoverageService.name))).scalars().all()
+    return {"code": 0, "data": {
+        "id": str(run.id), "test_run_id": str(run.test_run_id),
+        "project_id": str(run.project_id), "commit_sha": run.commit_sha,
+        "status": run.status, "required": run.required,
+        "error_message": run.error_message,
+        "line_rate": run.line_rate, "branch_rate": run.branch_rate,
+        "total_lines": run.total_lines, "covered_lines": run.covered_lines,
+        "total_branches": run.total_branches, "covered_branches": run.covered_branches,
+        "created_at": run.created_at.isoformat() if run.created_at else None,
+        "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+        "services": [{"name": item.name, "language": item.language,
+                      "primary": item.primary, "deployed_commit_sha": item.deployed_commit_sha,
+                      "status": item.status, "error_message": item.error_message,
+                      "report_id": str(item.report_id) if item.report_id else None,
+                      "artifact_sha256": item.artifact_sha256}
+                     for item in services],
+    }, "message": "success"}
+
+
+@router.get("/projects/{project_id}/runs")
+async def list_coverage_runs(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """项目最近的覆盖率会话；即使没有报告也显示 FAILED/NO_ARTIFACT。"""
+    try:
+        project_uuid = uuid.UUID(project_id)
+    except ValueError as exc:
+        raise HTTPException(400, "project_id 格式错误") from exc
+    rows = (await db.execute(select(CoverageRun).where(CoverageRun.project_id == project_uuid)
+                             .order_by(CoverageRun.created_at.desc()).limit(30))).scalars().all()
+    return {"code": 0, "data": [{
+        "id": str(row.id), "test_run_id": str(row.test_run_id), "status": row.status,
+        "required": row.required, "line_rate": row.line_rate,
+        "total_lines": row.total_lines, "covered_lines": row.covered_lines,
+        "error_message": row.error_message,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    } for row in rows], "message": "success"}
