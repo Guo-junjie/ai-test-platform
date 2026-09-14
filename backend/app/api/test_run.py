@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import (
     Project,
+    ProjectCodeVersion,
     RunEvent,
     RunSnapshot,
     TestRun,
@@ -223,6 +224,8 @@ async def create_test_run(
         if existing_project.scalar_one_or_none() is None:
             raise HTTPException(404, f"Project not found: {req.project_id}")
     else:
+        if req.code_version_id:
+            raise HTTPException(400, "引用项目代码版本时必须指定 project_id")
         # 创建临时 Project
         project = Project(
             id=project_id,
@@ -236,6 +239,22 @@ async def create_test_run(
         )
         db.add(project)
         await db.flush()
+
+    if req.code_version_id:
+        try:
+            version_uuid = uuid.UUID(req.code_version_id)
+        except ValueError as exc:
+            raise HTTPException(400, "code_version_id 格式错误") from exc
+        version = (await db.execute(select(ProjectCodeVersion).where(
+            ProjectCodeVersion.id == version_uuid,
+            ProjectCodeVersion.project_id == project_id,
+        ))).scalar_one_or_none()
+        if version is None:
+            raise HTTPException(404, "该项目不存在指定代码版本")
+        if version.source_type == ModelSourceType.GITHUB and version.version_id:
+            if req.commit_sha and req.commit_sha != version.version_id:
+                raise HTTPException(409, "测试版本与请求的 commit_sha 不一致")
+            req.commit_sha = version.version_id
 
     # 3. 创建 TestRun 记录
     target_url = (req.target_service_url or "").strip() or None

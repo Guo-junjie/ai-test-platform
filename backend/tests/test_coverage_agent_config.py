@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.modules.coverage.manager import validate_agent_service
+from app.modules.coverage.manager import coverage_threshold_errors, validate_agent_service
 
 
 def _service(**overrides):
@@ -25,6 +25,7 @@ def test_agent_rejects_untrusted_fields(monkeypatch):
     with pytest.raises(ValueError, match="token_env"):
         validate_agent_service(_service(token_env="PATH"))
     assert validate_agent_service(_service(language="go", tool="go_cover"))["tool"] == "go_cover"
+    assert validate_agent_service(_service(language="java", tool="jacoco"))["tool"] == "jacoco"
     with pytest.raises(ValueError, match="仅支持"):
         validate_agent_service(_service(language="go"))
     with pytest.raises(ValueError, match="服务名"):
@@ -36,3 +37,11 @@ def test_coverage_run_list_path_is_not_report_id():
 
     assert any(route.path == "/projects/{project_id}/runs" for route in router.routes)
     assert any(route.path == "/runs/{test_run_id}" for route in router.routes)
+
+
+def test_coverage_threshold_uses_current_run_rates():
+    assert coverage_threshold_errors({"min_line_rate": 80, "min_branch_rate": 70}, 79.99, 75) == [
+        "行覆盖率 79.99% 低于门槛 80%"]
+    assert coverage_threshold_errors({"min_branch_rate": 50}, 90, None) == [
+        "分支覆盖率 未提供 低于门槛 50%"]
+    assert coverage_threshold_errors({"min_line_rate": 80}, 81, 0) == []

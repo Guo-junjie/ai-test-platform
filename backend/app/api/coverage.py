@@ -522,6 +522,8 @@ class UpdateCoverageConfigRequest(BaseModel):
     probe_port: int | None = 6300
     dump_url: str | None = None
     required: bool = False
+    min_line_rate: float | None = Field(default=None, ge=0, le=100)
+    min_branch_rate: float | None = Field(default=None, ge=0, le=100)
     services: list[dict[str, Any]] = Field(default_factory=list)
 
 
@@ -571,6 +573,8 @@ async def update_project_coverage_config(
     if not proj:
         raise HTTPException(404, "项目不存在")
 
+    if req.enabled and req.strategy == "agent" and not req.services:
+        raise HTTPException(422, "自动 Agent 采集需要至少配置一个服务")
     if req.enabled and req.required and not req.services:
         raise HTTPException(422, "严格模式需要至少配置一个 Agent 服务")
 

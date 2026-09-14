@@ -1,0 +1,40 @@
+services:
+  java-sample:
+    build:
+      context: .
+      dockerfile: Dockerfile.java-sample
+    container_name: aitp-java-sample
+    networks: [platform]
+    volumes:
+      - java_sample_classes:/opt/sample-java/classes
+    ports:
+      - "8204:8204"
+    restart: unless-stopped
+
+  java-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.java-agent
+    container_name: aitp-java-agent
+    environment:
+      COVERAGE_AGENT_TOKEN: ${COVERAGE_AGENT_JAVA_SAMPLE_TOKEN:?set COVERAGE_AGENT_JAVA_SAMPLE_TOKEN}
+      COVERAGE_AGENT_CONFIG: /opt/sample-java/agent.json
+    volumes:
+      - ./examples/java/agent.json:/opt/sample-java/agent.json:ro
+      - ./examples/java/OrderService.java:/opt/sample-java/src/demo/OrderService.java:ro
+      - java_sample_classes:/opt/sample-java/classes:ro
+      - java_sample_artifacts:/var/lib/aitp-coverage
+    networks: [platform]
+    ports:
+      - "8767:8765"
+    depends_on: [java-sample]
+    restart: unless-stopped
+
+networks:
+  platform:
+    external: true
+    name: ai-test-platform_default
+
+volumes:
+  java_sample_classes:
+  java_sample_artifacts:

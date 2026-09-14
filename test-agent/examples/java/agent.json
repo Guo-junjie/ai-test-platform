@@ -1,0 +1,17 @@
+{
+  "artifact_root": "/var/lib/aitp-coverage",
+  "services": [{
+    "name": "sample-java",
+    "language": "java",
+    "tool": "jacoco",
+    "workdir": "/opt/sample-java",
+    "service_url": "http://aitp-java-sample:8204",
+    "health_url": "http://aitp-java-sample:8204/health",
+    "jacoco_host": "aitp-java-sample",
+    "jacoco_port": 6304,
+    "jacoco_cli": "/opt/jacococli.jar",
+    "classfiles": ["/opt/sample-java/classes"],
+    "sourcefiles": ["/opt/sample-java/src"],
+    "commit_sha": "java-sample-v1"
+  }]
+}

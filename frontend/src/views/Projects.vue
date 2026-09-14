@@ -138,7 +138,7 @@
           <el-descriptions-item label="被测服务 URL">
             <div style="display: flex; align-items: center; justify-content: space-between">
               <span class="mono-text" style="color: var(--el-color-primary)">
-                {{ current.target_service_url || (current.source_config && current.source_config.target_service_url) || '未配置（将尝试本地 Docker 构建）' }}
+                {{ current.target_service_url || (current.source_config && current.source_config.target_service_url) || (current.coverage_config?.services?.length ? '由覆盖率 Agent 提供测试入口' : '未配置（将尝试本地 Docker 构建）') }}
               </span>
               <div v-if="current.target_service_url || (current.source_config && current.source_config.target_service_url)">
                 <el-button size="small" type="primary" plain :loading="probing" @click="handleProbeUrl(current.target_service_url || current.source_config.target_service_url)">连通测试</el-button>
@@ -377,7 +377,7 @@
             </template>
           </el-input>
           <div style="font-size: 12px; color: var(--el-text-color-secondary); margin-top: 4px">
-            强烈建议配置真实服务地址。若留空，测试平台将尝试通过本地 Docker 容器启动。
+            {{ current?.coverage_config?.services?.length ? '已配置覆盖率 Agent：测试将使用 Agent 登记的被测服务 URL，并自动关联覆盖率报告。' : '未配置覆盖率 Agent；请先在项目覆盖率看板配置，或填写真实服务地址。' }}
           </div>
         </el-form-item>
       </el-form>
@@ -724,8 +724,9 @@ export default defineComponent({
     },
     formatCoverageInfo(project: any): string {
       const cfg = project?.coverage_config || project?.source_config?.coverage_config
-      if (!cfg) return '未单独配置（将使用被测服务或自动推断）'
+      if (!cfg || (!cfg.services?.length && !cfg.dump_url)) return '未配置自动采集；请先配置 Agent'
       if (cfg.enabled === false) return '已禁用自动采集'
+      if (cfg.services?.length) return `Agent 自动采集：${cfg.services.map((service: any) => `${service.name} (${service.language})`).join('、')}`
       if (cfg.strategy === 'remote_tcp') {
         return `JaCoCo TCP (${cfg.probe_host || '默认'}:${cfg.probe_port || 6300})`
       }

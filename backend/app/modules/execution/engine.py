@@ -391,10 +391,6 @@ def prepare_environment(
 
     # 1. 真实被测环境 URL / 计划占位 URL 处理
     override_url = analysis_result.get("service_url_override") or analysis_result.get("target_service_url")
-    if override_url == "http://plan-mode-no-sut":
-        logger.info(f"[{test_run_id}] plan mode without SUT: skip SUT launch, use placeholder URL")
-        return {"service_url": override_url, "analysis_result": analysis_result}
-
     # Agent 配置可直接给出被测 URL，无需在项目中重复填写目标地址。
     from app.modules.coverage.manager import CoverageLifecycleError, CoverageManager
     try:
@@ -408,6 +404,10 @@ def prepare_environment(
 
             _mark_run_failed(test_run_id, str(exc))
             raise RuntimeError(str(exc)) from exc
+
+    if override_url == "http://plan-mode-no-sut":
+        logger.info(f"[{test_run_id}] plan mode without SUT or coverage agent: use placeholder URL")
+        return {"service_url": override_url, "analysis_result": analysis_result}
 
     if override_url:
         # 真实被测环境 URL：执行预检探针守卫

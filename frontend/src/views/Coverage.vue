@@ -36,7 +36,7 @@
             />
           </el-select>
         </div>
-        <el-tooltip content="开启后流水线测试会自动采集本项目覆盖率（平台总开关需为开启）" placement="top">
+        <el-tooltip content="开启后按已配置的采集方式执行；Java 自动采集还需配置 Agent 并由 CI 部署 JaCoCo 测试服务" placement="top">
           <div class="cov-switch">
             <span class="cov-switch-label">自动采集</span>
             <el-switch
@@ -96,9 +96,10 @@
     <template v-else-if="!latestReportId && reports.length === 0 && !loadingReports">
       <el-card shadow="hover" class="empty-card">
         <el-empty description="该项目暂无覆盖率报告">
-          <el-button type="primary" :icon="UploadFilled" @click="openUploadDialog">上传覆盖率报告</el-button>
+          <el-button type="primary" :icon="Setting" @click="openProbeConfigDrawer">配置自动采集</el-button>
+          <el-button :icon="UploadFilled" @click="openUploadDialog">上传覆盖率报告</el-button>
           <div class="empty-tip">
-            支持 coverage.py / JaCoCo / Cobertura XML，以及 Go <code>go test -coverprofile=coverage.out ./...</code> 生成的报告。普通服务 URL 无法直接提供代码覆盖率。
+            Java 常驻服务需在 CI 部署时加载 JaCoCo，并配置 Agent 与匹配版本的 classfiles；测试任务结束后才会出现关联报告。也支持手动上传 coverage.py / JaCoCo / Cobertura XML、Go coverprofile。
           </div>
         </el-empty>
       </el-card>
@@ -402,23 +403,25 @@
         </el-form-item>
         <el-form-item label="采集方式">
           <el-select v-model="probeForm.strategy" style="width: 100%">
-            <el-option label="远程 Agent（Python / Go，测试前启动，测试后回收）" value="agent" />
+            <el-option label="远程 Agent（Java 常驻 / Python、Go 临时实例）" value="agent" />
             <el-option label="现有 XML 报告地址" value="http_dump" />
             <el-option label="现有工作空间报告" value="repo_file" />
           </el-select>
         </el-form-item>
         <template v-if="probeForm.strategy === 'agent'">
-          <el-alert title="Agent 部署在被测服务主机；Go 服务须由 CI 使用 go build -cover 构建，并在收到停止信号后正常退出。启动命令只在 Agent 配置文件中定义。" type="info" :closable="false" style="margin-bottom: 16px" />
+          <el-alert title="Java：Jenkins 先部署已加载 JaCoCo 的常驻测试服务；测试前清零，测试后导出 XML，业务服务保持运行。Python/Go：由 Agent 启动独立实例。Agent 服务及构建产物路径仅由主机管理员登记。" type="info" :closable="false" style="margin-bottom: 16px" />
           <el-form-item label="严格模式"><el-switch v-model="probeForm.required" /><span style="margin-left: 8px">采集失败则测试任务失败</span></el-form-item>
+          <el-form-item label="最低行覆盖率"><el-input-number v-model="probeForm.min_line_rate" :min="0" :max="100" :precision="2" placeholder="不限制" /><span style="margin-left: 8px">留空不限制；严格模式下未达标会使测试失败</span></el-form-item>
+          <el-form-item label="最低分支率"><el-input-number v-model="probeForm.min_branch_rate" :min="0" :max="100" :precision="2" placeholder="不限制" /><span style="margin-left: 8px">JaCoCo 可提供分支覆盖率</span></el-form-item>
           <el-form-item label="服务名"><el-input v-model="probeForm.agent_service_name" placeholder="与 Agent 登记名一致" /></el-form-item>
-          <el-form-item label="服务语言"><el-select v-model="probeForm.agent_language" style="width: 100%"><el-option label="Python（coverage.py）" value="python" /><el-option label="Go（go build -cover）" value="go" /></el-select></el-form-item>
+          <el-form-item label="服务语言"><el-select v-model="probeForm.agent_language" style="width: 100%"><el-option label="Java（JaCoCo 常驻服务）" value="java" /><el-option label="Python（coverage.py）" value="python" /><el-option label="Go（go build -cover）" value="go" /></el-select></el-form-item>
           <el-form-item label="Agent URL"><el-input v-model="probeForm.agent_url" placeholder="https://coverage-agent.example.com" /></el-form-item>
           <el-form-item label="令牌环境变量"><el-input v-model="probeForm.token_env" placeholder="COVERAGE_AGENT_TOKEN" /></el-form-item>
           <el-form-item label="测试入口"><el-switch v-model="probeForm.agent_primary" /></el-form-item>
           <template v-for="(item, index) in extraAgentServices" :key="index">
             <el-divider>附加服务 {{ index + 1 }}</el-divider>
             <el-form-item label="服务名"><el-input v-model="item.name" /></el-form-item>
-            <el-form-item label="服务语言"><el-select v-model="item.language" style="width: 100%"><el-option label="Python（coverage.py）" value="python" /><el-option label="Go（go build -cover）" value="go" /></el-select></el-form-item>
+            <el-form-item label="服务语言"><el-select v-model="item.language" style="width: 100%"><el-option label="Java（JaCoCo 常驻服务）" value="java" /><el-option label="Python（coverage.py）" value="python" /><el-option label="Go（go build -cover）" value="go" /></el-select></el-form-item>
             <el-form-item label="Agent URL"><el-input v-model="item.agent_url" /></el-form-item>
             <el-form-item label="令牌环境变量"><el-input v-model="item.token_env" /></el-form-item>
             <el-form-item label="测试入口"><el-switch v-model="item.primary" /></el-form-item>
@@ -575,6 +578,8 @@ const probeForm = ref<{
   probe_port: number
   dump_url: string
   required: boolean
+  min_line_rate: number | null
+  min_branch_rate: number | null
   agent_service_name: string
   agent_language: string
   agent_url: string
@@ -583,13 +588,15 @@ const probeForm = ref<{
 }>({
   enabled: true,
   tool: 'jacoco',
-  strategy: 'remote_tcp',
+    strategy: 'agent',
   probe_host: '',
   probe_port: 6300,
   dump_url: '',
-  required: false,
+    required: true,
+    min_line_rate: null,
+    min_branch_rate: null,
   agent_service_name: '',
-  agent_language: 'python',
+    agent_language: 'java',
   agent_url: '',
   token_env: 'COVERAGE_AGENT_TOKEN',
   agent_primary: true,
@@ -603,17 +610,19 @@ function openProbeConfigDrawer() {
   const curProj = projects.value.find((p) => p.id === projectId.value)
   const cfg = curProj?.coverage_config || curProj?.source_config?.coverage_config || {}
   const agent = cfg.services?.[0] || {}
-  extraAgentServices.value = (cfg.services || []).slice(1).map((item: any) => ({ ...item, language: item.language || 'python' }))
+    extraAgentServices.value = (cfg.services || []).slice(1).map((item: any) => ({ ...item, language: item.language || 'java' }))
   probeForm.value = {
     enabled: cfg.enabled !== false,
     tool: cfg.tool || 'cobertura',
-    strategy: cfg.services?.length ? 'agent' : cfg.strategy || 'repo_file',
+    strategy: cfg.services?.length || !cfg.strategy || cfg.strategy === 'remote_tcp' ? 'agent' : cfg.strategy,
     probe_host: cfg.probe_host || curProj?.target_service_url?.replace(/^https?:\/\//, '').split(':')[0] || '',
     probe_port: cfg.probe_port || 6300,
     dump_url: cfg.dump_url || '',
-    required: cfg.required === true,
+    required: cfg.required !== false,
+    min_line_rate: cfg.min_line_rate ?? null,
+    min_branch_rate: cfg.min_branch_rate ?? null,
     agent_service_name: agent.name || '',
-    agent_language: agent.language || 'python',
+    agent_language: agent.language || 'java',
     agent_url: agent.agent_url || '',
     token_env: agent.token_env || 'COVERAGE_AGENT_TOKEN',
     agent_primary: agent.primary !== false,
@@ -655,7 +664,7 @@ function agentPayload() {
 }
 
 function agentTool(language: string) {
-  return language === 'go' ? 'go_cover' : 'coverage.py'
+  return language === 'java' ? 'jacoco' : language === 'go' ? 'go_cover' : 'coverage.py'
 }
 
 function addAgentService() {

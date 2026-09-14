@@ -1,0 +1,13 @@
+FROM python:3.12-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends openjdk-21-jre-headless \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /opt/aitp-coverage-agent
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY agent.py .
+ADD --checksum=sha256:8f748683833d4dc4d72cea5d6b43f49344687b831e0582c97bcb9b984e3de0a3 \
+    https://repo.maven.apache.org/maven2/org/jacoco/org.jacoco.cli/0.8.13/org.jacoco.cli-0.8.13-nodeps.jar /opt/jacococli.jar
+
+EXPOSE 8765
+CMD ["uvicorn", "agent:app", "--host", "0.0.0.0", "--port", "8765"]

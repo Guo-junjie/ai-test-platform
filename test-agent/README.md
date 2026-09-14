@@ -1,6 +1,52 @@
-# 远程代码覆盖率 Agent（Python / Go）
+# 远程代码覆盖率 Agent（Java / Python / Go）
 
 本 Agent 在**被测服务主机**运行，平台只选择管理员预先登记的服务。每次测试创建独立的覆盖率会话：启动插桩实例 → 原有 API/性能/集成测试向该实例发请求 → 停止实例 → 生成 `coverage.xml` 或 `coverage.out` → 平台解析入库。普通业务服务 URL 本身无法提供代码覆盖率。现有手动上传、HTTP XML 报告和工作空间报告仍可使用。
+
+Java 使用不同的常驻模式：CI 先部署带 JaCoCo Java Agent 的测试服务；平台开始测试时通过 Test Agent 清零 JaCoCo 计数器，结束后导出 `jacoco.exec` 并用相同构建产物的 classfiles 生成 `jacoco.xml`。业务 JVM 在整个过程中持续运行。平台不会尝试对已运行的普通 JVM 事后插桩。
+
+## Java 常驻服务：Jenkins → 测试平台 → JaCoCo
+
+1. Jenkins 在独立测试环境构建并部署 Java 服务，在 JVM 启动参数加入：
+
+   ```text
+   -javaagent:/opt/jacoco/jacocoagent.jar=output=tcpserver,address=127.0.0.1,port=6300,dumponexit=false
+   ```
+
+   若 Agent 位于同一 Docker 网络的另一个容器，`address` 应绑定容器内可达地址；**不要把无认证的 JaCoCo TCP 端口发布到公网或宿主机**。测试业务 HTTP 端口照常保持服务。Agent 可以在同一主机，也可以与业务容器共享受限网络。
+2. 从**同一次构建**保留 classfiles 和可选源码。在 Spring Boot fat JAR 场景，将 `BOOT-INF/classes` 提取到 Agent 可读目录；多模块项目可配置多个 classfiles 目录。将同版本 `jacococli.jar` 安装到 Agent 可读路径。不要把 `.exec` 当作报告直接上传，它缺少 classfiles 映射。
+3. 主机管理员在 Agent 静态配置中登记服务（平台只提交服务名，不提交命令或文件路径）：
+
+   ```json
+   {
+     "name": "orders-java",
+     "language": "java",
+     "tool": "jacoco",
+     "workdir": "/srv/orders-coverage",
+     "service_url": "http://orders-test.internal:8080",
+     "health_url": "http://orders-test.internal:8080/health",
+     "jacoco_host": "127.0.0.1",
+     "jacoco_port": 6300,
+     "jacoco_cli": "/opt/jacoco/jacococli.jar",
+     "classfiles": ["/srv/orders-coverage/classes"],
+     "sourcefiles": ["/srv/orders-coverage/src/main/java"],
+     "commit_sha": "Jenkins 本次部署的完整 Git SHA"
+   }
+   ```
+
+4. 在平台后端和 Celery Worker 注入相同的 `COVERAGE_AGENT_...` 令牌变量，配置 Agent 主机白名单和 HTTPS。项目的“探针配置”选择 **远程 Agent → Java（JaCoCo 常驻服务）**，设置唯一测试入口与严格模式。Jenkins 部署成功且健康检查通过后，调用平台创建测试任务；任务所带 Git commit 必须与 Agent 登记的部署 commit 一致。
+5. 平台执行 `prepare → start(清零) → API/集成/性能用例 → stop(导出+清零) → JaCoCo CLI report → 解析入库`。Coverage Run 与 Test Run 绑定；采集失败或低于配置的行/分支覆盖率门槛时，严格模式使任务失败，CI 可据此阻断后续部署。**同一 JaCoCo 服务一次仅允许一个采集会话**。要统计“本次请求”必须使用隔离测试环境，防止其他用户、健康探测和并发流水线的请求混入计数器。
+
+仓库提供持续运行的 Java HTTP 验收样例，JaCoCo TCP 只在平台 Docker 内网可达：
+
+```bash
+# .env 中先设置 COVERAGE_AGENT_JAVA_SAMPLE_TOKEN 为随机密钥
+sudo docker compose --env-file .env -f test-agent/compose.java.example.yml up -d --build
+sudo docker compose up -d --no-deps --force-recreate backend celery-worker
+sudo docker exec -e PYTHONPATH=/app aitp-backend python /app/tests/manual_verify_coverage_agent.py --language java
+sudo docker exec -e PYTHONPATH=/app aitp-backend python /app/tests/manual_verify_java_plan_coverage.py
+```
+
+验收后 `http://<虚拟机>:8204/orders/1` 仍应返回 200；重复执行应得到不同 Test Run 的报告。样例中的 Agent 为内网演示使用 HTTP，正式部署应使用 HTTPS。
 
 `examples/` 和 `compose.example.yml` 提供独立的 Python 验证服务（8202）与 Agent（8765）。它只为链路验收使用，不会替换已有 Go 被测服务（8201）；为内网演示方便使用 HTTP，生产部署应改为 HTTPS。
 
@@ -89,6 +135,6 @@ sudo docker exec -e PYTHONPATH=/app aitp-backend python /app/tests/manual_verify
 
 ## 当前边界
 
-- 目前支持 Python coverage.py 与 Go `go build -cover` 远程 Agent 自动采集；Java、C++、Docker/Kubernetes 自动插桩、Diff Coverage 与 CI 门禁属于后续阶段。
+- 目前支持 Java JaCoCo 常驻服务，以及 Python coverage.py 与 Go `go build -cover` 临时实例的远程 Agent 自动采集；C++、Kubernetes 自动插桩、Diff Coverage 与 CI 门禁属于后续阶段。
 - 同一服务一次只允许一个活跃覆盖率会话，避免产物和端口互相污染。Agent 重启后内存中的进程会话不会恢复；部署时应在无活跃测试的窗口重启。
 - 平台默认仅允许 `localhost`、`127.0.0.1`、`host.docker.internal` 或 `COVERAGE_AGENT_ALLOWED_HOSTS` 中的 Agent 主机，且不在数据库保存令牌本身。`required=true` 时启动或采集失败会使测试任务失败；否则测试结果保留，Coverage Run 单独显示失败原因。

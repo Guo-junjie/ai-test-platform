@@ -1,4 +1,4 @@
-"""覆盖率会话编排：测试前启动远程插桩实例，测试后收集各服务真实产物。"""
+"""覆盖率会话编排：启动临时实例或打开常驻 Java 采集窗口，测试后收集产物。"""
 
 from __future__ import annotations
 
@@ -33,6 +33,21 @@ class CoverageLifecycleError(RuntimeError):
         self.required = required
 
 
+def coverage_threshold_errors(config: dict, line_rate: float | None,
+                              branch_rate: float | None) -> list[str]:
+    """只依据本次 Coverage Run 的聚合结果评估门槛。"""
+    errors = []
+    for key, label, actual in (("min_line_rate", "行覆盖率", line_rate),
+                               ("min_branch_rate", "分支覆盖率", branch_rate)):
+        minimum = config.get(key)
+        if minimum is None:
+            continue
+        if actual is None or actual < float(minimum):
+            current = f"{actual}%" if actual is not None else "未提供"
+            errors.append(f"{label} {current} 低于门槛 {minimum}%")
+    return errors
+
+
 def validate_agent_service(config: dict) -> dict:
     """仅允许远程 Agent 白名单配置，不接受运行时命令或任意服务路径。"""
     name = str(config.get("name") or "")
@@ -57,8 +72,8 @@ def validate_agent_service(config: dict) -> dict:
         raise ValueError(f"{name}: token_env 必须是 COVERAGE_AGENT_ 开头的环境变量名")
     language = config.get("language")
     tool = config.get("tool")
-    if (language, tool) not in {("python", "coverage.py"), ("go", "go_cover")}:
-        raise ValueError(f"{name}: Agent 仅支持 Python coverage.py 或 Go go_cover")
+    if (language, tool) not in {("python", "coverage.py"), ("go", "go_cover"), ("java", "jacoco")}:
+        raise ValueError(f"{name}: Agent 仅支持 Python coverage.py、Go go_cover 或 Java JaCoCo")
     return {"name": name, "agent_url": url, "token_env": token_env,
             "language": language, "tool": tool,
             "primary": bool(config.get("primary", False))}
@@ -179,8 +194,8 @@ class CoverageManager:
                 reported_adapter = (prepared.get("language"), prepared.get("tool"))
                 if any(reported_adapter) and reported_adapter != (service.language, service.tool):
                     raise CoverageLifecycleError(f"{service.name}: Agent 采集器与项目配置不一致")
-                if service.tool == "go_cover" and prepared.get("tool") != "go_cover":
-                    raise CoverageLifecycleError(f"{service.name}: Agent 不支持 Go 采集")
+                if service.tool in {"go_cover", "jacoco"} and prepared.get("tool") != service.tool:
+                    raise CoverageLifecycleError(f"{service.name}: Agent 不支持 {service.tool} 采集")
                 deployed_commit = prepared.get("commit_sha")
                 if coverage_run.commit_sha and required and not deployed_commit:
                     raise CoverageLifecycleError(f"{service.name}: 严格模式要求 Agent 报告部署 commit")
@@ -256,6 +271,8 @@ class CoverageManager:
                         raise CoverageLifecycleError(f"{service.name}: {stopped.get('status', 'NO_ARTIFACT')}")
                     content = await _download_artifact(service, coverage_run.id)
                     parsed = parse_coverage_report(service.tool, content.decode("utf-8-sig"))
+                    if parsed["total_lines"] <= 0:
+                        raise CoverageLifecycleError(f"{service.name}: 报告没有可统计的代码行，请核对部署版本和 classfiles")
                     output = ARTIFACT_ROOT / str(coverage_run.id)
                     output.mkdir(parents=True, exist_ok=True)
                     artifact_path = output / f"{service.name}{'.out' if service.tool == 'go_cover' else '.xml'}"
@@ -299,7 +316,13 @@ class CoverageManager:
                 coverage_run.covered_branches = sum(r["covered_branches"] for r in results)
                 coverage_run.branch_rate = (round(100 * coverage_run.covered_branches / coverage_run.total_branches, 2)
                                             if coverage_run.total_branches else None)
-            coverage_run.status = ("PARTIAL" if results and errors else
+            project = (await db.execute(select(Project).where(Project.id == coverage_run.project_id))).scalar_one()
+            thresholds = ((project.source_config or {}).get("coverage_config") or {})
+            gate_errors = coverage_threshold_errors(thresholds, coverage_run.line_rate,
+                                                    coverage_run.branch_rate) if results else []
+            errors.extend(gate_errors)
+            coverage_run.status = ("FAILED" if gate_errors else
+                                   "PARTIAL" if results and errors else
                                    "NO_ARTIFACT" if errors and all(s.status == "NO_ARTIFACT" for s in services) else
                                    "FAILED" if errors else "COMPLETED")
             coverage_run.error_message = "; ".join(errors)[:2000] if errors else None

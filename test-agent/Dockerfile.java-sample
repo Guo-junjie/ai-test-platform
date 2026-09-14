@@ -1,0 +1,10 @@
+FROM eclipse-temurin:21-jdk
+
+WORKDIR /opt/sample-java
+COPY examples/java/OrderService.java /opt/sample-java/src/demo/OrderService.java
+RUN mkdir -p classes && javac -d classes src/demo/OrderService.java
+ADD --checksum=sha256:47e700ccb0fdb9e27c5241353f8161938f4e53c3561dd35e063c5fe88dc3349b \
+    https://repo.maven.apache.org/maven2/org/jacoco/org.jacoco.agent/0.8.13/org.jacoco.agent-0.8.13-runtime.jar /opt/jacocoagent.jar
+
+EXPOSE 8204
+CMD ["java", "-javaagent:/opt/jacocoagent.jar=output=tcpserver,address=0.0.0.0,port=6304,dumponexit=false", "-cp", "/opt/sample-java/classes", "demo.OrderService"]
