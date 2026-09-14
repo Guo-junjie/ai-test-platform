@@ -55,10 +55,12 @@ def validate_agent_service(config: dict) -> dict:
         raise ValueError(f"{name}: 远程 Agent 必须使用 HTTPS")
     if not ENV_NAME.fullmatch(token_env):
         raise ValueError(f"{name}: token_env 必须是 COVERAGE_AGENT_ 开头的环境变量名")
-    if config.get("language") != "python" or config.get("tool") != "coverage.py":
-        raise ValueError(f"{name}: 第一阶段仅支持 Python coverage.py Agent")
+    language = config.get("language")
+    tool = config.get("tool")
+    if (language, tool) not in {("python", "coverage.py"), ("go", "go_cover")}:
+        raise ValueError(f"{name}: Agent 仅支持 Python coverage.py 或 Go go_cover")
     return {"name": name, "agent_url": url, "token_env": token_env,
-            "language": "python", "tool": "coverage.py",
+            "language": language, "tool": tool,
             "primary": bool(config.get("primary", False))}
 
 
@@ -174,6 +176,11 @@ class CoverageManager:
                 prepared = (await _agent_request(service, "prepare", coverage_run.id)).json()
                 if prepared.get("status") != "READY":
                     raise CoverageLifecycleError(f"{service.name}: Agent 未就绪")
+                reported_adapter = (prepared.get("language"), prepared.get("tool"))
+                if any(reported_adapter) and reported_adapter != (service.language, service.tool):
+                    raise CoverageLifecycleError(f"{service.name}: Agent 采集器与项目配置不一致")
+                if service.tool == "go_cover" and prepared.get("tool") != "go_cover":
+                    raise CoverageLifecycleError(f"{service.name}: Agent 不支持 Go 采集")
                 deployed_commit = prepared.get("commit_sha")
                 if coverage_run.commit_sha and required and not deployed_commit:
                     raise CoverageLifecycleError(f"{service.name}: 严格模式要求 Agent 报告部署 commit")
@@ -248,14 +255,14 @@ class CoverageManager:
                     if stopped.get("status") != "COMPLETED":
                         raise CoverageLifecycleError(f"{service.name}: {stopped.get('status', 'NO_ARTIFACT')}")
                     content = await _download_artifact(service, coverage_run.id)
-                    parsed = parse_coverage_report("coverage.py", content.decode("utf-8-sig"))
+                    parsed = parse_coverage_report(service.tool, content.decode("utf-8-sig"))
                     output = ARTIFACT_ROOT / str(coverage_run.id)
                     output.mkdir(parents=True, exist_ok=True)
-                    artifact_path = output / f"{service.name}.xml"
+                    artifact_path = output / f"{service.name}{'.out' if service.tool == 'go_cover' else '.xml'}"
                     artifact_path.write_bytes(content)
                     report = CoverageReport(project_id=coverage_run.project_id, test_run_id=run_id,
                                             coverage_run_id=coverage_run.id, service_name=service.name,
-                                            tool=CoverageTool.COVERAGE_PY, language="python",
+                                            tool=CoverageTool(service.tool), language=service.language,
                                             source=CoverageSource.AUTO, storage_key=str(artifact_path),
                                             line_rate=parsed["line_rate"], branch_rate=parsed["branch_rate"],
                                             total_lines=parsed["total_lines"], covered_lines=parsed["covered_lines"],

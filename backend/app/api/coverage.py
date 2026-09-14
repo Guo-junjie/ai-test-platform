@@ -544,7 +544,8 @@ async def probe_agent_config(
     try:
         config = validate_agent_service(req.model_dump())
         service = CoverageService(name=config["name"], agent_url=config["agent_url"],
-                                  token_env=config["token_env"], language="python", tool="coverage.py")
+                                  token_env=config["token_env"], language=config["language"],
+                                  tool=config["tool"])
         result = await _agent_request(service, "prepare", uuid.uuid4())
         return {"code": 0, "data": result.json(), "message": "Agent 配置可用"}
     except ValueError as exc:

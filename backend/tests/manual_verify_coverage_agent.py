@@ -1,10 +1,11 @@
-"""在已部署的平台容器内触发独立 Python 样例的真实 Celery 测试链路。
+"""在已部署的平台容器内触发 Python 或 Go 样例的真实 Celery 测试链路。
 
-运行：python tests/manual_verify_coverage_agent.py
-需要先启动 test-agent/compose.example.yml，并将 COVERAGE_AGENT_SAMPLE_TOKEN 注入 worker。
+运行：python tests/manual_verify_coverage_agent.py [--language python|go]
+需要先启动对应的 test-agent/compose.*example.yml，并将令牌注入 worker。
 此脚本只创建独立验收项目和测试任务，不修改现有项目。
 """
 
+import argparse
 import asyncio
 import json
 import uuid
@@ -19,34 +20,45 @@ from app.modules.execution.engine import TestExecutionEngine
 from app.utils.database import AsyncSessionLocal
 
 
-async def main() -> None:
+SAMPLES = {
+    "python": {"name": "覆盖率验收样例（Python）", "service": "sample-python",
+               "url": "http://host.docker.internal:8765", "token": "COVERAGE_AGENT_SAMPLE_TOKEN",
+               "tool": "coverage.py"},
+    "go": {"name": "覆盖率验收样例（Go）", "service": "sample-go",
+           "url": "http://host.docker.internal:8766", "token": "COVERAGE_AGENT_GO_SAMPLE_TOKEN",
+           "tool": "go_cover"},
+}
+
+
+async def main(language: str = "python") -> None:
+    sample = SAMPLES[language]
     case = {"case_name": "查询已支付订单", "request": {"method": "GET", "url": "/orders/1"},
             "expected": {"status_code": 200}}
     project_id, run_id = uuid.uuid4(), uuid.uuid4()
     async with AsyncSessionLocal() as db:
         user = (await db.execute(select(User).limit(1))).scalar_one()
         existing = (await db.execute(select(Project).where(
-            Project.name == "覆盖率验收样例（Python）").order_by(Project.created_at.desc()).limit(1))).scalar_one_or_none()
+            Project.name == sample["name"]).order_by(Project.created_at.desc()).limit(1))).scalar_one_or_none()
         if existing:
             project_id = existing.id
         else:
-            db.add(Project(id=project_id, name="覆盖率验收样例（Python）", owner_id=user.id,
+            db.add(Project(id=project_id, name=sample["name"], owner_id=user.id,
                            source_type=SourceType.UPLOAD,
                            source_config={"coverage_config": {"enabled": True, "required": True,
-                               "services": [{"name": "sample-python", "agent_url": "http://host.docker.internal:8765",
-                                             "token_env": "COVERAGE_AGENT_SAMPLE_TOKEN", "language": "python",
-                                             "tool": "coverage.py", "primary": True}]}},
+                               "services": [{"name": sample["service"], "agent_url": sample["url"],
+                                             "token_env": sample["token"], "language": language,
+                                             "tool": sample["tool"], "primary": True}]}},
                            quality_gate_config={"auto_coverage": True}))
         db.add(TestRun(id=run_id, project_id=project_id, user_id=user.id,
                        source_type=SourceType.UPLOAD, status=TestStatus.PENDING,
-                       analysis_result={"tech_stack": {"stack": "python"}}))
+                       analysis_result={"tech_stack": {"stack": language}}))
         db.add(TestCase(test_run_id=run_id, case_type="api", case_name=case["case_name"],
                         request_data=case["request"], expected_result=case["expected"],
                         api_path="/orders/1", http_method="GET"))
         await db.commit()
 
     root_task_id = TestExecutionEngine().execute_all(
-        str(run_id), {"tech_stack": {"stack": "python"}},
+        str(run_id), {"tech_stack": {"stack": language}},
         {"api": [case], "performance": [], "integration": []})
     print(json.dumps({"project_id": str(project_id), "test_run_id": str(run_id),
                       "celery_task_id": root_task_id}, ensure_ascii=False), flush=True)
@@ -84,4 +96,7 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--language", choices=SAMPLES, default="python")
+    args = parser.parse_args()
+    asyncio.run(main(args.language))

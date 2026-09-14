@@ -24,7 +24,8 @@ def test_agent_rejects_untrusted_fields(monkeypatch):
     monkeypatch.setenv("COVERAGE_AGENT_ALLOWED_HOSTS", "coverage.example.test")
     with pytest.raises(ValueError, match="token_env"):
         validate_agent_service(_service(token_env="PATH"))
-    with pytest.raises(ValueError, match="第一阶段"):
+    assert validate_agent_service(_service(language="go", tool="go_cover"))["tool"] == "go_cover"
+    with pytest.raises(ValueError, match="仅支持"):
         validate_agent_service(_service(language="go"))
     with pytest.raises(ValueError, match="服务名"):
         validate_agent_service(_service(name="../other"))

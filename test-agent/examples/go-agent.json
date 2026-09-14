@@ -1,0 +1,15 @@
+{
+  "artifact_root": "/var/lib/aitp-coverage",
+  "services": [
+    {
+      "name": "sample-go",
+      "language": "go",
+      "tool": "go_cover",
+      "workdir": "/opt/sample-go",
+      "command": ["/opt/sample-go/server"],
+      "service_url": "http://host.docker.internal:8203",
+      "health_url": "http://host.docker.internal:8203/health",
+      "max_run_seconds": 1800
+    }
+  ]
+}

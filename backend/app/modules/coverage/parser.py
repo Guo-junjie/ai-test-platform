@@ -259,6 +259,7 @@ def _parse_go_coverprofile(raw_text: str) -> dict[str, Any]:
         raise ValueError("无效的 Go coverprofile 模式")
     pattern = re.compile(r"^(.+):(\d+)\.(\d+),(\d+)\.(\d+)\s+(\d+)\s+(\d+)$")
     grouped: dict[str, dict[int, dict[str, Any]]] = {}
+    file_statements: dict[str, tuple[int, int]] = {}
     total = covered = 0
     for row in rows[1:]:
         match = pattern.match(row.strip())
@@ -270,6 +271,9 @@ def _parse_go_coverprofile(raw_text: str) -> dict[str, Any]:
             raise ValueError("Go coverprofile 行范围或语句数无效")
         total += statements
         covered += statements if hits > 0 else 0
+        file_total, file_covered = file_statements.get(path, (0, 0))
+        file_statements[path] = (file_total + statements,
+                                 file_covered + (statements if hits > 0 else 0))
         lines = grouped.setdefault(path, {})
         for number in range(start, end + 1):
             if number not in lines or hits > lines[number]["hits"]:
@@ -280,10 +284,10 @@ def _parse_go_coverprofile(raw_text: str) -> dict[str, Any]:
     files = []
     for path, line_map in grouped.items():
         lines = sorted(line_map.values(), key=lambda item: item["number"])
-        count = sum(line["hits"] > 0 for line in lines)
-        files.append({"path": path, "line_rate": _to_pct(count, len(lines)),
-                      "branch_rate": None, "total_lines": len(lines),
-                      "covered_lines": count, "lines": lines})
+        file_total, file_covered = file_statements[path]
+        files.append({"path": path, "line_rate": _to_pct(file_covered, file_total),
+                      "branch_rate": None, "total_lines": file_total,
+                      "covered_lines": file_covered, "lines": lines})
     return {"line_rate": _to_pct(covered, total), "branch_rate": None,
             "total_lines": total, "covered_lines": covered,
             "total_branches": 0, "covered_branches": 0, "files": files}

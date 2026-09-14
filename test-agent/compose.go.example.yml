@@ -1,0 +1,18 @@
+services:
+  coverage-agent-go-sample:
+    build:
+      context: .
+      dockerfile: Dockerfile.go
+    container_name: aitp-coverage-agent-go-sample
+    environment:
+      COVERAGE_AGENT_TOKEN: ${COVERAGE_AGENT_GO_SAMPLE_TOKEN:?set COVERAGE_AGENT_GO_SAMPLE_TOKEN}
+      COVERAGE_AGENT_CONFIG: /opt/sample-go/agent.json
+    ports:
+      - "8766:8765"
+      - "8203:8203"
+    volumes:
+      - go_sample_artifacts:/var/lib/aitp-coverage
+    restart: unless-stopped
+
+volumes:
+  go_sample_artifacts:

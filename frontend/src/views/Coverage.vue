@@ -224,9 +224,9 @@
                 style="width: 120px"
                 @change="onFileSortChange"
               >
-                <el-option label="按行率" value="rate" />
+                <el-option :label="dashboard?.latest?.language === 'go' ? '按语句率' : '按行率'" value="rate" />
                 <el-option label="按路径" value="path" />
-                <el-option label="按总行" value="total_lines" />
+                <el-option :label="dashboard?.latest?.language === 'go' ? '按总语句' : '按总行'" value="total_lines" />
               </el-select>
               <el-select
                 v-model="fileOrder"
@@ -254,7 +254,7 @@
               <span class="file-path">{{ row.path }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="行覆盖" width="200" align="center">
+          <el-table-column :label="dashboard?.latest?.language === 'go' ? '语句覆盖' : '行覆盖'" width="200" align="center">
             <template #default="{ row }">
               <el-progress
                 :percentage="fmt(row.line_rate)"
@@ -272,14 +272,14 @@
               <span v-else :class="rateClass(row.branch_rate)">{{ fmt(row.branch_rate) }}%</span>
             </template>
           </el-table-column>
-          <el-table-column label="覆盖行" width="100" align="center">
+          <el-table-column :label="dashboard?.latest?.language === 'go' ? '覆盖语句' : '覆盖行'" width="100" align="center">
             <template #default="{ row }">
               {{ row.covered_lines }}/{{ row.total_lines }}
             </template>
           </el-table-column>
           <el-table-column label="操作" width="80" fixed="right">
             <template #default="{ row }">
-              <el-button size="small" text type="primary" @click.stop="onFileRowClick(row)">查看行</el-button>
+              <el-button size="small" text type="primary" @click.stop="onFileRowClick(row)">查看明细</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -308,7 +308,7 @@
       <div v-loading="loadingSource" class="source-drawer-body">
         <div v-if="sourceData" class="source-summary">
           <el-tag :type="rateType(sourceData.line_rate)" effect="plain" size="large">
-            行覆盖 {{ fmt(sourceData.line_rate) }}%
+            {{ dashboard?.latest?.language === 'go' ? '语句覆盖' : '行覆盖' }} {{ fmt(sourceData.line_rate) }}%
           </el-tag>
           <el-tag
             v-if="sourceData.branch_rate != null"
@@ -320,7 +320,7 @@
             分支覆盖 {{ fmt(sourceData.branch_rate) }}%
           </el-tag>
           <el-tag effect="plain" size="large" style="margin-left: 8px">
-            {{ sourceData.covered_lines }} / {{ sourceData.total_lines }} 行
+            {{ sourceData.covered_lines }} / {{ sourceData.total_lines }} {{ dashboard?.latest?.language === 'go' ? '语句' : '行' }}
           </el-tag>
         </div>
         <div v-if="sourceData" class="legend">
@@ -402,21 +402,23 @@
         </el-form-item>
         <el-form-item label="采集方式">
           <el-select v-model="probeForm.strategy" style="width: 100%">
-            <el-option label="远程 Python Agent（测试前启动，测试后回收）" value="agent" />
+            <el-option label="远程 Agent（Python / Go，测试前启动，测试后回收）" value="agent" />
             <el-option label="现有 XML 报告地址" value="http_dump" />
             <el-option label="现有工作空间报告" value="repo_file" />
           </el-select>
         </el-form-item>
         <template v-if="probeForm.strategy === 'agent'">
-          <el-alert title="Agent 需要部署在被测 Python 服务主机。服务启动命令只在 Agent 配置文件中定义，平台不会下发命令。" type="info" :closable="false" style="margin-bottom: 16px" />
+          <el-alert title="Agent 部署在被测服务主机；Go 服务须由 CI 使用 go build -cover 构建，并在收到停止信号后正常退出。启动命令只在 Agent 配置文件中定义。" type="info" :closable="false" style="margin-bottom: 16px" />
           <el-form-item label="严格模式"><el-switch v-model="probeForm.required" /><span style="margin-left: 8px">采集失败则测试任务失败</span></el-form-item>
           <el-form-item label="服务名"><el-input v-model="probeForm.agent_service_name" placeholder="与 Agent 登记名一致" /></el-form-item>
+          <el-form-item label="服务语言"><el-select v-model="probeForm.agent_language" style="width: 100%"><el-option label="Python（coverage.py）" value="python" /><el-option label="Go（go build -cover）" value="go" /></el-select></el-form-item>
           <el-form-item label="Agent URL"><el-input v-model="probeForm.agent_url" placeholder="https://coverage-agent.example.com" /></el-form-item>
           <el-form-item label="令牌环境变量"><el-input v-model="probeForm.token_env" placeholder="COVERAGE_AGENT_TOKEN" /></el-form-item>
           <el-form-item label="测试入口"><el-switch v-model="probeForm.agent_primary" /></el-form-item>
           <template v-for="(item, index) in extraAgentServices" :key="index">
             <el-divider>附加服务 {{ index + 1 }}</el-divider>
             <el-form-item label="服务名"><el-input v-model="item.name" /></el-form-item>
+            <el-form-item label="服务语言"><el-select v-model="item.language" style="width: 100%"><el-option label="Python（coverage.py）" value="python" /><el-option label="Go（go build -cover）" value="go" /></el-select></el-form-item>
             <el-form-item label="Agent URL"><el-input v-model="item.agent_url" /></el-form-item>
             <el-form-item label="令牌环境变量"><el-input v-model="item.token_env" /></el-form-item>
             <el-form-item label="测试入口"><el-switch v-model="item.primary" /></el-form-item>
@@ -574,6 +576,7 @@ const probeForm = ref<{
   dump_url: string
   required: boolean
   agent_service_name: string
+  agent_language: string
   agent_url: string
   token_env: string
   agent_primary: boolean
@@ -586,6 +589,7 @@ const probeForm = ref<{
   dump_url: '',
   required: false,
   agent_service_name: '',
+  agent_language: 'python',
   agent_url: '',
   token_env: 'COVERAGE_AGENT_TOKEN',
   agent_primary: true,
@@ -599,7 +603,7 @@ function openProbeConfigDrawer() {
   const curProj = projects.value.find((p) => p.id === projectId.value)
   const cfg = curProj?.coverage_config || curProj?.source_config?.coverage_config || {}
   const agent = cfg.services?.[0] || {}
-  extraAgentServices.value = (cfg.services || []).slice(1).map((item: any) => ({ ...item }))
+  extraAgentServices.value = (cfg.services || []).slice(1).map((item: any) => ({ ...item, language: item.language || 'python' }))
   probeForm.value = {
     enabled: cfg.enabled !== false,
     tool: cfg.tool || 'cobertura',
@@ -609,6 +613,7 @@ function openProbeConfigDrawer() {
     dump_url: cfg.dump_url || '',
     required: cfg.required === true,
     agent_service_name: agent.name || '',
+    agent_language: agent.language || 'python',
     agent_url: agent.agent_url || '',
     token_env: agent.token_env || 'COVERAGE_AGENT_TOKEN',
     agent_primary: agent.primary !== false,
@@ -643,10 +648,14 @@ function agentPayload() {
     name: probeForm.value.agent_service_name.trim(),
     agent_url: probeForm.value.agent_url.trim(),
     token_env: probeForm.value.token_env.trim(),
-    language: 'python',
-    tool: 'coverage.py',
+    language: probeForm.value.agent_language,
+    tool: agentTool(probeForm.value.agent_language),
     primary: probeForm.value.agent_primary,
   }
+}
+
+function agentTool(language: string) {
+  return language === 'go' ? 'go_cover' : 'coverage.py'
 }
 
 function addAgentService() {
@@ -674,7 +683,7 @@ async function saveProbeConfig() {
     return
   }
   if (probeForm.value.strategy === 'agent') {
-    const services = [agentPayload(), ...extraAgentServices.value]
+    const services = [agentPayload(), ...extraAgentServices.value.map((item) => ({ ...item, tool: agentTool(item.language) }))]
     if (services.some((item) => !item.name?.trim() || !item.agent_url?.trim() || !item.token_env?.trim())) {
       ElMessage.warning('请填写全部 Agent 服务的名称、地址和令牌环境变量')
       return
@@ -696,8 +705,8 @@ async function saveProbeConfig() {
   try {
     const payload = {
       ...probeForm.value,
-      tool: probeForm.value.strategy === 'agent' ? 'coverage.py' : probeForm.value.tool,
-      services: probeForm.value.strategy === 'agent' ? [agentPayload(), ...extraAgentServices.value] : [],
+      tool: probeForm.value.strategy === 'agent' ? agentTool(probeForm.value.agent_language) : probeForm.value.tool,
+      services: probeForm.value.strategy === 'agent' ? [agentPayload(), ...extraAgentServices.value.map((item) => ({ ...item, tool: agentTool(item.language) }))] : [],
     }
     const res: any = await coverageApi.updateConfig(projectId.value, payload)
     if (res?.code === 0) {

@@ -1,6 +1,6 @@
-# Python 远程代码覆盖率 Agent（第一阶段）
+# 远程代码覆盖率 Agent（Python / Go）
 
-本 Agent 在**被测 Python 服务主机**运行，平台只选择管理员预先登记的服务。每次测试创建独立的覆盖率会话：启动插桩实例 → 原有 API/性能/集成测试向该实例发请求 → 停止实例 → 生成 `coverage.xml` → 平台解析入库。普通业务服务 URL 本身无法提供代码覆盖率。现有手动上传、HTTP XML 报告和工作空间报告仍可使用。
+本 Agent 在**被测服务主机**运行，平台只选择管理员预先登记的服务。每次测试创建独立的覆盖率会话：启动插桩实例 → 原有 API/性能/集成测试向该实例发请求 → 停止实例 → 生成 `coverage.xml` 或 `coverage.out` → 平台解析入库。普通业务服务 URL 本身无法提供代码覆盖率。现有手动上传、HTTP XML 报告和工作空间报告仍可使用。
 
 `examples/` 和 `compose.example.yml` 提供独立的 Python 验证服务（8202）与 Agent（8765）。它只为链路验收使用，不会替换已有 Go 被测服务（8201）；为内网演示方便使用 HTTP，生产部署应改为 HTTPS。
 
@@ -49,8 +49,46 @@ COVERAGE_AGENT_CONFIG=/etc/aitp-coverage-agent.json COVERAGE_AGENT_TOKEN='从密
   /opt/aitp-coverage-agent/venv/bin/uvicorn agent:app --host 127.0.0.1 --port 8765
 ```
 
+## Go 服务：CI 构建与自动采集
+
+Go HTTP 服务必须使用 Go 1.20+ 在 CI 中构建覆盖率版本。平台和 Agent 不会对已经运行的普通 Go 二进制自动插桩。建议由 Jenkins 为独立测试环境构建并部署，例如：
+
+```bash
+go build -cover -o /srv/orders-coverage/orders ./cmd/orders
+# 可按需要使用 -coverpkg=./... 扩大模块内插桩范围
+```
+
+在被测主机安装与构建版本兼容的 Go 工具链，并由管理员登记 Agent 服务：
+
+```json
+{
+  "name": "orders-go",
+  "language": "go",
+  "tool": "go_cover",
+  "workdir": "/srv/orders-coverage",
+  "command": ["/srv/orders-coverage/orders"],
+  "go_executable": "/usr/local/go/bin/go",
+  "service_url": "http://orders-test.internal:8203",
+  "health_url": "http://orders-test.internal:8203/health",
+  "commit_sha": "由部署流水线写入的 Git commit"
+}
+```
+
+测试前 Agent 启动此二进制并设置本次任务独有的 `GOCOVERDIR`。测试结束后 Agent 发送停止信号；**Go 服务必须处理该信号并让 `main` 正常返回**，否则不会写出完整的 `covmeta`/`covcounters`。Agent 用 `go tool covdata textfmt` 转换成 `coverage.out`，平台按 Go **语句覆盖率**解析和展示。每个服务同一时刻仅允许一个覆盖率会话，避免端口争用。Jenkins 应先部署匹配 commit 的测试二进制及 Agent 配置，再触发平台测试；有版本不一致时严格模式会失败。
+
+仓库提供与 8201 业务服务隔离的 Go 演示服务（8203）和 Agent（8766）：
+
+```bash
+# 在平台 .env 中提供随机生成的 COVERAGE_AGENT_GO_SAMPLE_TOKEN
+sudo docker compose --env-file .env -f test-agent/compose.go.example.yml up -d --build
+sudo docker compose up -d --no-deps --force-recreate backend celery-worker
+sudo docker exec -e PYTHONPATH=/app aitp-backend python /app/tests/manual_verify_coverage_agent.py --language go
+```
+
+8201 的现有 Go 1.18 二进制并非覆盖率构建，不能直接获得请求级代码覆盖率；不要将演示配置指向它。升级 Go 构建链并为其准备独立覆盖率环境后，可按上述方式登记真实服务。
+
 ## 当前边界
 
-- 这是方案的第一阶段：支持 Python 远程裸机和已有测试执行器发送请求；Java、Go、C++、Docker/Kubernetes 自动插桩、Diff Coverage 与 CI 门禁属于后续阶段。Go 1.18 的现有 IoTFast 服务不能用这个 Python Agent直接统计请求代码覆盖率。
+- 目前支持 Python coverage.py 与 Go `go build -cover` 远程 Agent 自动采集；Java、C++、Docker/Kubernetes 自动插桩、Diff Coverage 与 CI 门禁属于后续阶段。
 - 同一服务一次只允许一个活跃覆盖率会话，避免产物和端口互相污染。Agent 重启后内存中的进程会话不会恢复；部署时应在无活跃测试的窗口重启。
 - 平台默认仅允许 `localhost`、`127.0.0.1`、`host.docker.internal` 或 `COVERAGE_AGENT_ALLOWED_HOSTS` 中的 Agent 主机，且不在数据库保存令牌本身。`required=true` 时启动或采集失败会使测试任务失败；否则测试结果保留，Coverage Run 单独显示失败原因。

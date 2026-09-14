@@ -34,6 +34,8 @@ example.com/demo/a.go:4.1,6.2 2 0
     assert (report["total_lines"], report["covered_lines"], report["line_rate"]) == (10, 8, 80)
     assert report["branch_rate"] is None
     assert report["files"][0]["path"] == "example.com/demo/a.go"
+    assert (report["files"][0]["total_lines"], report["files"][0]["covered_lines"],
+            report["files"][0]["line_rate"]) == (10, 8, 80)
     assert report["files"][0]["lines"][-1]["hits"] == 0
 
 
