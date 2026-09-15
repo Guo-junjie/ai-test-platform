@@ -1,0 +1,949 @@
+/* =============================================================================
+ * AI 自动化测试平台 · 全局样式令牌层
+ * -----------------------------------------------------------------------------
+ * 本文件是整个前端唯一的视觉真相源（Single Source of Truth）。
+ *
+ * 设计原则：
+ *   1. 只做视觉，不含任何业务逻辑；
+ *   2. 优先通过覆盖 Element Plus 自身的 CSS 变量生效，避免大范围改组件模板；
+ *   3. 所有"硬编码色值"应收敛为 var(--app-*) 或 var(--el-*)，禁止再写死 hex；
+ *   4. 三套视觉方向（变体）通过 <html data-ui-variant="v1|v2|v3"> 切换，
+ *      切换只改令牌，不改结构 —— 因此换风格的成本 = 改本文件。
+ *
+ * 引入位置：src/main.ts，必须在 'element-plus/dist/index.css' 之后。
+ * ========================================================================== */
+
+/* =============================================================================
+ * 一、基础令牌（与变体无关的公共部分）
+ * ========================================================================== */
+
+:root {
+  /* ---------- 字体 ---------- */
+  --app-font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial,
+    'Noto Sans SC', sans-serif;
+  --app-font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Monaco,
+    'Courier New', monospace;
+
+  /* 字号体系：只允许这 6 档，避免各页面自由发挥 */
+  --app-fs-xs: 12px;   /* 辅助说明、表头、标签 */
+  --app-fs-sm: 13px;   /* 表格正文、次要文本 */
+  --app-fs-base: 14px; /* 正文、表单 */
+  --app-fs-md: 15px;   /* 卡片标题 */
+  --app-fs-lg: 18px;   /* 区块大标题 */
+  --app-fs-xl: 24px;   /* 页面主标题、指标数字 */
+
+  --app-lh-base: 1.6;
+
+  /* ---------- 间距：4px 栅格，共 8 档（2 档预留） ---------- */
+  --app-sp-1: 4px;
+  --app-sp-2: 8px;
+  --app-sp-3: 12px;
+  --app-sp-4: 16px;
+  --app-sp-5: 20px;
+  --app-sp-6: 24px;  /* 预留档位 */
+  --app-sp-8: 32px;
+  --app-sp-10: 40px; /* 预留档位 */
+
+  /* ---------- 圆角 ---------- */
+  --app-radius-xs: 4px; /* 预留档位 */
+  --app-radius-sm: 6px;
+  --app-radius-md: 8px;
+  --app-radius-lg: 12px;
+  --app-radius-pill: 999px;
+
+  /* ---------- 中性色（slate 系，统一冷灰，避免 Element 暖灰/冷灰混用） ---------- */
+  --app-text-primary: #101828;
+  --app-text-regular: #475467;
+  --app-text-secondary: #667085;
+  --app-text-placeholder: #98a2b3;
+  --app-text-disabled: #a9b1bd;
+  --app-text-inverse: #ffffff;
+
+  --app-border-base: #e4e7ec;
+  --app-border-light: #eaecf0;
+  --app-border-lighter: #f2f4f7;
+  --app-border-extra-light: #f9fafb;
+
+  --app-fill-light: #f2f4f7;
+  --app-fill-lighter: #f9fafb;
+
+  --app-bg-page: #f7f8fa;
+  --app-bg-card: #ffffff;
+  --app-bg-mask: rgba(16, 24, 40, 0.45);
+  --app-bg-hover: #f9fafb;
+
+  /* ---------- 阴影：克制，边框优先于阴影 ---------- */
+  --app-shadow-none: none; /* 预留档位 */
+  --app-shadow-xs: 0 1px 2px rgba(16, 24, 40, 0.04);
+  --app-shadow-sm: 0 1px 3px rgba(16, 24, 40, 0.07), 0 1px 2px rgba(16, 24, 40, 0.04);
+  --app-shadow-md: 0 4px 12px rgba(16, 24, 40, 0.08);
+  --app-shadow-lg: 0 12px 32px -8px rgba(16, 24, 40, 0.14);
+
+  /* ---------- 骨架尺寸（变体可覆盖） ---------- */
+  --app-sidebar-width: 208px;
+  --app-sidebar-collapsed-width: 64px;
+  --app-header-height: 56px;
+  --app-page-padding: 20px;
+  --app-card-padding: 18px;
+  --app-card-padding-x: 18px;
+
+  /* 侧栏语义色（变体覆盖，默认 = 浅色侧栏） */
+  --app-sidebar-bg: #ffffff;
+  --app-sidebar-border: var(--app-border-light);
+  /* 侧栏内部的分隔线（logo 区与菜单区之间）。与 --app-sidebar-border 分开定义，
+     因为深色侧栏下"外边框"要透明、"内部分隔线"却需要一层极淡的白色。 */
+  --app-sidebar-divider: var(--app-border-light);
+  --app-sidebar-brand-text: var(--app-text-primary);
+  --app-sidebar-text: var(--app-text-regular);
+  --app-sidebar-item-hover-bg: var(--app-fill-lighter);
+  --app-sidebar-item-active-bg: #eef3ff;
+  --app-sidebar-item-active-text: var(--app-accent);
+  --app-sidebar-item-active-bar: var(--app-accent);
+  --app-sidebar-group-text: var(--app-text-placeholder);
+
+  /* 顶栏 */
+  --app-header-bg: #ffffff;
+  --app-header-border: var(--app-border-light);
+
+  /* 表格 */
+  --app-table-header-bg: #fafbfc;
+  --app-table-cell-padding-y: 11px;
+}
+
+/* =============================================================================
+ * 二、变体 v1 ——「清透白」（默认）
+ *     浅色侧栏 + 深蓝主色 + 边框驱动 + 舒展留白
+ *     适合：大多数企业内网工具，长时间盯屏不累
+ * ========================================================================== */
+
+:root,
+[data-ui-variant='v1'] {
+  --app-accent: #2563eb;
+  --app-accent-hover: #1d4ed8;
+  --app-accent-weak: #eef3ff;
+
+  --el-color-primary: #2563eb;
+  --el-color-primary-light-3: #6692f1;
+  --el-color-primary-light-5: #92b1f5;
+  --el-color-primary-light-7: #bed0f9;
+  --el-color-primary-light-8: #d3e0fb;
+  --el-color-primary-light-9: #e9effd;
+  --el-color-primary-dark-2: #1e4fbc;
+}
+
+/* =============================================================================
+ * 三、变体 v2 ——「深空」
+ *     深色侧栏（现代石板色，非 Ant 宝蓝黑）+ 靛蓝主色 + 轻阴影卡片
+ *     适合：希望更像"AI 产品"、更有科技感
+ * ========================================================================== */
+
+[data-ui-variant='v2'] {
+  --app-accent: #4f46e5;
+  --app-accent-hover: #4338ca;
+  --app-accent-weak: #eeedfd;
+
+  --el-color-primary: #4f46e5;
+  --el-color-primary-light-3: #847eed;
+  --el-color-primary-light-5: #a7a3f2;
+  --el-color-primary-light-7: #cac8f7;
+  --el-color-primary-light-8: #dcdafa;
+  --el-color-primary-light-9: #ededfc;
+  --el-color-primary-dark-2: #3f38b7;
+
+  --app-sidebar-bg: #151922;
+  --app-sidebar-border: transparent;
+  --app-sidebar-divider: rgba(255, 255, 255, 0.08);
+  --app-sidebar-brand-text: #ffffff;
+  --app-sidebar-text: #9ba3b4;
+  --app-sidebar-item-hover-bg: rgba(255, 255, 255, 0.06);
+  --app-sidebar-item-active-bg: rgba(79, 70, 229, 0.18);
+  --app-sidebar-item-active-text: #ffffff;
+  --app-sidebar-item-active-bar: #6d63f0;
+  --app-sidebar-group-text: #5b6373;
+}
+
+/* =============================================================================
+ * 四、变体 v3 ——「紧凑专业」
+ *     浅色侧栏 + 蓝主色 + 高信息密度 + 网格线表格
+ *     适合：数据密集型，一屏看更多行
+ * ========================================================================== */
+
+[data-ui-variant='v3'] {
+  --app-accent: #2563eb;
+  --app-accent-hover: #1d4ed8;
+  --app-accent-weak: #eef3ff;
+
+  --el-color-primary: #2563eb;
+  --el-color-primary-light-3: #6692f1;
+  --el-color-primary-light-5: #92b1f5;
+  --el-color-primary-light-7: #bed0f9;
+  --el-color-primary-light-8: #d3e0fb;
+  --el-color-primary-light-9: #e9effd;
+  --el-color-primary-dark-2: #1e4fbc;
+
+  --app-sidebar-width: 192px;
+  --app-header-height: 48px;
+  --app-page-padding: 14px;
+  --app-card-padding: 14px;
+  --app-card-padding-x: 16px;
+  --app-radius-md: 6px;
+  --app-radius-lg: 8px;
+
+  --app-table-cell-padding-y: 8px;
+}
+
+/* =============================================================================
+ * 五、Element Plus 令牌覆盖（全变体共用）
+ *     覆盖 EP 自带的 CSS 变量，一次性统一所有组件观感
+ * ========================================================================== */
+
+:root {
+  /* ---------- 语义色：比 EP 默认更沉稳，去掉"塑料感" ---------- */
+  --el-color-success: #16a34a;
+  --el-color-success-light-3: #5cbf80;
+  --el-color-success-light-5: #8ad3a4;
+  --el-color-success-light-7: #b8e6c8;
+  --el-color-success-light-8: #d0eddb;
+  --el-color-success-light-9: #e8f6ed;
+  --el-color-success-dark-2: #12833c;
+
+  --el-color-warning: #d97706;
+  --el-color-warning-light-3: #e4a051;
+  --el-color-warning-light-5: #ecbb83;
+  --el-color-warning-light-7: #f3d7b4;
+  --el-color-warning-light-8: #f7e4cd;
+  --el-color-warning-light-9: #fbf1e6;
+  --el-color-warning-dark-2: #ad5f05;
+
+  --el-color-danger: #dc2626;
+  --el-color-error: #dc2626;
+  --el-color-danger-light-3: #e66767;
+  --el-color-danger-light-5: #ee9393;
+  --el-color-danger-light-7: #f5bfbf;
+  --el-color-danger-light-8: #f8d4d4;
+  --el-color-danger-light-9: #fce9e9;
+  --el-color-danger-dark-2: #b01e1e;
+  --el-color-error-light-3: #e66767;
+  --el-color-error-light-5: #ee9393;
+  --el-color-error-light-7: #f5bfbf;
+  --el-color-error-light-8: #f8d4d4;
+  --el-color-error-light-9: #fce9e9;
+  --el-color-error-dark-2: #b01e1e;
+
+  --el-color-info: #667085;
+  --el-color-info-light-3: #939aa8;
+  --el-color-info-light-5: #b3b8c3;
+  --el-color-info-light-7: #d1d5dc;
+  --el-color-info-light-8: #e0e3e8;
+  --el-color-info-light-9: #f0f1f4;
+  --el-color-info-dark-2: #525a6a;
+
+  /* ---------- 文本 ---------- */
+  --el-text-color-primary: var(--app-text-primary);
+  --el-text-color-regular: var(--app-text-regular);
+  --el-text-color-secondary: var(--app-text-secondary);
+  --el-text-color-placeholder: var(--app-text-placeholder);
+  --el-text-color-disabled: var(--app-text-disabled);
+
+  /* ---------- 边框 ---------- */
+  --el-border-color: var(--app-border-base);
+  --el-border-color-light: var(--app-border-light);
+  --el-border-color-lighter: var(--app-border-lighter);
+  --el-border-color-extra-light: var(--app-border-extra-light);
+  --el-border-color-dark: #d0d5dd;
+  --el-border-color-darker: #b8bfcc;
+
+  /* ---------- 填充 / 背景 ---------- */
+  --el-fill-color: var(--app-fill-light);
+  --el-fill-color-light: var(--app-fill-lighter);
+  --el-fill-color-lighter: #fcfcfd;
+  --el-fill-color-extra-light: #fdfdfe;
+  --el-fill-color-blank: #ffffff;
+  --el-fill-color-dark: #e4e7ec;
+  --el-bg-color: #ffffff;
+  --el-bg-color-page: var(--app-bg-page);
+  --el-bg-color-overlay: #ffffff;
+  --el-mask-color: var(--app-bg-mask);
+
+  /* ---------- 圆角 / 阴影 ---------- */
+  --el-border-radius-base: var(--app-radius-md);
+  --el-border-radius-small: var(--app-radius-sm);
+  --el-border-radius-round: 20px;
+  --el-border-radius-circle: 50%;
+  --el-box-shadow: var(--app-shadow-md);
+  --el-box-shadow-light: var(--app-shadow-sm);
+  --el-box-shadow-lighter: var(--app-shadow-xs);
+  --el-box-shadow-dark: var(--app-shadow-lg);
+
+  /* ---------- 字号 / 组件高度 ---------- */
+  --el-font-size-extra-small: 11px;
+  --el-font-size-small: var(--app-fs-xs);
+  --el-font-size-base: var(--app-fs-base);
+  --el-font-size-medium: var(--app-fs-md);
+  --el-font-size-large: 16px;
+  --el-component-size-small: 30px;
+  --el-component-size: 34px;
+  --el-component-size-large: 40px;
+
+  --el-disabled-bg-color: var(--app-fill-light);
+  --el-disabled-text-color: var(--app-text-placeholder);
+  --el-disabled-border-color: var(--app-border-light);
+  --el-transition-duration: 0.18s;
+  --el-overlay-color-lighter: var(--app-bg-mask);
+
+  /* ---------- 菜单：这些 EP 确实定义在 :root，可以在此覆盖 ---------- */
+  --el-menu-bg-color: transparent;
+  --el-menu-hover-bg-color: var(--app-sidebar-item-hover-bg);
+  --el-menu-text-color: var(--app-sidebar-text);
+  --el-menu-active-color: var(--app-sidebar-item-active-text);
+  --el-menu-hover-text-color: var(--app-sidebar-item-active-text);
+  --el-menu-border-color: transparent;
+  --el-menu-item-height: 40px;
+  --el-menu-sub-item-height: 34px;
+  --el-menu-level-padding: 14px;
+
+  /* ⚠️ 千万不要覆盖 --el-menu-icon-width 与 --el-menu-base-level-padding。
+     EP 的折叠态宽度 = icon-width(默认 24px) + base-level-padding(默认 20px) × 2 = 64px，
+     而 Layout.vue 里折叠侧栏宽度硬编码为 64px。改动这两个值会让侧栏收起后与容器宽度
+     对不上、露出一条缝。要调折叠宽度必须两边一起改。 */
+}
+
+/* =============================================================================
+ * 五之二、组件级令牌
+ * -----------------------------------------------------------------------------
+ * Element Plus 有一批变量不是定义在 :root，而是定义在组件选择器上
+ * （例如 .el-card{--el-card-padding:20px}）。同元素上「组件级声明」的优先级高于
+ * 从 :root 继承来的值 → 在 :root 里覆盖这些变量会**静默失效**。
+ * 因此它们必须在**同级别的组件选择器**里覆盖。以下 24 个变量属于此类。
+ *
+ * 该结论由 ui-audit/check-token-scope.js 逐条比对 element-plus/dist/index.css 得出。
+ * ========================================================================== */
+
+/* 表格（EP 在 .el-table / .el-table-v2 下定义这 9 个） */
+.el-table,
+.el-table-v2 {
+  --el-table-border-color: var(--app-border-lighter);
+  --el-table-border: 1px solid var(--app-border-lighter);
+  --el-table-text-color: var(--app-text-regular);
+  --el-table-header-text-color: var(--app-text-secondary);
+  --el-table-header-bg-color: var(--app-table-header-bg);
+  --el-table-row-hover-bg-color: var(--app-bg-hover);
+  --el-table-current-row-bg-color: var(--app-accent-weak);
+  --el-table-fixed-box-shadow: 0 0 10px rgba(16, 24, 40, 0.06);
+  --el-table-bg-color: var(--app-bg-card);
+  --el-table-tr-bg-color: var(--app-bg-card);
+}
+
+/* 卡片 */
+.el-card {
+  --el-card-border-color: var(--app-border-light);
+  --el-card-border-radius: var(--app-radius-lg);
+  --el-card-padding: var(--app-card-padding);
+  --el-card-bg-color: var(--app-bg-card);
+}
+
+/* 弹窗 / 气泡 */
+.el-dialog {
+  --el-dialog-border-radius: var(--app-radius-lg);
+  --el-dialog-padding-primary: var(--app-sp-5);
+}
+
+.el-popover {
+  --el-popover-border-radius: var(--app-radius-md);
+}
+
+/* 输入类（EP 在 .el-input / .el-textarea / .el-autocomplete / .el-date-editor 下定义） */
+.el-input,
+.el-textarea,
+.el-autocomplete,
+.el-date-editor {
+  --el-input-border-radius: var(--app-radius-md);
+  --el-input-bg-color: var(--app-bg-card);
+  --el-input-focus-border-color: var(--app-accent);
+}
+
+/* 标签 */
+.el-tag {
+  --el-tag-border-radius: var(--app-radius-sm);
+}
+
+/* 分页 */
+.el-pagination {
+  --el-pagination-button-bg-color: var(--app-bg-card);
+  --el-pagination-hover-color: var(--app-accent);
+  --el-pagination-font-size: var(--app-fs-sm);
+}
+
+/* =============================================================================
+ * 六、全局基础样式
+ * ========================================================================== */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--app-font-sans);
+  font-size: var(--app-fs-base);
+  line-height: var(--app-lh-base);
+  color: var(--app-text-primary);
+  background-color: var(--app-bg-page);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+/* 数字统一等宽对齐，表格里的数字不再高低不齐 */
+.el-table,
+.el-statistic,
+.el-pagination,
+.el-descriptions {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 滚动条：细、低调、只在需要时可见 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background-color: #d5d9e0;
+  border-radius: var(--app-radius-pill);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: #b8bfcc;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-track {
+  background-color: transparent;
+}
+
+/* 焦点态：统一成柔和的品牌色光圈，替代浏览器默认蓝框 */
+:focus-visible {
+  outline: 2px solid var(--app-accent);
+  outline-offset: 1px;
+}
+
+/* 文本选中 */
+::selection {
+  background-color: var(--app-accent-weak);
+  color: var(--app-accent-hover);
+}
+
+/* =============================================================================
+ * 七、结构级覆盖（CSS 变量表达不了的部分）
+ * ========================================================================== */
+
+/* ------------------------------ 卡片 ------------------------------ */
+/* 改为"边框驱动"：1px 细边框 + 极轻阴影，替代 EP 默认的柔和投影堆叠 */
+.el-card {
+  border: 1px solid var(--app-border-light);
+  border-radius: var(--app-radius-lg);
+  box-shadow: var(--app-shadow-xs);
+  overflow: hidden;
+  transition: box-shadow 0.18s ease, border-color 0.18s ease;
+}
+
+.el-card.is-always-shadow,
+.el-card.is-hover-shadow:focus,
+.el-card.is-hover-shadow:hover {
+  box-shadow: var(--app-shadow-sm);
+  border-color: var(--app-border-base);
+}
+
+.el-card.is-never-shadow {
+  box-shadow: none;
+}
+
+.el-card__header {
+  padding: 14px var(--app-card-padding-x);
+  border-bottom: 1px solid var(--app-border-lighter);
+  font-size: var(--app-fs-md);
+  font-weight: 600;
+  color: var(--app-text-primary);
+  line-height: 1.5;
+}
+
+.el-card__body {
+  padding: var(--app-card-padding) var(--app-card-padding-x);
+}
+
+/* 卡片头里常放 el-select / el-button，压缩其高度避免头重脚轻 */
+.el-card__header .el-button,
+.el-card__header .el-select,
+.el-card__header .el-input {
+  --el-component-size-small: 28px;
+}
+
+/* ------------------------------ 表格 ------------------------------ */
+/* 去外框、去竖线、表头浅灰、行高舒展 */
+.el-table {
+  --el-table-border-color: var(--app-border-lighter);
+  font-size: var(--app-fs-sm);
+}
+
+.el-table th.el-table__cell {
+  background-color: var(--app-table-header-bg) !important;
+  font-weight: 600;
+  font-size: var(--app-fs-xs);
+  color: var(--app-text-secondary);
+  letter-spacing: 0.2px;
+  padding: var(--app-table-cell-padding-y) 0;
+}
+
+.el-table td.el-table__cell {
+  padding: var(--app-table-cell-padding-y) 0;
+  color: var(--app-text-regular);
+}
+
+.el-table .cell {
+  line-height: 1.5;
+  padding-left: 12px;
+  padding-right: 12px;
+}
+
+/* 外框线处理。
+ * EP 2.14 的表格边框由四个伪元素分别绘制，缺一条就会出现不对称：
+ *   下边框 .el-table__inner-wrapper::before（无边框表格也会画，容易显得"被切了一条"）
+ *   上边框 .el-table__inner-wrapper::after（仅 .el-table--border 才有）
+ *   左边框 .el-table--border::before
+ *   右边框 .el-table--border::after
+ * 早期版本写作 .el-table::before / .el-table--group::after，在 2.14 已不存在，写了也是空规则。 */
+
+/* 无边框表格：去掉 EP 默认的底部横线 */
+.el-table:not(.el-table--border) .el-table__inner-wrapper::before {
+  display: none;
+}
+
+/* 有边框表格：四条边统一成浅色，四条都保留 */
+.el-table--border::before,
+.el-table--border::after,
+.el-table--border .el-table__inner-wrapper::before,
+.el-table--border .el-table__inner-wrapper::after {
+  background-color: var(--app-border-light);
+}
+
+.el-table th.el-table__cell.is-leaf,
+.el-table--border .el-table__cell {
+  border-bottom: 1px solid var(--app-border-light);
+}
+
+/* 操作列里的按钮别挤成一团 */
+.el-table .el-button + .el-button {
+  margin-left: 10px;
+}
+
+/* 表格空态文案统一为中文、字号收敛 */
+.el-table__empty-block {
+  min-height: 140px;
+}
+.el-table__empty-text {
+  font-size: var(--app-fs-base);
+  color: var(--app-text-placeholder);
+}
+
+/* ------------------------------ 空态（el-empty） ------------------------------ */
+/* 去掉 Element 默认的 3D 灰色插画。
+ * 原因有二：① 该插画是低对比度的灰色立体图形，放在浅色卡片上很像"图片没加载出来"；
+ * ② 各页面用 :image-size 传了 60/70/72/80/100 不等的尺寸，且在行内 style 上，
+ *    全局无法用 CSS 统一（行内样式优先），结果全站空态大小不一致。
+ * 改为纯文字空态：更克制，也天然全站一致。
+ * 如需恢复插画，删掉 .el-empty__image 的 display:none 即可。 */
+.el-empty {
+  padding: var(--app-sp-8) 0;
+}
+.el-empty__image {
+  display: none;
+}
+.el-empty__description {
+  margin-top: 0;
+}
+.el-empty__description p {
+  font-size: var(--app-fs-sm);
+  color: var(--app-text-placeholder);
+  line-height: 1.6;
+}
+
+/* ------------------------------ 侧边菜单 ------------------------------ */
+.el-menu {
+  border-right: none !important;
+}
+
+/* 一级项：圆角块状选中，替代 EP 默认的整条色块 */
+.el-menu-item,
+.el-sub-menu__title {
+  height: var(--el-menu-item-height);
+  line-height: var(--el-menu-item-height);
+  margin: 2px 8px;
+  border-radius: var(--app-radius-md);
+  font-size: var(--app-fs-base);
+  color: var(--app-sidebar-text);
+  transition: background-color 0.16s ease, color 0.16s ease;
+}
+
+.el-menu-item:hover,
+.el-sub-menu__title:hover {
+  background-color: var(--app-sidebar-item-hover-bg) !important;
+  color: var(--app-sidebar-item-active-text);
+}
+
+.el-menu-item.is-active {
+  background-color: var(--app-sidebar-item-active-bg) !important;
+  color: var(--app-sidebar-item-active-text) !important;
+  font-weight: 500;
+}
+
+/* 选中态不额外加"左侧指示条"。
+ * 原因：菜单项本身有 8px 外边距，伪元素定位在元素左边缘会与圆角色块之间留出一段空白，
+ * 视觉上是两个脱节的图形而不是一个整体。浅底/靛蓝底 + 主色文字已经足够表达选中，
+ * 符合"信息密度收敛、信号数量最少"的方向。
+ * 如需恢复指示条，可用 var(--app-sidebar-item-active-bar) 在 .el-menu-item.is-active::before 上画。 */
+
+/* 二级项：缩进收敛，字号略小，去掉"文档目录感" */
+.el-menu--inline .el-menu-item {
+  padding-left: 44px !important;
+  font-size: var(--app-fs-sm);
+  height: 34px;
+  line-height: 34px;
+}
+.el-menu--inline {
+  padding: 2px 0 4px;
+}
+
+/* 折叠态：解除 margin 造成的挤压 */
+.el-menu--collapse .el-menu-item,
+.el-menu--collapse .el-sub-menu__title {
+  margin: 2px 6px;
+}
+
+/* 分组标题风格（若使用 el-menu-item-group） */
+.el-menu-item-group__title {
+  font-size: var(--app-fs-xs);
+  color: var(--app-sidebar-group-text);
+  letter-spacing: 0.4px;
+}
+
+/* ------------------------------ 按钮 ------------------------------ */
+.el-button {
+  border-radius: var(--app-radius-md);
+  font-weight: 500;
+  transition: all 0.16s ease;
+}
+
+.el-button--primary {
+  box-shadow: 0 1px 2px rgba(37, 99, 235, 0.24);
+}
+.el-button--primary:hover {
+  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.28);
+}
+
+/* 链接式按钮：去掉默认下划线抖动 */
+.el-button.is-link {
+  font-weight: 500;
+}
+
+/* ------------------------------ 输入 / 选择 ------------------------------ */
+.el-input__wrapper,
+.el-textarea__inner {
+  border-radius: var(--app-radius-md);
+  box-shadow: 0 0 0 1px var(--app-border-base) inset;
+  transition: box-shadow 0.16s ease;
+}
+.el-input__wrapper:hover,
+.el-textarea__inner:hover {
+  box-shadow: 0 0 0 1px var(--app-text-placeholder) inset;
+}
+.el-input__wrapper.is-focus,
+.el-textarea__inner:focus {
+  box-shadow: 0 0 0 1px var(--app-accent) inset;
+}
+
+.el-select__wrapper {
+  border-radius: var(--app-radius-md);
+  box-shadow: 0 0 0 1px var(--app-border-base) inset;
+}
+
+/* ------------------------------ 标签 ------------------------------ */
+/* 柔和化：浅底 + 深字，去掉 EP 默认的色块实底带来的"廉价感" */
+.el-tag {
+  border-radius: var(--app-radius-sm);
+  font-weight: 500;
+  border-width: 1px;
+  border-style: solid;
+  font-size: var(--app-fs-xs);
+  padding: 0 8px;
+}
+
+.el-tag--large {
+  height: 26px;
+  line-height: 24px;
+}
+
+/* ------------------------------ 面包屑 ------------------------------ */
+.el-breadcrumb {
+  font-size: var(--app-fs-xs);
+  line-height: 1.4;
+}
+.el-breadcrumb__inner,
+.el-breadcrumb__separator {
+  color: var(--app-text-placeholder);
+  font-weight: 400;
+}
+.el-breadcrumb__item:last-child .el-breadcrumb__inner {
+  color: var(--app-text-secondary);
+}
+
+/* ------------------------------ 标签页 ------------------------------ */
+.el-tabs__header {
+  margin-bottom: 18px;
+}
+.el-tabs__nav-wrap::after {
+  height: 1px;
+  background-color: var(--app-border-light);
+}
+.el-tabs__item {
+  font-size: var(--app-fs-base);
+  color: var(--app-text-secondary);
+  height: 40px;
+  line-height: 40px;
+  transition: color 0.16s ease;
+}
+.el-tabs__item.is-active {
+  color: var(--app-accent);
+  font-weight: 600;
+}
+.el-tabs__active-bar {
+  height: 2px;
+  border-radius: 2px;
+}
+
+/* ------------------------------ 弹窗 / 抽屉 ------------------------------ */
+.el-dialog {
+  border-radius: var(--app-radius-lg);
+  box-shadow: var(--app-shadow-lg);
+  overflow: hidden;
+}
+.el-dialog__header {
+  margin-right: 0;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid var(--app-border-lighter);
+}
+.el-dialog__title {
+  font-size: var(--app-fs-md);
+  font-weight: 600;
+  color: var(--app-text-primary);
+}
+.el-dialog__body {
+  padding: 20px;
+  color: var(--app-text-regular);
+}
+.el-dialog__footer {
+  padding: 14px 20px 18px;
+  border-top: 1px solid var(--app-border-lighter);
+}
+
+.el-drawer__header {
+  margin-bottom: 0;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid var(--app-border-lighter);
+  font-size: var(--app-fs-md);
+  font-weight: 600;
+  color: var(--app-text-primary);
+}
+.el-drawer__body {
+  padding: 20px;
+}
+
+/* ------------------------------ 消息 / 通知 ------------------------------ */
+.el-message {
+  /* 顶栏高度 56px，默认提示会压在顶栏上（实测截图里红条正好盖住页面标题）。
+     这里用 margin-top 下移而不是覆盖 top —— EP 用行内 top 计算多条的堆叠位置，
+     若用 !important 覆盖 top 会让同时出现的多条提示重叠在一起。 */
+  margin-top: calc(var(--app-header-height) - 8px);
+  border-radius: var(--app-radius-md);
+  box-shadow: var(--app-shadow-md);
+  border: 1px solid var(--app-border-light);
+}
+.el-notification {
+  border-radius: var(--app-radius-lg);
+  box-shadow: var(--app-shadow-lg);
+}
+
+/* ------------------------------ 描述列表 ------------------------------ */
+.el-descriptions__label {
+  color: var(--app-text-secondary);
+  font-weight: 500;
+}
+.el-descriptions__content {
+  color: var(--app-text-primary);
+}
+
+/* ------------------------------ 进度条 / 步骤条 ------------------------------ */
+.el-progress-bar__outer {
+  border-radius: var(--app-radius-pill);
+}
+.el-step__title {
+  font-size: var(--app-fs-sm);
+}
+
+/* ------------------------------ 折叠面板 ------------------------------ */
+.el-collapse {
+  border-top: 1px solid var(--app-border-lighter);
+  border-bottom: 1px solid var(--app-border-lighter);
+}
+.el-collapse-item__header {
+  font-size: var(--app-fs-base);
+  font-weight: 500;
+  color: var(--app-text-primary);
+  border-bottom-color: var(--app-border-lighter);
+}
+.el-collapse-item__wrap {
+  border-bottom-color: var(--app-border-lighter);
+}
+
+/* ------------------------------ 分页 ------------------------------ */
+.el-pagination {
+  --el-pagination-font-size: var(--app-fs-sm);
+  font-weight: 400;
+  color: var(--app-text-secondary);
+}
+
+/* ------------------------------ 警告提示 ------------------------------ */
+.el-alert {
+  border-radius: var(--app-radius-md);
+  padding: 10px 14px;
+  align-items: flex-start;
+}
+.el-alert__title {
+  font-size: var(--app-fs-base);
+}
+
+/* =============================================================================
+ * 八、编排工具类（页面级骨架，供视图复用，避免各页面重复造轮子）
+ * ========================================================================== */
+
+/* 页面外层：统一留白与纵向节奏 */
+.app-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-sp-5);
+}
+
+/* 页面标题区：标题 + 一行灰色副标题 + 右侧操作区 */
+.app-page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--app-sp-4);
+}
+.app-page-title {
+  margin: 0;
+  font-size: var(--app-fs-lg);
+  font-weight: 600;
+  color: var(--app-text-primary);
+  line-height: 1.4;
+}
+.app-page-desc {
+  margin: 4px 0 0;
+  font-size: var(--app-fs-sm);
+  color: var(--app-text-secondary);
+  line-height: 1.5;
+}
+.app-page-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--app-sp-2);
+  flex-shrink: 0;
+}
+
+/* 区块标题（卡片内部的次级标题） */
+.app-section-title {
+  font-size: var(--app-fs-md);
+  font-weight: 600;
+  color: var(--app-text-primary);
+}
+
+/* 通用文本层级 */
+.app-text-secondary {
+  color: var(--app-text-secondary);
+  font-size: var(--app-fs-sm);
+}
+.app-text-muted {
+  color: var(--app-text-placeholder);
+  font-size: var(--app-fs-xs);
+}
+.app-mono {
+  font-family: var(--app-font-mono);
+  font-size: var(--app-fs-sm);
+}
+
+/* 指标数字：统一字重与字距，去除各页面自行设定 */
+.app-metric {
+  font-size: var(--app-fs-xl);
+  font-weight: 600;
+  color: var(--app-text-primary);
+  line-height: 1.2;
+  letter-spacing: -0.3px;
+}
+.app-metric-label {
+  margin-top: var(--app-sp-1);
+  font-size: var(--app-fs-sm);
+  color: var(--app-text-secondary);
+}
+
+/* 状态点：用于"● 运行中"这类轻量状态表达 */
+.app-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.app-dot--success { background-color: var(--el-color-success); }
+.app-dot--warning { background-color: var(--el-color-warning); }
+.app-dot--danger  { background-color: var(--el-color-danger); }
+.app-dot--info    { background-color: var(--el-color-info); }
+
+/* 栅格间距修正：EP 的 el-row gutter 只加左右 padding，垂直间距需自己补 */
+.app-stack-5 { display: flex; flex-direction: column; gap: var(--app-sp-5); }
+.app-stack-4 { display: flex; flex-direction: column; gap: var(--app-sp-4); }
+.app-stack-3 { display: flex; flex-direction: column; gap: var(--app-sp-3); }
+
+/* =============================================================================
+ * 九、过渡动画收敛（避免 EP 默认的多个动画叠加造成的"跳"）
+ * ========================================================================== */
+
+.fade-slide-enter-active,
+.fade-slide-leave-active {
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+.fade-slide-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+.fade-slide-leave-to {
+  opacity: 0;
+}
+
+/* 尊重用户的"减少动效"系统偏好 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
