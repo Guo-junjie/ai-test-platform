@@ -129,6 +129,10 @@
   --app-accent-weak: #eef3ff;
 
   --el-color-primary: #2563eb;
+  /* 防御性对齐：EP 在 :root 自留了 --el-color-primary-rgb（旧版默认蓝，与本站统一主色不同），
+     当前 EP 无任何消费点（死令牌），但一旦被消费就会重新出现色差。
+     这里显式对齐到本变体主色，保证全站主色只有一个真相。 */
+  --el-color-primary-rgb: 37, 99, 235;
   --el-color-primary-light-3: #6692f1;
   --el-color-primary-light-5: #92b1f5;
   --el-color-primary-light-7: #bed0f9;
@@ -150,6 +154,10 @@
   --app-accent-weak: #eeedfd;
 
   --el-color-primary: #4f46e5;
+  /* 防御性对齐：EP 在 :root 自留了 --el-color-primary-rgb（旧版默认蓝，与本站统一主色不同），
+     当前 EP 无任何消费点（死令牌），但一旦被消费就会重新出现色差。
+     这里显式对齐到本变体主色，保证全站主色只有一个真相。 */
+  --el-color-primary-rgb: 79, 70, 229;
   --el-color-primary-light-3: #847eed;
   --el-color-primary-light-5: #a7a3f2;
   --el-color-primary-light-7: #cac8f7;
@@ -182,6 +190,10 @@
   --app-accent-weak: #eef3ff;
 
   --el-color-primary: #2563eb;
+  /* 防御性对齐：EP 在 :root 自留了 --el-color-primary-rgb（旧版默认蓝，与本站统一主色不同），
+     当前 EP 无任何消费点（死令牌），但一旦被消费就会重新出现色差。
+     这里显式对齐到本变体主色，保证全站主色只有一个真相。 */
+  --el-color-primary-rgb: 37, 99, 235;
   --el-color-primary-light-3: #6692f1;
   --el-color-primary-light-5: #92b1f5;
   --el-color-primary-light-7: #bed0f9;
@@ -781,6 +793,12 @@ body {
   border-radius: var(--app-radius-md);
   box-shadow: var(--app-shadow-md);
   border: 1px solid var(--app-border-light);
+}
+/* v3 顶栏仅 48px：EP 默认消息 enter/leave 用 transform: translateY(-100%)，
+   会把提示条甩出顶栏上方（穿顶栏）。改为 -12px，配合上面的 margin-top 平滑下沉。 */
+.el-message-fade-enter-from,
+.el-message-fade-leave-to {
+  transform: translateY(-12px);
 }
 .el-notification {
   border-radius: var(--app-radius-lg);
