@@ -8,3 +8,5 @@ dist_bak_*/
 .vscode/
 .DS_Store
 .ssh_*.py
+# vite 构建时产生的临时配置文件（自动再生，无需入库）
+*.timestamp-*.mjs
