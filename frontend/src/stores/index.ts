@@ -12,6 +12,7 @@ import { ref, computed } from 'vue'
 import axios from 'axios'
 import { authApi } from '@/api'
 import { ROLE_LABELS } from '@/utils/roles'
+import { safeGetItem, safeSetItem, safeRemoveItem } from '@/utils/safeStorage'
 
 // ==================== 统一响应类型 ====================
 
@@ -120,10 +121,10 @@ export const useAppStore = defineStore('app', () => {
 export const useAuthStore = defineStore('auth', () => {
   // ==================== State ====================
 
-  const token = ref<string>(localStorage.getItem('token') || '')
+  const token = ref<string>(safeGetItem('token') || '')
   const user = ref<UserInfo | null>(
     (() => {
-      const stored = localStorage.getItem('user')
+      const stored = safeGetItem('user')
       try {
         return stored ? JSON.parse(stored) as UserInfo : null
       } catch {
@@ -156,8 +157,8 @@ export const useAuthStore = defineStore('auth', () => {
       if (res.code === 0 && res.data?.token) {
         token.value = res.data.token
         user.value = res.data.user
-        localStorage.setItem('token', res.data.token)
-        localStorage.setItem('user', JSON.stringify(res.data.user))
+        safeSetItem('token', res.data.token)
+        safeSetItem('user', JSON.stringify(res.data.user))
         return true
       }
       return false
@@ -169,8 +170,8 @@ export const useAuthStore = defineStore('auth', () => {
   function logout(): void {
     token.value = ''
     user.value = null
-    localStorage.removeItem('token')
-    localStorage.removeItem('user')
+    safeRemoveItem('token')
+    safeRemoveItem('user')
   }
 
   async function fetchCurrentUser(): Promise<void> {
@@ -179,7 +180,7 @@ export const useAuthStore = defineStore('auth', () => {
       const res: any = await authApi.me()
       if (res.code === 0 && res.data) {
         user.value = res.data
-        localStorage.setItem('user', JSON.stringify(res.data))
+        safeSetItem('user', JSON.stringify(res.data))
       }
     } catch {
       logout()
