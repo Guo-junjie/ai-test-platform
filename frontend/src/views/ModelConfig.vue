@@ -54,7 +54,7 @@
       </el-table>
     </el-card>
 
-    <el-card shadow="hover" style="margin-top: 20px;">
+    <el-card shadow="hover" style="margin-top: var(--app-sp-5);">
       <template #header>模型路由配置</template>
       <el-form label-width="150px" style="max-width: 600px;" v-loading="routingLoading">
         <el-form-item v-for="item in routingFields" :key="item.key" :label="item.label">

@@ -360,7 +360,7 @@ onMounted(async () => {
 }
 .qa-title-sub {
   font-size: 12px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
 }
 .qa-actions {
   display: flex;
@@ -397,24 +397,24 @@ onMounted(async () => {
   width: 34px;
   height: 34px;
   border-radius: 50%;
-  background: #409eff;
-  color: #fff;
+  background: var(--el-color-primary);
+  color: var(--app-text-inverse);
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 13px;
 }
 .msg-row.user .msg-avatar {
-  background: #67c23a;
+  background: var(--el-color-success);
 }
 .msg-bubble {
   max-width: 78%;
-  background: #f5f7fa;
+  background: var(--el-fill-color-light);
   border-radius: 8px;
   padding: 10px 14px;
 }
 .msg-row.user .msg-bubble {
-  background: #ecf5ff;
+  background: var(--el-color-primary-light-9);
 }
 .msg-text {
   font-size: 14px;
@@ -423,27 +423,27 @@ onMounted(async () => {
   word-break: break-word;
 }
 .cite-tag {
-  color: #409eff;
+  color: var(--el-color-primary);
   cursor: default;
   font-weight: 600;
   margin: 0 1px;
 }
 .msg-sources {
   margin-top: 8px;
-  border-top: 1px dashed #dcdfe6;
+  border-top: 1px dashed var(--el-border-color);
   padding-top: 6px;
 }
 .sources-toggle {
   font-size: 12px;
-  color: #409eff;
+  color: var(--el-color-primary);
   cursor: pointer;
 }
 .sources-list {
   margin-top: 6px;
 }
 .source-item {
-  background: #fff;
-  border: 1px solid #ebeef5;
+  background: var(--app-bg-card);
+  border: 1px solid var(--el-border-color-lighter);
   border-radius: 6px;
   padding: 6px 10px;
   margin-bottom: 6px;
@@ -451,16 +451,16 @@ onMounted(async () => {
 }
 .source-name {
   margin-left: 6px;
-  color: #303133;
+  color: var(--el-text-color-primary);
   font-weight: 500;
 }
 .source-score {
   float: right;
-  color: #c0c4cc;
+  color: var(--el-text-color-disabled);
 }
 .source-content {
   margin-top: 4px;
-  color: #606266;
+  color: var(--el-text-color-regular);
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -472,7 +472,7 @@ onMounted(async () => {
 }
 .feedback-done {
   font-size: 12px;
-  color: #67c23a;
+  color: var(--el-color-success);
   margin-left: 8px;
 }
 .qa-input {
@@ -480,7 +480,7 @@ onMounted(async () => {
   gap: 8px;
   align-items: flex-end;
   padding-top: 10px;
-  border-top: 1px solid #ebeef5;
+  border-top: 1px solid var(--el-border-color-lighter);
 }
 .qa-input .el-button {
   height: 54px;

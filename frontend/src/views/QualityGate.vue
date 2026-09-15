@@ -44,23 +44,23 @@
             <el-divider content-position="left">通过标准</el-divider>
             <el-form-item label="P0 缺陷数上限">
               <el-input-number :min="0" v-model="form.rules.max_p0_defects" />
-              <span style="margin-left: 8px; color: #909399;">个</span>
+              <span style="margin-left: 8px; color: var(--el-text-color-secondary);">个</span>
             </el-form-item>
             <el-form-item label="P1 缺陷数上限">
               <el-input-number :min="0" v-model="form.rules.max_p1_defects" />
-              <span style="margin-left: 8px; color: #909399;">个</span>
+              <span style="margin-left: 8px; color: var(--el-text-color-secondary);">个</span>
             </el-form-item>
             <el-form-item label="接口测试通过率最低值">
               <el-input-number :min="0" :max="100" v-model="form.rules.min_api_pass_rate" />
-              <span style="margin-left: 8px; color: #909399;">%</span>
+              <span style="margin-left: 8px; color: var(--el-text-color-secondary);">%</span>
             </el-form-item>
             <el-form-item label="性能测试通过率最低值">
               <el-input-number :min="0" :max="100" v-model="form.rules.min_perf_pass_rate" />
-              <span style="margin-left: 8px; color: #909399;">%</span>
+              <span style="margin-left: 8px; color: var(--el-text-color-secondary);">%</span>
             </el-form-item>
             <el-form-item label="集成测试通过率最低值">
               <el-input-number :min="0" :max="100" v-model="form.rules.min_integration_pass_rate" />
-              <span style="margin-left: 8px; color: #909399;">%</span>
+              <span style="margin-left: 8px; color: var(--el-text-color-secondary);">%</span>
             </el-form-item>
             <el-form-item label="质量评分最低值">
               <el-input-number :min="0" :max="100" v-model="form.rules.min_quality_score" />
@@ -96,7 +96,7 @@
                 <span v-if="row.gate_details?.violations?.length">
                   {{ row.gate_details.violations.length }} 项
                 </span>
-                <span v-else style="color: #67c23a;">无</span>
+                <span v-else style="color: var(--el-color-success);">无</span>
               </template>
             </el-table-column>
           </el-table>

@@ -18,7 +18,7 @@
     </el-row>
 
     <!-- 趋势与分布 -->
-    <el-row :gutter="20" style="margin-top: 20px;">
+    <el-row :gutter="20" style="margin-top: var(--app-sp-5);">
       <el-col :span="16">
         <el-card shadow="hover">
           <template #header>
@@ -35,9 +35,9 @@
             v-if="qualityTrend.dates?.length"
             :labels="qualityTrend.dates"
             :series="[
-              { name: '平均评分', data: qualityTrend.avg_scores, color: '#409eff' },
-              { name: '最高评分', data: qualityTrend.max_scores, color: '#67c23a' },
-              { name: '最低评分', data: qualityTrend.min_scores, color: '#e6a23c' },
+              { name: '平均评分', data: qualityTrend.avg_scores, color: CHART_COLORS.primary },
+              { name: '最高评分', data: qualityTrend.max_scores, color: CHART_COLORS.success },
+              { name: '最低评分', data: qualityTrend.min_scores, color: CHART_COLORS.warning },
             ]"
             :height="280"
             y-axis-name="评分"
@@ -54,7 +54,7 @@
     </el-row>
 
     <!-- 最近测试任务 -->
-    <el-row :gutter="20" style="margin-top: 20px;">
+    <el-row :gutter="20" style="margin-top: var(--app-sp-5);">
       <el-col :span="24">
         <el-card shadow="hover">
           <template #header>最近测试任务</template>
@@ -92,6 +92,7 @@
 </template>
 
 <script setup lang="ts">
+import { CHART_COLORS } from '@/styles/chartPalette'
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import * as echarts from 'echarts'
@@ -129,10 +130,10 @@ const statusChartRef = ref<HTMLElement>()
 let statusChart: echarts.ECharts | null = null
 
 const statCards = ref([
-  { title: '测试任务总数', value: 0, icon: 'VideoPlay', color: '#409eff' },
-  { title: '通过率', value: '0%', icon: 'CircleCheck', color: '#67c23a' },
-  { title: '发现缺陷', value: 0, icon: 'Warning', color: '#e6a23c' },
-  { title: '平均质量分', value: '0', icon: 'Star', color: '#e6a23c' },
+  { title: '测试任务总数', value: 0, icon: 'VideoPlay', color: CHART_COLORS.primary },
+  { title: '通过率', value: '0%', icon: 'CircleCheck', color: CHART_COLORS.success },
+  { title: '发现缺陷', value: 0, icon: 'Warning', color: CHART_COLORS.warning },
+  { title: '平均质量分', value: '0', icon: 'Star', color: CHART_COLORS.warning },
 ])
 
 const qualityTrend = ref<{ dates: string[]; avg_scores: number[]; max_scores: number[]; min_scores: number[] }>({
@@ -190,11 +191,11 @@ function renderStatusChart(distribution: Record<string, number>) {
   if (!statusChartRef.value) return
   if (!statusChart) statusChart = echarts.init(statusChartRef.value)
   const colors: Record<string, string> = {
-    PENDING: '#909399',
-    RUNNING: '#e6a23c',
-    COMPLETED: '#67c23a',
-    FAILED: '#f56c6c',
-    CANCELLED: '#c0c4cc',
+    PENDING: CHART_COLORS.textSecondary,
+    RUNNING: CHART_COLORS.warning,
+    COMPLETED: CHART_COLORS.success,
+    FAILED: CHART_COLORS.danger,
+    CANCELLED: CHART_COLORS.textPlaceholder,
   }
   statusChart.setOption({
     tooltip: { trigger: 'item' },
@@ -204,12 +205,12 @@ function renderStatusChart(distribution: Record<string, number>) {
         type: 'pie',
         radius: ['40%', '70%'],
         center: ['50%', '45%'],
-        itemStyle: { borderRadius: 6, borderColor: '#fff', borderWidth: 2 },
+        itemStyle: { borderRadius: 6, borderColor: CHART_COLORS.cardBg, borderWidth: 2 },
         label: { formatter: '{b}: {c}' },
         data: Object.entries(distribution).map(([name, value]) => ({
           name,
           value,
-          itemStyle: { color: colors[name] || '#409eff' },
+          itemStyle: { color: colors[name] || CHART_COLORS.primary },
         })),
       },
     ],
@@ -253,12 +254,12 @@ onBeforeUnmount(() => {
 .stat-value {
   font-size: 24px;
   font-weight: 700;
-  color: #303133;
+  color: var(--el-text-color-primary);
 }
 
 .stat-label {
   font-size: 13px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   margin-top: 4px;
 }
 

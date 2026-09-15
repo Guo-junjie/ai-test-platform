@@ -55,7 +55,7 @@
       </el-form>
     </el-card>
 
-    <el-card v-if="result" shadow="hover" style="margin-top: 20px;">
+    <el-card v-if="result" shadow="hover" style="margin-top: var(--app-sp-5);">
       <template #header>
         <div class="card-header">
           <span>生成结果</span>

@@ -137,14 +137,22 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+/* 间距交由父级（顶栏 header-right 的 gap）统一控制，这里不再叠加右边距 */
 .notification-badge {
-  margin-right: 16px;
+  margin-right: 0;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
 }
 
 .bell-icon {
-  color: #666;
+  color: var(--app-text-secondary);
   vertical-align: middle;
+  transition: color 0.16s ease;
+}
+
+.notification-badge:hover .bell-icon {
+  color: var(--app-accent);
 }
 
 .notification-menu {
@@ -158,23 +166,23 @@ onBeforeUnmount(() => {
 }
 
 .notif-title {
-  font-size: 13px;
-  color: #606266;
+  font-size: var(--app-fs-sm);
+  color: var(--app-text-regular);
 }
 
 .notif-title.unread {
   font-weight: 600;
-  color: #303133;
+  color: var(--app-text-primary);
 }
 
 .notif-time {
-  font-size: 12px;
-  color: #909399;
+  font-size: var(--app-fs-xs);
+  color: var(--app-text-placeholder);
   margin-top: 2px;
 }
 
 .clear-text {
-  color: #409eff;
-  font-size: 13px;
+  color: var(--app-accent);
+  font-size: var(--app-fs-sm);
 }
 </style>

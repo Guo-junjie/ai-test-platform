@@ -25,7 +25,7 @@
         </el-col>
       </el-row>
 
-      <el-row :gutter="20" style="margin-top: 20px;">
+      <el-row :gutter="20" style="margin-top: var(--app-sp-5);">
         <el-col :span="12">
           <el-card shadow="never">
             <template #header>质量评分趋势</template>
@@ -33,9 +33,9 @@
               v-if="qualityTrend.dates?.length"
               :labels="qualityTrend.dates"
               :series="[
-                { name: '平均评分', data: qualityTrend.avg_scores, color: '#409eff' },
-                { name: '最高评分', data: qualityTrend.max_scores, color: '#67c23a' },
-                { name: '最低评分', data: qualityTrend.min_scores, color: '#f56c6c' },
+                { name: '平均评分', data: qualityTrend.avg_scores, color: CHART_COLORS.primary },
+                { name: '最高评分', data: qualityTrend.max_scores, color: CHART_COLORS.success },
+                { name: '最低评分', data: qualityTrend.min_scores, color: CHART_COLORS.danger },
               ]"
               :height="300"
               y-axis-name="评分"
@@ -50,8 +50,8 @@
               v-if="passRateTrend.dates?.length"
               :labels="passRateTrend.dates"
               :series="[
-                { name: '通过率', data: passRateTrend.pass_rates, type: 'line', color: '#67c23a' },
-                { name: '门禁通过数', data: passRateTrend.gate_passed, type: 'bar', color: '#409eff' },
+                { name: '通过率', data: passRateTrend.pass_rates, type: 'line', color: CHART_COLORS.success },
+                { name: '门禁通过数', data: passRateTrend.gate_passed, type: 'bar', color: CHART_COLORS.primary },
               ]"
               :height="300"
               y-axis-name="%"
@@ -61,7 +61,7 @@
         </el-col>
       </el-row>
 
-      <el-row :gutter="20" style="margin-top: 20px;">
+      <el-row :gutter="20" style="margin-top: var(--app-sp-5);">
         <el-col :span="12">
           <el-card shadow="never">
             <template #header>缺陷数量趋势</template>
@@ -69,10 +69,10 @@
               v-if="defectTrend.dates?.length"
               :labels="defectTrend.dates"
               :series="[
-                { name: '缺陷总数', data: defectTrend.totals, type: 'bar', color: '#f56c6c' },
-                { name: 'P0', data: defectTrend.p0, color: '#f56c6c' },
-                { name: 'P1', data: defectTrend.p1, color: '#e6a23c' },
-                { name: 'P2', data: defectTrend.p2, color: '#409eff' },
+                { name: '缺陷总数', data: defectTrend.totals, type: 'bar', color: CHART_COLORS.danger },
+                { name: 'P0', data: defectTrend.p0, color: CHART_COLORS.danger },
+                { name: 'P1', data: defectTrend.p1, color: CHART_COLORS.warning },
+                { name: 'P2', data: defectTrend.p2, color: CHART_COLORS.primary },
               ]"
               :height="300"
               y-axis-name="数量"
@@ -87,8 +87,8 @@
               v-if="passRateTrend.dates?.length"
               :labels="passRateTrend.dates"
               :series="[
-                { name: '总任务', data: passRateTrend.totals, type: 'bar', color: '#909399' },
-                { name: '完成任务', data: passRateTrend.completed, type: 'bar', color: '#409eff' },
+                { name: '总任务', data: passRateTrend.totals, type: 'bar', color: CHART_COLORS.textSecondary },
+                { name: '完成任务', data: passRateTrend.completed, type: 'bar', color: CHART_COLORS.primary },
               ]"
               :height="300"
               y-axis-name="数量"
@@ -102,6 +102,7 @@
 </template>
 
 <script setup lang="ts">
+import { CHART_COLORS } from '@/styles/chartPalette'
 import { ref, onMounted } from 'vue'
 import TrendChart from '@/components/TrendChart.vue'
 import { trendApi } from '@/api'
@@ -190,12 +191,12 @@ onMounted(loadAll)
 .summary-value {
   font-size: 28px;
   font-weight: 700;
-  color: #303133;
+  color: var(--el-text-color-primary);
 }
 
 .summary-label {
   font-size: 13px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   margin-top: 4px;
 }
 </style>

@@ -104,7 +104,7 @@ export default defineComponent({
 .ws-name {
   font-size: 18px;
   font-weight: 700;
-  color: #303133;
+  color: var(--el-text-color-primary);
 }
 .ws-sub {
   display: flex;
@@ -114,7 +114,7 @@ export default defineComponent({
 }
 .ws-desc {
   font-size: 12px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
 }
 .ws-tabs :deep(.el-tabs__header) {
   margin-bottom: 0;

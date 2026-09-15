@@ -367,30 +367,30 @@ onMounted(async () => {
   margin-bottom: 12px;
 }
 .muted {
-  color: #909399;
+  color: var(--el-text-color-secondary);
   font-size: 13px;
 }
 .score-card {
   text-align: center;
   padding: 20px;
-  background: #f5f7fa;
+  background: var(--el-fill-color-light);
   border-radius: 8px;
 }
 .score-num {
   font-size: 48px;
   font-weight: 700;
-  color: #409eff;
+  color: var(--el-color-primary);
   line-height: 1;
 }
 .score-max {
   font-size: 18px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   margin-left: 4px;
 }
 .score-level {
   margin-top: 8px;
   font-size: 15px;
-  color: #606266;
+  color: var(--el-text-color-regular);
 }
 .filters {
   display: flex;
@@ -401,7 +401,7 @@ onMounted(async () => {
   padding: 8px 16px;
 }
 .json-box {
-  background: #f5f7fa;
+  background: var(--el-fill-color-light);
   border-radius: 4px;
   padding: 10px;
   font-size: 12px;

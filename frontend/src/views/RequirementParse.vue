@@ -332,7 +332,7 @@ onMounted(() => {
   gap: 12px;
 }
 .hint {
-  color: #909399;
+  color: var(--el-text-color-secondary);
   font-size: 12px;
   margin-left: 8px;
 }
@@ -343,7 +343,7 @@ onMounted(() => {
   gap: 12px;
   flex-wrap: wrap;
   padding: 12px;
-  background: #f5f7fa;
+  background: var(--el-fill-color-light);
   border-radius: 6px;
 }
 .detail {

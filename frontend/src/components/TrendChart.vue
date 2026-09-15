@@ -3,6 +3,7 @@
 </template>
 
 <script setup lang="ts">
+import { CHART_COLORS } from '@/styles/chartPalette'
 import { ref, onMounted, watch, onBeforeUnmount } from 'vue'
 import * as echarts from 'echarts'
 
@@ -39,13 +40,13 @@ function render() {
     xAxis: {
       type: 'category',
       data: props.labels,
-      axisLabel: { color: '#909399' },
+      axisLabel: { color: CHART_COLORS.textSecondary },
     },
     yAxis: {
       type: 'value',
       name: props.yAxisName || '',
-      axisLabel: { color: '#909399' },
-      splitLine: { lineStyle: { type: 'dashed', color: '#e5e5e5' } },
+      axisLabel: { color: CHART_COLORS.textSecondary },
+      splitLine: { lineStyle: { type: 'dashed', color: CHART_COLORS.border } },
     },
     series: props.series.map((s) => ({
       name: s.name,

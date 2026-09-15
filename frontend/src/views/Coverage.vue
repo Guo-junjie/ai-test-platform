@@ -469,6 +469,7 @@
 </template>
 
 <script setup lang="ts">
+import { CHART_COLORS } from '@/styles/chartPalette'
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
@@ -529,9 +530,9 @@ const loadingReports = ref(false)
 const dashboard = ref<any>(null)
 const trend = ref<any>({ labels: [], line_rate: [], branch_rate: [] })
 const trendSeries = computed(() => {
-  const series = [{ name: '行/语句覆盖率', data: trend.value.line_rate || [], color: '#67c23a' }]
+  const series = [{ name: '行/语句覆盖率', data: trend.value.line_rate || [], color: CHART_COLORS.success }]
   if ((trend.value.branch_rate || []).some((rate: number | null) => rate != null)) {
-    series.push({ name: '分支覆盖率', data: trend.value.branch_rate, color: '#409eff' })
+    series.push({ name: '分支覆盖率', data: trend.value.branch_rate, color: CHART_COLORS.primary })
   }
   return series
 })
@@ -778,9 +779,9 @@ function rateClass(rate: number | null | undefined): string {
 }
 function progressColor(rate: number | null | undefined): string {
   const r = Number(rate || 0)
-  if (r >= 80) return '#67c23a'
-  if (r >= 60) return '#e6a23c'
-  return '#f56c6c'
+  if (r >= 80) return CHART_COLORS.success
+  if (r >= 60) return CHART_COLORS.warning
+  return CHART_COLORS.danger
 }
 function reportLabel(r: any): string {
   const date = (r.created_at || '').slice(0, 16).replace('T', ' ')
@@ -1071,10 +1072,10 @@ watch(
   align-items: center;
   gap: 16px;
   padding: 8px 16px;
-  background: #f4f6f8;
+  background: var(--app-bg-page);
   border-radius: 6px;
   font-size: 13px;
-  color: #606266;
+  color: var(--el-text-color-regular);
   flex-wrap: wrap;
 }
 .meta-item {
@@ -1094,7 +1095,7 @@ watch(
   gap: 8px;
 }
 .filter-item .label {
-  color: #606266;
+  color: var(--el-text-color-regular);
   font-size: 13px;
   white-space: nowrap;
 }
@@ -1106,7 +1107,7 @@ watch(
   text-align: center;
 }
 .metric-label {
-  color: #909399;
+  color: var(--el-text-color-secondary);
   font-size: 13px;
   margin-bottom: 4px;
 }
@@ -1116,29 +1117,29 @@ watch(
   line-height: 1.2;
 }
 .metric-value.neutral {
-  color: #303133;
+  color: var(--el-text-color-primary);
 }
 .metric-unit {
   font-size: 14px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   margin-left: 2px;
 }
 .metric-unit-sm {
   font-size: 14px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   font-weight: normal;
 }
 .metric-diff {
   margin-top: 8px;
   font-size: 12px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   display: flex;
   justify-content: center;
   align-items: center;
   gap: 4px;
 }
 .metric-diff-label {
-  color: #909399;
+  color: var(--el-text-color-secondary);
 }
 
 .trend-card :deep(.el-card__body) {
@@ -1159,22 +1160,22 @@ watch(
 .file-path {
   font-family: 'Consolas', 'Monaco', monospace;
   font-size: 12px;
-  color: #303133;
+  color: var(--el-text-color-primary);
 }
 .rate-good {
-  color: #67c23a;
+  color: var(--el-color-success);
   font-weight: 600;
 }
 .rate-mid {
-  color: #e6a23c;
+  color: var(--el-color-warning);
   font-weight: 600;
 }
 .rate-bad {
-  color: #f56c6c;
+  color: var(--el-color-danger);
   font-weight: 600;
 }
 .text-muted {
-  color: #909399;
+  color: var(--el-text-color-secondary);
 }
 .files-pagination {
   margin-top: 12px;
@@ -1197,9 +1198,9 @@ watch(
   display: flex;
   gap: 16px;
   font-size: 12px;
-  color: #606266;
+  color: var(--el-text-color-regular);
   padding: 4px 0;
-  border-bottom: 1px solid #ebeef5;
+  border-bottom: 1px solid var(--el-border-color-lighter);
 }
 .legend-item {
   display: flex;
@@ -1213,20 +1214,20 @@ watch(
   border-radius: 50%;
 }
 .dot.covered {
-  background: #67c23a;
+  background: var(--el-color-success);
 }
 .dot.partial {
-  background: #e6a23c;
+  background: var(--el-color-warning);
 }
 .dot.uncovered {
-  background: #f56c6c;
+  background: var(--el-color-danger);
 }
 .source-line-list {
   max-height: calc(100vh - 240px);
   overflow-y: auto;
-  border: 1px solid #ebeef5;
+  border: 1px solid var(--el-border-color-lighter);
   border-radius: 4px;
-  background: #fafbfc;
+  background: var(--app-table-header-bg);
   font-family: 'Consolas', 'Monaco', monospace;
   font-size: 12px;
 }
@@ -1235,12 +1236,12 @@ watch(
   align-items: center;
   gap: 12px;
   padding: 2px 12px;
-  border-bottom: 1px solid #f0f2f5;
+  border-bottom: 1px solid var(--el-fill-color);
 }
 .source-line .line-no {
   width: 50px;
   text-align: right;
-  color: #909399;
+  color: var(--el-text-color-secondary);
 }
 .source-line .line-icon {
   width: 16px;
@@ -1248,35 +1249,35 @@ watch(
   font-size: 14px;
 }
 .source-line .line-hits {
-  color: #606266;
+  color: var(--el-text-color-regular);
 }
 .source-line .line-branch {
-  color: #909399;
+  color: var(--el-text-color-secondary);
   font-size: 11px;
 }
 .source-line.line-covered {
-  background: #f0f9eb;
+  background: var(--el-color-success-light-9);
 }
 .source-line.line-covered .line-icon {
-  color: #67c23a;
+  color: var(--el-color-success);
 }
 .source-line.line-uncovered {
-  background: #fef0f0;
+  background: var(--el-color-danger-light-9);
 }
 .source-line.line-uncovered .line-icon {
-  color: #f56c6c;
+  color: var(--el-color-danger);
 }
 .source-line.line-partial {
-  background: #fdf6ec;
+  background: var(--el-color-warning-light-9);
 }
 .source-line.line-partial .line-icon {
-  color: #e6a23c;
+  color: var(--el-color-warning);
 }
 .empty-card {
   padding: 8px;
 }
 .empty-tip {
-  color: #909399;
+  color: var(--el-text-color-secondary);
   font-size: 12px;
   margin-top: 8px;
 }
@@ -1287,6 +1288,6 @@ watch(
 }
 .cov-switch-label {
   font-size: 13px;
-  color: #606266;
+  color: var(--el-text-color-regular);
 }
 </style>

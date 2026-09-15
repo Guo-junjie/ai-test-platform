@@ -1,19 +1,17 @@
 <template>
   <el-container class="layout-container">
     <!-- 侧边栏 -->
-    <el-aside :width="isCollapse ? '64px' : '220px'" class="sidebar">
+    <el-aside
+      :width="isCollapse ? 'var(--app-sidebar-collapsed-width)' : 'var(--app-sidebar-width)'"
+      class="sidebar"
+    >
       <div class="logo">
-        <el-icon size="24" color="#409eff"><Monitor /></el-icon>
+        <el-icon size="24" color="var(--app-accent)"><Monitor /></el-icon>
         <span v-show="!isCollapse" class="logo-text">AI 测试平台</span>
       </div>
-      <el-menu
-        :default-active="activeMenu"
-        :collapse="isCollapse"
-        router
-        background-color="#001529"
-        text-color="#ffffffa6"
-        active-text-color="#ffffff"
-      >
+      <!-- 菜单颜色统一由 theme.css 的 --el-menu-* / --app-sidebar-* 令牌驱动，
+           不再使用内联颜色 prop，以便三个视觉变体自由切换 -->
+      <el-menu :default-active="activeMenu" :collapse="isCollapse" router>
         <!-- 工作台 -->
         <el-menu-item index="/dashboard">
           <el-icon><DataLine /></el-icon>
@@ -102,18 +100,18 @@
             <Fold v-if="!isCollapse" />
             <Expand v-else />
           </el-icon>
-          <el-breadcrumb separator="/">
-            <el-breadcrumb-item :to="{ path: '/' }">首页</el-breadcrumb-item>
-            <el-breadcrumb-item>{{ currentTitle }}</el-breadcrumb-item>
-          </el-breadcrumb>
+          <span class="header-divider" aria-hidden="true"></span>
+          <!-- 当前页面标题：作为主内容区的视觉起点（面包屑已移除，侧栏已表达位置） -->
+          <span class="header-title">{{ currentTitle }}</span>
         </div>
         <div class="header-right">
+          <UiVariantSwitch />
           <NotificationBell />
           <el-dropdown @command="handleUserCommand">
             <span class="user-info">
-              <el-avatar :size="32" icon="UserFilled" />
+              <el-avatar :size="30" icon="UserFilled" />
               <span class="username">{{ authStore.username }}</span>
-              <el-tag size="small" :type="roleTagType" effect="plain">{{ roleLabel }}</el-tag>
+              <el-tag size="small" :type="roleTagType" effect="plain" class="role-tag">{{ roleLabel }}</el-tag>
             </span>
             <template #dropdown>
               <el-dropdown-menu>
@@ -137,6 +135,7 @@ import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import NotificationBell from '@/components/NotificationBell.vue'
+import UiVariantSwitch from '@/components/UiVariantSwitch.vue'
 import { useAuthStore } from '@/stores'
 import { roleLabel as toRoleLabel, roleTagType as toRoleTagType } from '@/utils/roles'
 
@@ -173,8 +172,10 @@ function handleUserCommand(cmd: string) {
   height: 100vh;
 }
 
+/* ---------- 侧栏：颜色全部走 --app-sidebar-* 语义令牌（v1/v3 浅色、v2 深色） ---------- */
 .sidebar {
-  background-color: #001529;
+  background-color: var(--app-sidebar-bg);
+  border-right: 1px solid var(--app-sidebar-border);
   transition: width 0.3s;
   overflow: hidden;
   display: flex;
@@ -182,63 +183,100 @@ function handleUserCommand(cmd: string) {
 }
 
 .logo {
-  height: 60px;
+  height: var(--app-header-height);
   flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  border-bottom: 1px solid #ffffff1a;
+  gap: var(--app-sp-2);
+  background-color: var(--app-sidebar-bg);
+  /* 品牌文字色 8% 的极淡分隔线：v1 近黑→浅灰、v2 白→rgba(255,255,255,.08) */
+  border-bottom: 1px solid var(--app-sidebar-divider);
 }
 
 .logo-text {
-  color: #fff;
+  color: var(--app-sidebar-brand-text);
   font-size: 16px;
   font-weight: 600;
   white-space: nowrap;
 }
 
+/* ---------- 顶栏 ---------- */
 .header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: #fff;
-  border-bottom: 1px solid #e8e8e8;
-  padding: 0 20px;
+  height: var(--app-header-height);
+  background: var(--app-header-bg);
+  border-bottom: 1px solid var(--app-header-border);
+  padding: 0 var(--app-page-padding);
 }
 
 .header-left {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: var(--app-sp-3);
+  min-width: 0;
 }
 
 .collapse-btn {
-  font-size: 20px;
+  font-size: 18px;
   cursor: pointer;
-  color: #666;
+  color: var(--app-text-secondary);
+  transition: color 0.16s ease;
+}
+
+.collapse-btn:hover {
+  color: var(--app-accent);
+}
+
+.header-divider {
+  width: 1px;
+  height: 18px;
+  background-color: var(--app-border-base);
+}
+
+.header-title {
+  font-size: var(--app-fs-md);
+  font-weight: 600;
+  color: var(--app-text-primary);
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .header-right {
   display: flex;
   align-items: center;
+  gap: var(--app-sp-4);
+  flex-shrink: 0;
 }
 
 .user-info {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--app-sp-2);
   cursor: pointer;
 }
 
 .username {
-  font-size: 14px;
-  color: #333;
+  font-size: var(--app-fs-base);
+  color: var(--app-text-regular);
 }
 
+/* 角色标签：保留但收敛视觉重量与内边距 */
+.role-tag {
+  height: 20px;
+  padding: 0 6px;
+  line-height: 18px;
+  font-size: var(--app-fs-xs);
+}
+
+/* ---------- 主内容区 ---------- */
 .main-content {
-  background-color: #f0f2f5;
-  padding: 20px;
+  background-color: var(--app-bg-page);
+  padding: var(--app-page-padding);
   overflow-y: auto;
 }
 

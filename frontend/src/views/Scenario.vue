@@ -389,7 +389,7 @@ onMounted(async () => {
 
 <style scoped>
 .muted {
-  color: #909399;
+  color: var(--el-text-color-secondary);
   font-size: 13px;
   font-weight: normal;
 }
@@ -400,15 +400,15 @@ onMounted(async () => {
 }
 .method-tag {
   font-weight: 600;
-  color: #409eff;
+  color: var(--el-color-primary);
 }
 .url-text {
   font-family: monospace;
   font-size: 12px;
-  color: #606266;
+  color: var(--el-text-color-regular);
 }
 .action-desc {
-  color: #909399;
+  color: var(--el-text-color-secondary);
   font-size: 12px;
 }
 .step-detail {
@@ -416,7 +416,7 @@ onMounted(async () => {
   line-height: 1.9;
 }
 .json-box {
-  background: #f5f7fa;
+  background: var(--el-fill-color-light);
   border-radius: 4px;
   padding: 10px;
   font-size: 12px;

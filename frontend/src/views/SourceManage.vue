@@ -539,7 +539,7 @@ onMounted(() => {
 .mono-text {
   font-family: 'Courier New', Consolas, monospace;
   font-size: 13px;
-  color: #606266;
+  color: var(--el-text-color-regular);
   word-break: break-all;
 }
 
@@ -549,6 +549,6 @@ onMounted(() => {
 }
 
 .upload-result {
-  margin-top: 20px;
+  margin-top: var(--app-sp-5);
 }
 </style>

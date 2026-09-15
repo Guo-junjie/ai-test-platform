@@ -227,22 +227,22 @@ export default defineComponent({
   gap: 12px;
 }
 .ready-item {
-  border: 1px solid #ebeef5;
+  border: 1px solid var(--el-border-color-lighter);
   border-radius: 6px;
   padding: 12px;
   text-align: center;
 }
 .ready-item.ok {
-  border-color: #b3e19d;
-  background: #f9fff6;
+  border-color: var(--el-color-success-light-5);
+  background: var(--el-color-success-light-9);
 }
 .ready-item.missing {
-  border-color: #f3d19e;
-  background: #fffaf0;
+  border-color: var(--el-color-warning-light-5);
+  background: var(--el-color-warning-light-9);
 }
 .ready-title {
   font-size: 12px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
 }
 .ready-value {
   font-size: 20px;
@@ -251,7 +251,7 @@ export default defineComponent({
 }
 .ready-hint {
   font-size: 11px;
-  color: #c0c4cc;
+  color: var(--el-text-color-disabled);
 }
 .card-row {
   display: flex;
@@ -268,11 +268,11 @@ export default defineComponent({
   font-weight: 700;
 }
 .q-num.bad {
-  color: #f56c6c;
+  color: var(--el-color-danger);
 }
 .q-label {
   font-size: 12px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   margin-top: 4px;
 }
 .quality-links,
@@ -284,7 +284,7 @@ export default defineComponent({
 }
 .muted {
   font-size: 12px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
 }
 .mt16 {
   margin-top: 16px;

@@ -22,7 +22,7 @@
       </el-col>
     </el-row>
 
-    <el-card shadow="hover" style="margin-top: 20px;">
+    <el-card shadow="hover" style="margin-top: var(--app-sp-5);">
       <template #header>
         <div class="card-header">
           <span>审计日志</span>
@@ -206,12 +206,12 @@ onMounted(() => {
 .stat-value {
   font-size: 28px;
   font-weight: 700;
-  color: #409eff;
+  color: var(--el-color-primary);
 }
 
 .stat-label {
   font-size: 13px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   margin-top: 4px;
 }
 
@@ -223,7 +223,7 @@ onMounted(() => {
 }
 
 .action-code {
-  background: #f4f4f5;
+  background: var(--el-color-info-light-9);
   padding: 2px 6px;
   border-radius: 4px;
   font-size: 12px;

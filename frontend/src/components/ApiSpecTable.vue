@@ -200,14 +200,14 @@ function pretty(obj: any): string {
   flex-wrap: wrap;
 }
 .count {
-  color: #909399;
+  color: var(--el-text-color-secondary);
   font-size: 13px;
 }
 .muted {
-  color: #c0c4cc;
+  color: var(--el-text-color-disabled);
 }
 .json-box {
-  background: #f5f7fa;
+  background: var(--el-fill-color-light);
   border-radius: 4px;
   padding: 10px;
   font-size: 12px;
@@ -219,6 +219,6 @@ function pretty(obj: any): string {
 h4 {
   margin: 16px 0 8px;
   font-size: 14px;
-  color: #303133;
+  color: var(--el-text-color-primary);
 }
 </style>

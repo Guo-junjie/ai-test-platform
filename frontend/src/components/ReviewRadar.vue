@@ -3,6 +3,7 @@
 </template>
 
 <script setup lang="ts">
+import { CHART_COLORS } from '@/styles/chartPalette'
 import { ref, onMounted, watch, onBeforeUnmount } from 'vue'
 import * as echarts from 'echarts'
 
@@ -40,8 +41,8 @@ function render() {
     radar: {
       indicator: indicator(),
       radius: '65%',
-      axisName: { color: '#606266' },
-      splitArea: { areaStyle: { color: ['#fafafa', '#fff'] } },
+      axisName: { color: CHART_COLORS.textRegular },
+      splitArea: { areaStyle: { color: [CHART_COLORS.fillLighter, CHART_COLORS.cardBg] } },
     },
     series: [
       {
@@ -51,8 +52,8 @@ function render() {
             value: value(),
             name: '评分',
             areaStyle: { color: 'rgba(64,158,255,0.25)' },
-            lineStyle: { color: '#409eff' },
-            itemStyle: { color: '#409eff' },
+            lineStyle: { color: CHART_COLORS.primary },
+            itemStyle: { color: CHART_COLORS.primary },
           },
         ],
       },

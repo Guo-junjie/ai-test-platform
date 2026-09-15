@@ -345,13 +345,13 @@ watch(
 .stat-item { display: flex; align-items: center; gap: 8px; }
 .stat-num { font-size: 20px; font-weight: 700; }
 .stat-num.small { font-size: 15px; font-weight: 600; }
-.stat-label { color: #909399; font-size: 13px; }
-.stat-sep { width: 1px; height: 22px; background: #dcdfe6; }
+.stat-label { color: var(--el-text-color-secondary); font-size: 13px; }
+.stat-sep { width: 1px; height: 22px; background: var(--el-border-color); }
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 .header-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .pagination-wrapper { display: flex; justify-content: center; margin-top: 14px; }
-.muted { color: #c0c4cc; }
+.muted { color: var(--el-text-color-disabled); }
 .mono { font-family: Consolas, monospace; }
-.pre { white-space: pre-wrap; word-break: break-word; font-size: 13px; color: #303133; }
-h4 { margin: 14px 0 6px; color: #606266; }
+.pre { white-space: pre-wrap; word-break: break-word; font-size: 13px; color: var(--el-text-color-primary); }
+h4 { margin: 14px 0 6px; color: var(--el-text-color-regular); }
 </style>

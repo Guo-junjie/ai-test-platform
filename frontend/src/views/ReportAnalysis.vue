@@ -142,7 +142,7 @@
       </el-form>
     </el-card>
 
-    <el-card v-if="analysisResult" shadow="hover" style="margin-top: 20px;">
+    <el-card v-if="analysisResult" shadow="hover" style="margin-top: var(--app-sp-5);">
       <template #header>
         <div class="card-header">
           <span>分析结果</span>
@@ -367,7 +367,7 @@ onMounted(() => {
 }
 
 .hint {
-  color: #909399;
+  color: var(--el-text-color-secondary);
   font-size: 12px;
   margin-left: 12px;
 }

@@ -19,6 +19,7 @@
 </template>
 
 <script setup lang="ts">
+import { CHART_COLORS } from '@/styles/chartPalette'
 import { ref, computed, onMounted, watch, onBeforeUnmount } from 'vue'
 import * as echarts from 'echarts'
 
@@ -38,9 +39,9 @@ let chart: echarts.ECharts | null = null
 const gateTagType = computed(() => (props.gatePassed ? 'success' : 'danger'))
 
 function scoreColor(): string {
-  if (props.score >= 80) return '#67c23a'
-  if (props.score >= 60) return '#e6a23c'
-  return '#f56c6c'
+  if (props.score >= 80) return CHART_COLORS.success
+  if (props.score >= 60) return CHART_COLORS.warning
+  return CHART_COLORS.danger
 }
 
 function render() {
@@ -62,16 +63,16 @@ function render() {
           lineStyle: {
             width: 18,
             color: [
-              [0.6, '#f56c6c'],
-              [0.8, '#e6a23c'],
-              [1, '#67c23a'],
+              [0.6, CHART_COLORS.danger],
+              [0.8, CHART_COLORS.warning],
+              [1, CHART_COLORS.success],
             ],
           },
         },
         pointer: { itemStyle: { color: scoreColor() } },
-        axisTick: { distance: -18, length: 4, lineStyle: { color: '#fff' } },
-        splitLine: { distance: -18, length: 10, lineStyle: { color: '#fff', width: 2 } },
-        axisLabel: { distance: 8, color: '#909399', fontSize: 10 },
+        axisTick: { distance: -18, length: 4, lineStyle: { color: CHART_COLORS.cardBg } },
+        splitLine: { distance: -18, length: 10, lineStyle: { color: CHART_COLORS.cardBg, width: 2 } },
+        axisLabel: { distance: 8, color: CHART_COLORS.textSecondary, fontSize: 10 },
         detail: {
           valueAnimation: true,
           formatter: '{value}',
@@ -120,10 +121,10 @@ onBeforeUnmount(() => {
 }
 
 .violations {
-  color: #f56c6c;
+  color: var(--el-color-danger);
 }
 
 .ok-text {
-  color: #67c23a;
+  color: var(--el-color-success);
 }
 </style>

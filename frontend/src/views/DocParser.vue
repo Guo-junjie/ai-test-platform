@@ -416,11 +416,11 @@ onMounted(() => {
 .gen-tip {
   margin-top: 8px;
   font-size: 12px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   line-height: 1.8;
 }
 .gen-tip a {
-  color: #409eff;
+  color: var(--el-color-primary);
   text-decoration: none;
 }
 .actions {
@@ -429,7 +429,7 @@ onMounted(() => {
   gap: 12px;
 }
 .steps {
-  margin-top: 20px;
+  margin-top: var(--app-sp-5);
 }
 .notes {
   margin-bottom: 12px;
@@ -442,7 +442,7 @@ onMounted(() => {
   gap: 12px;
   flex-wrap: wrap;
   padding: 12px;
-  background: #f5f7fa;
+  background: var(--el-fill-color-light);
   border-radius: 6px;
 }
 </style>

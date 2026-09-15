@@ -897,12 +897,12 @@ export default defineComponent({
 }
 .time-text {
   font-size: 12px;
-  color: #606266;
+  color: var(--el-text-color-regular);
 }
 .mono-text {
   font-family: 'Courier New', Consolas, monospace;
   font-size: 13px;
-  color: #606266;
+  color: var(--el-text-color-regular);
   word-break: break-all;
 }
 .detail-body {
@@ -916,15 +916,15 @@ export default defineComponent({
   align-items: center;
   margin-top: 8px;
   font-weight: 600;
-  color: #303133;
+  color: var(--el-text-color-primary);
 }
 .env-tip {
   margin-top: 6px;
   padding: 8px 12px;
-  background: #f4f8ff;
+  background: var(--app-accent-weak);
   border-radius: 4px;
   font-size: 12px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   line-height: 1.8;
 }
 </style>

@@ -215,10 +215,10 @@ export default defineComponent({
 }
 .muted {
   font-size: 12px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
 }
 .err {
   font-size: 12px;
-  color: #f56c6c;
+  color: var(--el-color-danger);
 }
 </style>

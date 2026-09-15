@@ -62,7 +62,7 @@
                 content="仅超级管理员 / 系统管理员可切换"
                 placement="top"
               >
-                <el-icon style="margin-left: 4px; color: #909399"><QuestionFilled /></el-icon>
+                <el-icon style="margin-left: 4px; color: var(--el-text-color-secondary)"><QuestionFilled /></el-icon>
               </el-tooltip>
             </div>
           </div>
@@ -104,7 +104,7 @@
                 content="重建任务超过 1 小时无响应，可能 celery-worker 容器异常。点击「强制重置」恢复。"
                 placement="top"
               >
-                <el-icon style="margin-left: 4px; color: #f56c6c"><WarningFilled /></el-icon>
+                <el-icon style="margin-left: 4px; color: var(--el-color-danger)"><WarningFilled /></el-icon>
               </el-tooltip>
               <el-button
                 v-if="status.is_stuck && canRebuild"
@@ -450,7 +450,7 @@
             :on-remove="() => (uploadFileRef = null)"
             style="width: 100%"
           >
-            <el-icon style="font-size: 32px; color: #c0c4cc"><UploadFilled /></el-icon>
+            <el-icon style="font-size: 32px; color: var(--el-text-color-disabled)"><UploadFilled /></el-icon>
             <div class="el-upload__text">拖拽文件到此处，或<em>点击选择</em></div>
             <template #tip>
               <div class="el-upload__tip">支持 pdf / docx / md / txt，≤ 20MB</div>
@@ -1188,17 +1188,17 @@ onMounted(() => {
 }
 .stat-label {
   font-size: 13px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   margin-bottom: 6px;
 }
 .stat-value {
   font-size: 20px;
   font-weight: 600;
-  color: #303133;
+  color: var(--el-text-color-primary);
 }
 .stat-value-sm {
   font-size: 14px;
-  color: #303133;
+  color: var(--el-text-color-primary);
 }
 .text-ellipsis {
   white-space: nowrap;
@@ -1209,10 +1209,10 @@ onMounted(() => {
   margin-left: 8px;
   font-size: 12px;
   font-weight: 600;
-  color: #67c23a;
+  color: var(--el-color-success);
 }
 .chunk-box {
-  background: #f5f7fa;
+  background: var(--el-fill-color-light);
   border-radius: 6px;
   padding: 14px;
   text-align: center;
@@ -1221,11 +1221,11 @@ onMounted(() => {
 .chunk-count {
   font-size: 22px;
   font-weight: 700;
-  color: #409eff;
+  color: var(--el-color-primary);
 }
 .chunk-label {
   font-size: 13px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   margin-top: 4px;
 }
 .pagination {
@@ -1234,17 +1234,17 @@ onMounted(() => {
   justify-content: flex-end;
 }
 .muted {
-  color: #c0c4cc;
+  color: var(--el-text-color-disabled);
 }
 .search-form {
   margin-bottom: 8px;
 }
 .chunk-result {
-  border: 1px solid #ebeef5;
+  border: 1px solid var(--el-border-color-lighter);
   border-radius: 6px;
   padding: 10px 12px;
   margin-bottom: 10px;
-  background: #fafafa;
+  background: var(--el-fill-color-lighter);
 }
 .chunk-meta {
   display: flex;
@@ -1254,11 +1254,11 @@ onMounted(() => {
 }
 .chunk-score {
   font-size: 12px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
 }
 .chunk-source {
   font-size: 12px;
-  color: #67c23a;
+  color: var(--el-color-success);
 }
 .chunk-content {
   font-family: Consolas, Monaco, monospace;
@@ -1266,7 +1266,7 @@ onMounted(() => {
   white-space: pre-wrap;
   word-break: break-all;
   margin: 0;
-  color: #303133;
+  color: var(--el-text-color-primary);
   max-height: 320px;
   overflow: auto;
 }

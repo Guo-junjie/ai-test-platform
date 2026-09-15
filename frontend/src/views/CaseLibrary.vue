@@ -653,45 +653,45 @@ onMounted(async () => {
   gap: 12px;
   margin-bottom: 12px;
   padding: 8px 12px;
-  background: #fafafa;
+  background: var(--el-fill-color-lighter);
   border-radius: 4px;
-  border: 1px solid #ebeef5;
+  border: 1px solid var(--el-border-color-lighter);
 }
 .filter-label {
-  color: #606266;
+  color: var(--el-text-color-regular);
   font-size: 13px;
   font-weight: 600;
 }
 
 .muted {
-  color: #909399;
+  color: var(--el-text-color-secondary);
   font-size: 13px;
   font-weight: normal;
 }
 .method-tag {
   display: inline-block;
   font-weight: 600;
-  color: #409eff;
+  color: var(--el-color-primary);
   margin-right: 6px;
 }
 .url-text {
   font-family: monospace;
   font-size: 12px;
-  color: #606266;
+  color: var(--el-text-color-regular);
   word-break: break-all;
 }
 
 .kb-tip {
   margin-top: 4px;
   padding: 8px 12px;
-  background: #f4f8ff;
+  background: var(--app-accent-weak);
   border-radius: 4px;
   font-size: 12px;
-  color: #606266;
+  color: var(--el-text-color-regular);
   line-height: 1.8;
 }
 .kb-tip a {
-  color: #409eff;
+  color: var(--el-color-primary);
   text-decoration: none;
 }
 </style>

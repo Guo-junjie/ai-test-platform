@@ -39,7 +39,7 @@ export default defineComponent({
 
 <style scoped>
 .q-card {
-  border: 1px solid #ebeef5;
+  border: 1px solid var(--el-border-color-lighter);
   border-radius: 6px;
   padding: 16px;
   margin-bottom: 16px;
@@ -47,20 +47,20 @@ export default defineComponent({
   transition: all 0.2s;
 }
 .q-card:hover {
-  border-color: #409eff;
+  border-color: var(--el-color-primary);
   box-shadow: 0 2px 8px rgba(64, 158, 255, 0.1);
 }
 .q-title {
   font-weight: 600;
-  color: #303133;
+  color: var(--el-text-color-primary);
 }
 .q-desc {
   font-size: 12px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   margin: 6px 0;
 }
 .q-link {
   font-size: 12px;
-  color: #409eff;
+  color: var(--el-color-primary);
 }
 </style>

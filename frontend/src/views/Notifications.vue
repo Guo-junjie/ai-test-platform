@@ -278,6 +278,6 @@ onMounted(loadNotifications)
 
 .unread {
   font-weight: 600;
-  color: #303133;
+  color: var(--el-text-color-primary);
 }
 </style>

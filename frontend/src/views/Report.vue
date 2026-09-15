@@ -163,7 +163,7 @@
       width="640px"
       destroy-on-close
     >
-      <div style="margin-bottom: 16px; color: #606266; font-size: 13px">
+      <div style="margin-bottom: 16px; color: var(--el-text-color-regular); font-size: 13px">
         从已有的测试任务中选取一项，即时提取执行结果、分析缺陷并生成包含可视化图表与质量门禁的完整报告。
       </div>
       <el-form label-width="90px">
@@ -185,11 +185,11 @@
               <div style="display: flex; justify-content: space-between; align-items: center; width: 100%">
                 <span>
                   <b>{{ run.project_name || '未归属项目' }}</b>
-                  <span class="mono-text" style="margin-left: 8px; color: #909399">{{ run.id.substring(0, 8) }}</span>
+                  <span class="mono-text" style="margin-left: 8px; color: var(--el-text-color-secondary)">{{ run.id.substring(0, 8) }}</span>
                 </span>
                 <span style="font-size: 12px">
                   <el-tag size="small" :type="run.status === 'completed' ? 'success' : 'primary'">{{ run.current_step || run.status }}</el-tag>
-                  <span style="margin-left: 8px; color: #c0c4cc">{{ formatTime(run.created_at) }}</span>
+                  <span style="margin-left: 8px; color: var(--el-text-color-disabled)">{{ formatTime(run.created_at) }}</span>
                 </span>
               </div>
             </el-option>
@@ -529,13 +529,13 @@ watch(
 }
 
 .muted-text {
-  color: #c0c4cc;
+  color: var(--el-text-color-disabled);
 }
 
 .mono-text {
   font-family: 'Courier New', Consolas, monospace;
   font-size: 13px;
-  color: #606266;
+  color: var(--el-text-color-regular);
 }
 
 .pagination-wrapper {

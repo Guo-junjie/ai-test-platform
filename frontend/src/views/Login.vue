@@ -91,13 +91,7 @@
           </el-form-item>
         </el-form>
 
-        <el-alert
-          title="默认管理员账户"
-          description="用户名: admin · 密码: Admin123"
-          type="info"
-          :closable="false"
-          class="form-hint"
-        />
+        <p class="form-hint">默认管理员账户：admin · Admin123</p>
       </div>
     </section>
   </div>
@@ -185,10 +179,12 @@ onUnmounted(() => {
 .login-page {
   display: flex;
   min-height: 100vh;
-  background: #f5f7fb;
+  background: var(--app-bg-page);
 }
 
-/* ==================== 左侧品牌面板 ==================== */
+/* ==================== 左侧品牌面板 ====================
+   配色收敛到令牌主色系（var(--el-color-primary-*) 深浅阶梯），
+   与右侧登录按钮同源，消除"紫罗兰渐变 + Element 蓝"的硬拼冲突。 */
 .brand-panel {
   position: relative;
   flex: 1 1 52%;
@@ -197,8 +193,13 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   padding: 48px;
-  background: linear-gradient(135deg, #4b3ff5 0%, #6a5cff 45%, #9b6bff 100%);
-  color: #fff;
+  background: linear-gradient(
+    135deg,
+    var(--el-color-primary-dark-2) 0%,
+    var(--el-color-primary) 52%,
+    var(--el-color-primary-light-3) 100%
+  );
+  color: var(--app-text-inverse);
 }
 
 .brand-bg {
@@ -211,15 +212,16 @@ onUnmounted(() => {
   position: absolute;
   border-radius: 50%;
   filter: blur(60px);
-  opacity: 0.45;
 }
 
+/* 三个光斑统一为主色的深浅变体，只做层次、不引入异色 */
 .blob-a {
   width: 380px;
   height: 380px;
   top: -90px;
   left: -80px;
-  background: #7de3ff;
+  background: color-mix(in srgb, var(--el-color-primary-light-3) 82%, #ffffff);
+  opacity: 0.4;
   animation: float-a 14s ease-in-out infinite;
 }
 
@@ -228,7 +230,8 @@ onUnmounted(() => {
   height: 320px;
   bottom: -100px;
   right: -60px;
-  background: #ff8bd0;
+  background: color-mix(in srgb, var(--el-color-primary-dark-2) 88%, #000000);
+  opacity: 0.35;
   animation: float-b 18s ease-in-out infinite;
 }
 
@@ -237,7 +240,7 @@ onUnmounted(() => {
   height: 260px;
   top: 45%;
   left: 60%;
-  background: #ffd98b;
+  background: color-mix(in srgb, var(--el-color-primary-light-5) 78%, #ffffff);
   opacity: 0.28;
   animation: float-a 22s ease-in-out infinite reverse;
 }
@@ -281,11 +284,21 @@ onUnmounted(() => {
   opacity: 0.92;
 }
 
+/* Lottie：降级为克制装饰——缩小尺寸、降低不透明度，并给一层径向光晕承托，
+   使其看起来是刻意的装饰而非"图片没加载完"。 */
 .lottie-stage {
   width: 100%;
-  max-width: 320px;
-  height: 320px;
-  margin: 8px auto 4px;
+  max-width: 200px;
+  height: 200px;
+  margin: 6px auto 2px;
+  opacity: 0.58;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 50% 50%,
+    rgba(255, 255, 255, 0.22) 0%,
+    rgba(255, 255, 255, 0.06) 46%,
+    rgba(255, 255, 255, 0) 72%
+  );
 }
 
 .brand-text {
@@ -347,6 +360,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   padding: 48px 32px;
+  background: var(--app-bg-page);
 }
 
 .form-card {
@@ -363,13 +377,13 @@ onUnmounted(() => {
   margin: 0;
   font-size: 26px;
   font-weight: 700;
-  color: #1f2329;
+  color: var(--app-text-primary);
 }
 
 .form-desc {
   margin: 8px 0 0;
-  font-size: 14px;
-  color: #8a9099;
+  font-size: var(--app-fs-base);
+  color: var(--app-text-secondary);
 }
 
 .form-error {
@@ -383,13 +397,17 @@ onUnmounted(() => {
   letter-spacing: 2px;
 }
 
+/* 默认账户提示：由 el-alert 色块降级为一行低调灰字 */
 .form-hint {
-  margin-top: 20px;
+  margin: 18px 0 0;
+  font-size: var(--app-fs-xs);
+  color: var(--app-text-placeholder);
+  line-height: 1.6;
 }
 
 :deep(.el-form-item__label) {
   font-weight: 500;
-  color: #4e5969;
+  color: var(--app-text-regular);
   padding-bottom: 4px;
 }
 
@@ -405,8 +423,8 @@ onUnmounted(() => {
   }
 
   .lottie-stage {
-    max-width: 200px;
-    height: 200px;
+    max-width: 160px;
+    height: 160px;
   }
 
   .brand-title {
@@ -429,8 +447,8 @@ onUnmounted(() => {
   }
 
   .lottie-stage {
-    max-width: 160px;
-    height: 160px;
+    max-width: 132px;
+    height: 132px;
   }
 }
 </style>

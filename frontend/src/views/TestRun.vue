@@ -326,7 +326,7 @@
               :type="eventTagType(e.event_type)"
             >
               <b>{{ eventLabel(e.event_type) }}</b>
-              <span v-if="eventBrief(e)" style="color: #909399; font-size: 12px; margin-left: 6px">{{ eventBrief(e) }}</span>
+              <span v-if="eventBrief(e)" style="color: var(--el-text-color-secondary); font-size: 12px; margin-left: 6px">{{ eventBrief(e) }}</span>
             </el-timeline-item>
           </el-timeline>
         </div>
@@ -502,7 +502,7 @@
           </el-table-column>
           <el-table-column label="通过/失败/总数" width="130" align="center">
             <template #default="{ row }">
-              <span :style="{ color: row.failed > 0 ? '#f56c6c' : '#67c23a' }">
+              <span :style="{ color: row.failed > 0 ? 'var(--el-color-danger)' : 'var(--el-color-success)' }">
                 {{ row.passed }}/{{ row.failed }}/{{ row.total }}
               </span>
             </template>
@@ -1198,13 +1198,13 @@ export default defineComponent({
   margin-bottom: 16px;
 }
 .mode-desc {
-  color: #909399;
+  color: var(--el-text-color-secondary);
   font-size: 13px;
   line-height: 1.8;
   margin-bottom: 16px;
 }
 .mode-desc b {
-  color: #409eff;
+  color: var(--el-color-primary);
 }
 .plan-select-row {
   display: flex;
@@ -1213,7 +1213,7 @@ export default defineComponent({
 }
 .env-hint {
   font-size: 12px;
-  color: #e6a23c;
+  color: var(--el-color-warning);
   line-height: 1.6;
   margin-top: 4px;
 }
@@ -1231,7 +1231,7 @@ export default defineComponent({
   align-items: center;
   margin-top: 6px;
   font-weight: 600;
-  color: #303133;
+  color: var(--el-text-color-primary);
 }
 .form-actions {
   margin-top: 8px;
@@ -1242,7 +1242,7 @@ export default defineComponent({
 .mono-text {
   font-family: 'Courier New', Consolas, monospace;
   font-size: 13px;
-  color: #606266;
+  color: var(--el-text-color-regular);
   word-break: break-all;
 }
 .source-text {
@@ -1250,14 +1250,14 @@ export default defineComponent({
 }
 .step-text {
   font-size: 13px;
-  color: #303133;
+  color: var(--el-text-color-primary);
 }
 .time-text {
   font-size: 12px;
-  color: #606266;
+  color: var(--el-text-color-regular);
 }
 .error-text {
-  color: #f56c6c;
+  color: var(--el-color-danger);
   font-size: 13px;
 }
 .detail-content {
@@ -1270,7 +1270,7 @@ export default defineComponent({
 }
 .upload-path {
   margin-top: 8px;
-  color: #67c23a;
+  color: var(--el-color-success);
   font-size: 13px;
 }
 
@@ -1284,20 +1284,20 @@ export default defineComponent({
   font-size: 13px;
 }
 .failure-msg {
-  color: #f56c6c;
+  color: var(--el-color-danger);
   word-break: break-all;
 }
 .failure-tip {
-  color: #606266;
-  background: #fef0f0;
+  color: var(--el-text-color-regular);
+  background: var(--el-color-danger-light-9);
   padding: 8px 12px;
   border-radius: 4px;
   line-height: 1.5;
 }
 
 .step-timeline-box {
-  background: #fafafa;
-  border: 1px solid #ebeef5;
+  background: var(--el-fill-color-lighter);
+  border: 1px solid var(--el-border-color-lighter);
   border-radius: 8px;
   padding: 16px 20px 20px;
 }
@@ -1310,19 +1310,19 @@ export default defineComponent({
 .timeline-title {
   font-weight: 600;
   font-size: 14px;
-  color: #303133;
+  color: var(--el-text-color-primary);
 }
 .timeline-hint {
   font-size: 13px;
-  color: #606266;
+  color: var(--el-text-color-regular);
 }
 .timeline-hint b {
-  color: #409eff;
+  color: var(--el-color-primary);
 }
 
 .exec-summary-card {
-  background: #fdfdfd;
-  border: 1px solid #e4e7ed;
+  background: var(--el-fill-color-extra-light);
+  border: 1px solid var(--el-border-color-light);
   border-radius: 8px;
   padding: 16px 20px;
   display: flex;
@@ -1342,13 +1342,13 @@ export default defineComponent({
 .summary-title {
   font-weight: 600;
   font-size: 14px;
-  color: #303133;
+  color: var(--el-text-color-primary);
 }
 .summary-metrics {
   margin: 0 !important;
 }
 .metric-box {
-  background: #f4f4f5;
+  background: var(--el-color-info-light-9);
   border-radius: 6px;
   padding: 12px;
   text-align: center;
@@ -1357,44 +1357,44 @@ export default defineComponent({
 .metric-box .m-val {
   font-size: 22px;
   font-weight: 700;
-  color: #303133;
+  color: var(--el-text-color-primary);
   line-height: 1.2;
 }
 .metric-box .m-lbl {
   font-size: 12px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   margin-top: 4px;
 }
 .metric-box.success {
-  background: #f0f9eb;
+  background: var(--el-color-success-light-9);
 }
 .metric-box.success .m-val {
-  color: #67c23a;
+  color: var(--el-color-success);
 }
 .metric-box.danger {
-  background: #fef0f0;
+  background: var(--el-color-danger-light-9);
 }
 .metric-box.danger .m-val {
-  color: #f56c6c;
+  color: var(--el-color-danger);
 }
 .metric-box.warning {
-  background: #fdf6ec;
+  background: var(--el-color-warning-light-9);
 }
 .metric-box.warning .m-val {
-  color: #e6a23c;
+  color: var(--el-color-warning);
 }
 .summary-actions {
   display: flex;
   gap: 12px;
   justify-content: flex-start;
   padding-top: 4px;
-  border-top: 1px dashed #ebeef5;
+  border-top: 1px dashed var(--el-border-color-lighter);
 }
 .step-running {
-  color: var(--el-color-primary, #409eff);
+  color: var(--el-color-primary, var(--el-color-primary));
   font-weight: 500;
 }
 .step-completed {
-  color: var(--el-color-success, #67c23a);
+  color: var(--el-color-success, var(--el-color-success));
 }
 </style>

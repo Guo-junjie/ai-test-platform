@@ -15,14 +15,10 @@ const isPublic = computed<boolean>(() => !!route.meta?.public)
 </script>
 
 <style>
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
-
-html, body, #app {
+/* 只保留必要的重置；字体栈、盒模型等一律交给 styles/theme.css 统一维护 */
+html,
+body,
+#app {
   height: 100%;
-  font-family: 'Helvetica Neue', Helvetica, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
 }
 </style>

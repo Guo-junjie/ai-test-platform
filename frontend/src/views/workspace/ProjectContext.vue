@@ -105,7 +105,7 @@ export default defineComponent({
 
 <style scoped>
 .ctx-card {
-  border: 1px solid #ebeef5;
+  border: 1px solid var(--el-border-color-lighter);
   border-radius: 6px;
   padding: 14px 16px;
   margin-bottom: 12px;
@@ -113,16 +113,16 @@ export default defineComponent({
   transition: all 0.2s;
 }
 .ctx-card:hover {
-  border-color: #409eff;
+  border-color: var(--el-color-primary);
   box-shadow: 0 2px 8px rgba(64, 158, 255, 0.1);
 }
 .ctx-title {
   font-weight: 600;
-  color: #303133;
+  color: var(--el-text-color-primary);
 }
 .ctx-desc {
   font-size: 12px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   margin-top: 4px;
 }
 .card-row {
@@ -136,7 +136,7 @@ export default defineComponent({
 }
 .muted {
   font-size: 12px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
 }
 .mt16 {
   margin-top: 16px;

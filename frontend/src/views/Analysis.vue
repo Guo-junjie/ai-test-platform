@@ -27,7 +27,7 @@
                     :value="p.id"
                   >
                     <span style="float: left">{{ p.name }}</span>
-                    <span style="float: right; color: #8492a6; font-size: 12px; margin-left: 12px">
+                    <span style="float: right; color: var(--el-text-color-secondary); font-size: 12px; margin-left: 12px">
                       {{ p.source_type?.toUpperCase() || '' }}
                     </span>
                   </el-option>
@@ -45,7 +45,7 @@
                   解析项目代码
                 </el-button>
               </div>
-              <div v-if="selectedProjectRepoUrl" style="font-size: 13px; color: #606266">
+              <div v-if="selectedProjectRepoUrl" style="font-size: 13px; color: var(--el-text-color-regular)">
                 关联仓库: <code class="mono-text">{{ selectedProjectRepoUrl }}</code>
               </div>
             </div>
@@ -115,7 +115,7 @@
                   拉取并解析
                 </el-button>
               </div>
-              <div style="font-size: 12px; color: #909399">
+              <div style="font-size: 12px; color: var(--el-text-color-secondary)">
                 * 公开开源仓库直接输入地址即可免 Token 拉取与解析；私有仓库请填写对应访问凭据。
               </div>
             </div>
@@ -327,6 +327,7 @@ import { Search, Loading, UploadFilled, Upload } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { analysisApi, projectApi } from '@/api'
 import type { UploadUserFile, UploadRawFile } from 'element-plus'
+import { CHART_COLORS } from '@/styles/chartPalette'
 
 const route = useRoute()
 const inputMode = ref<'project' | 'remote' | 'files'>('project')
@@ -394,9 +395,9 @@ const hasGraphData = computed(() => {
 
 const confidenceColor = computed(() => {
   const conf = analysisResult.value?.tech_stack?.confidence || 0
-  if (conf >= 0.8) return '#67c23a'
-  if (conf >= 0.5) return '#e6a23c'
-  return '#f56c6c'
+  if (conf >= 0.8) return CHART_COLORS.success
+  if (conf >= 0.5) return CHART_COLORS.warning
+  return CHART_COLORS.danger
 })
 
 // Methods
@@ -582,17 +583,17 @@ function renderDependencyGraph() {
   edges.forEach((edge: any) => {
     const s = nodes[edge.source]
     const t = nodes[edge.target]
-    svg += `<line x1="${s.x}" y1="${s.y}" x2="${t.x}" y2="${t.y}" stroke="#a0cfff" stroke-width="2" marker-end="url(#arrow)" />`
+    svg += `<line x1="${s.x}" y1="${s.y}" x2="${t.x}" y2="${t.y}" stroke="var(--el-color-primary-light-5)" stroke-width="2" marker-end="url(#arrow)" />`
   })
 
   // Arrow marker
-  svg += `<defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="20" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3 Z" fill="#a0cfff"/></marker></defs>`
+  svg += `<defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="20" refY="3" orient="auto"><path d="M0,0 L0,6 L6,3 Z" fill="var(--el-color-primary-light-5)"/></marker></defs>`
 
   // Draw nodes
   nodes.forEach((node: any) => {
     svg += `<g transform="translate(${node.x}, ${node.y})">`
-    svg += `<rect x="-60" y="-20" width="120" height="40" rx="8" fill="#ecf5ff" stroke="#409eff" stroke-width="1.5"/>`
-    svg += `<text x="0" y="5" text-anchor="middle" font-size="13" fill="#303133">${node.name}</text>`
+    svg += `<rect x="-60" y="-20" width="120" height="40" rx="8" fill="var(--el-color-primary-light-9)" stroke="var(--el-color-primary)" stroke-width="1.5"/>`
+    svg += `<text x="0" y="5" text-anchor="middle" font-size="13" fill="var(--app-text-primary)">${node.name}</text>`
     svg += `</g>`
   })
 
@@ -644,7 +645,7 @@ watch(activeTab, (val) => {
 
 .loading-text {
   margin-top: 16px;
-  color: #909399;
+  color: var(--el-text-color-secondary);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -662,7 +663,7 @@ watch(activeTab, (val) => {
 }
 
 .text-muted {
-  color: #909399;
+  color: var(--el-text-color-secondary);
   font-size: 12px;
 }
 
@@ -671,7 +672,7 @@ watch(activeTab, (val) => {
 }
 
 .module-desc {
-  color: #606266;
+  color: var(--el-text-color-regular);
   margin-bottom: 12px;
 }
 
@@ -680,7 +681,7 @@ watch(activeTab, (val) => {
 }
 
 .module-section strong {
-  color: #303133;
+  color: var(--el-text-color-primary);
   margin-right: 8px;
 }
 
@@ -688,7 +689,7 @@ watch(activeTab, (val) => {
   width: 100%;
   min-height: 500px;
   overflow: auto;
-  border: 1px solid #ebeef5;
+  border: 1px solid var(--el-border-color-lighter);
   border-radius: 4px;
   padding: 16px;
 }
@@ -700,8 +701,8 @@ watch(activeTab, (val) => {
 }
 
 .json-viewer {
-  background: #f5f7fa;
-  border: 1px solid #ebeef5;
+  background: var(--el-fill-color-light);
+  border: 1px solid var(--el-border-color-lighter);
   border-radius: 4px;
   padding: 16px;
   font-size: 13px;
