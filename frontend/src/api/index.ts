@@ -376,6 +376,10 @@ export const caseApi = {
   remove: (id: string) => api.delete(`/cases/${id}`),
   /** 单条接纳 */
   adopt: (id: string) => api.post(`/cases/${id}/adopt`),
+  submitReview: (id: string) => api.post(`/cases/${id}/submit-review`),
+  review: (id: string, decision: 'approve' | 'changes_requested', comment = '') =>
+    api.post(`/cases/${id}/review`, { decision, comment }),
+  reviewEvents: (id: string) => api.get(`/cases/${id}/review-events`),
   /** 单条废弃 */
   deprecate: (id: string) => api.post(`/cases/${id}/deprecate`),
   /** 批量接纳：data { ids: string[] } */

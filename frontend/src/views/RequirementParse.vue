@@ -20,7 +20,7 @@
             </el-form-item>
             <el-form-item label="使用 AI">
               <el-switch v-model="useAi" active-text="AI 结构化" inactive-text="仅规则" />
-              <span class="hint">未配模型时自动降级为规则抽取（编号/功能标题）</span>
+              <span class="hint">AI 模式失败会明确提示；规则模式只抽取文档中已有内容</span>
             </el-form-item>
           </el-form>
 
@@ -97,7 +97,7 @@
             <el-button type="success" :loading="genLoading" :disabled="requirements.length === 0" @click="openGen">
               一键生成测试用例
             </el-button>
-            <span class="hint">将基于上述需求调用 AI 生成功能 / 边界 / 异常用例</span>
+            <span class="hint">生成有出处的手工草稿；补齐 API 请求和断言并评审后，才能加入自动计划</span>
           </div>
         </el-card>
       </el-col>
@@ -131,36 +131,17 @@
     <!-- 生成用例对话框 -->
     <el-dialog v-model="genVisible" title="生成测试用例" width="480px">
       <p class="hint" style="margin-bottom: 12px">
-        用例默认会写进<b>项目用例库</b>（用例库页面可见、可采纳/废除）。
-        如果想关联到某个正在跑的测试任务，下方选择一下即可（可选）。
+        生成的内容会进入<b>项目用例库</b>作为草稿。需求文本不能推定真实接口地址，
+        请在用例库补齐请求和断言、提交评审，再加入测试计划。
       </p>
       <el-form label-width="100px">
-        <el-form-item label="关联测试任务">
-          <el-select
-            v-model="testRunId"
-            placeholder="（不选——只入用例库）"
-            clearable
-            filterable
-            style="width: 100%"
-          >
-            <el-option
-              v-for="r in testRuns"
-              :key="r.id"
-              :label="r.project_name || r.source_type || '未命名测试任务'"
-              :value="r.id"
-            />
-          </el-select>
-          <span class="hint" style="margin-left: 8px">
-            选中的话，会同时往该测试任务下塞一份「可执行实例」
-          </span>
-        </el-form-item>
         <el-form-item label="使用 AI">
           <el-switch v-model="genUseAi" />
         </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="genVisible = false">取消</el-button>
-        <el-button type="primary" :loading="genLoading" @click="doGenerate">生成</el-button>
+        <el-button type="primary" :loading="genLoading" @click="doGenerate">生成草稿</el-button>
       </template>
     </el-dialog>
   </div>
@@ -170,7 +151,7 @@
 import { ref, onMounted, watch } from 'vue'
 import { ElMessage, type UploadFile } from 'element-plus'
 import { useRouter } from 'vue-router'
-import { requirementApi, projectApi, testRunApi } from '@/api'
+import { requirementApi, projectApi } from '@/api'
 
 const router = useRouter()
 const projects = ref<any[]>([])
@@ -185,11 +166,9 @@ const requirements = ref<any[]>([])
 const docs = ref<any[]>([])
 const docsLoading = ref(false)
 
-const testRuns = ref<any[]>([])
 const genVisible = ref(false)
 const genLoading = ref(false)
 const genUseAi = ref(true)
-const testRunId = ref<string>('')
 
 function catLabel(c: string): string {
   return (
@@ -244,7 +223,6 @@ async function uploadAndParse() {
 
 function openGen() {
   genVisible.value = true
-  testRunId.value = ''  // 默认不选 → 落库到用例库
 }
 async function doGenerate() {
   if (!currentDoc.value?.id) return
@@ -252,20 +230,17 @@ async function doGenerate() {
   try {
     const res: any = await requirementApi.generateCases(currentDoc.value.id, {
       use_ai: genUseAi.value,
-      test_run_id: testRunId.value || undefined,
     })
     const d = res?.data || {}
-    const total = d.total ?? 0
     const assets = d.assets_created ?? 0
-    const instances = d.instances_created ?? 0
-    if (instances > 0) {
-      ElMessage.success(
-        `已生成 ${total} 条用例；入项目用例库 ${assets} 条，关联到测试任务 ${instances} 条`
-      )
-    } else if (assets > 0) {
-      ElMessage.success(`已生成 ${total} 条用例，全部入项目用例库（可在「用例库」查看）`)
+    if (assets > 0) {
+      ElMessage.success(`已生成 ${assets} 条待评审草稿`)
+      router.push({ path: '/case-library', query: { project_id: projectId.value } })
+    } else if (d.existing_asset_ids?.length) {
+      ElMessage.info('该文档已生成过草稿，请到用例库继续评审')
+      router.push({ path: '/case-library', query: { project_id: projectId.value } })
     } else {
-      ElMessage.warning(`生成 ${total} 条但未落库（请检查）`)
+      ElMessage.warning('没有生成可追溯的用例草稿')
     }
     genVisible.value = false
   } catch (e: any) {
@@ -306,39 +281,9 @@ async function loadDocs() {
   }
 }
 
-async function loadTestRuns() {
-  if (!projectId.value) {
-    testRuns.value = []
-    return
-  }
-  try {
-    const res: any = await testRunApi.getList({ project_id: projectId.value })
-    // 后端响应是 { code: 0, data: { list: [...], total: N } }
-    // 必须从包装对象里解出真正的数组，否则 v-for 会把 { list, total }
-    // 当成 2 个值渲染（之前显示两条 "#...." 就是这个 bug）。
-    const payload = res?.data
-    if (Array.isArray(payload)) {
-      testRuns.value = payload
-    } else if (payload && typeof payload === 'object') {
-      testRuns.value = Array.isArray(payload.list)
-        ? payload.list
-        : Array.isArray(payload.items)
-        ? payload.items
-        : []
-    } else if (Array.isArray(res?.list)) {
-      testRuns.value = res.list
-    } else {
-      testRuns.value = []
-    }
-  } catch {
-    testRuns.value = []
-  }
-}
-
 function onProjectChange(id: string) {
-  // 切项目 → 立刻拉这一项目下的需求文档 + 测试任务下拉
+  // 切项目 → 拉当前项目需求文档
   loadDocs()
-  loadTestRuns()
   // 清掉旧文档视图，避免跨项目串
   currentDoc.value = null
   requirements.value = []

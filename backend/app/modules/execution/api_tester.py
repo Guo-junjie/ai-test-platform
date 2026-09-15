@@ -57,7 +57,7 @@ class APITester:
         async with httpx.AsyncClient(
             base_url=service_url,
             timeout=httpx.Timeout(30.0, connect=10.0),
-            verify=False,
+            verify=True,
         ) as client:
             tasks = [
                 self._run_single_test(client, case, context, semaphore)

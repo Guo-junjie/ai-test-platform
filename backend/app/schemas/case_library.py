@@ -36,6 +36,7 @@ class UpdateCaseRequest(BaseModel):
     expected_result: dict[str, Any] | None = None
     priority: str | None = None
     case_type: str | None = None
+    execution_kind: str | None = None  # manual → api 时必须填写真实请求与断言
 
 
 class AdoptBatchRequest(BaseModel):

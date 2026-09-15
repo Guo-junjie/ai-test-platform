@@ -3,7 +3,7 @@
     <el-card shadow="hover">
       <template #header>
         <div class="card-row">
-          <span>测试计划（发布后的计划可执行；修改后需重新发布）</span>
+          <span>测试计划（仅已批准、请求与断言完整的 API 用例可发布执行）</span>
           <div>
             <el-button size="small" type="primary" @click="openCreate">新建计划</el-button>
             <el-button size="small" @click="loadPlans" :loading="loading">刷新</el-button>
@@ -53,7 +53,7 @@
       </el-table>
 
       <el-empty v-if="!loading && plans.length === 0"
-        description="还没有测试计划 —— 点击「新建计划」创建（可一键纳入已采纳用例），或到用例库勾选用例后「加入计划」" :image-size="70">
+        description="还没有测试计划 —— 先到用例库补齐 API 用例并评审，再创建计划" :image-size="70">
         <el-button type="primary" @click="openCreate">新建计划</el-button>
       </el-empty>
     </el-card>

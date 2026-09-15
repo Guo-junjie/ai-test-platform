@@ -274,7 +274,7 @@ async def parse_requirements(
     解析需求文本，返回 (需求条目列表, parse_engine)。
 
     parse_engine: "ai" | "rule_degraded"
-    无 AI 模型 / 调用失败 → rule_degraded（正则兜底）。
+    仅显式 use_ai=False 时使用规则抽取；AI 模式失败由调用方明确提示。
     """
     if not raw_text or not raw_text.strip():
         return [], "rule_degraded"
@@ -304,8 +304,7 @@ async def parse_requirements(
                     except ModelNotConfiguredError:
                         raise
                     except Exception as e:  # noqa: BLE001
-                        logger.warning(f"AI requirement parse chunk failed (degrade): {e}")
-                        return None
+                        raise RuntimeError(f"AI 需求解析失败: {e}") from e
                     return _parse_json_response(resp)
 
             results = await asyncio.gather(*[_one(c) for c in chunks])
@@ -327,10 +326,11 @@ async def parse_requirements(
             if merged:
                 items = list(merged.values())[:max_requirements]
                 return items, "ai"
+            raise ValueError("AI 未提取到有效需求，请检查文档内容或选择规则模式")
         except ModelNotConfiguredError:
-            logger.info("doc_parse model not configured, requirement parse -> rule_degraded")
+            raise
         except Exception as e:  # noqa: BLE001
-            logger.warning(f"AI requirement parse failed, fall back to regex: {e}")
+            raise RuntimeError(f"AI 需求解析失败: {e}") from e
 
     items = _regex_fallback(raw_text, max_requirements)
     return items, "rule_degraded"

@@ -52,9 +52,14 @@ class AssertionEngine:
         assertions = expected.get("assertions", [])
         expected_status = expected.get("status_code")
 
-        # 如果没有显式断言但有 status_code，自动添加状态码断言
-        if not assertions and expected_status is not None:
-            assertions = [{"type": "status_code", "expected": expected_status}]
+        # 顶层 status_code 始终生效，不能被其他断言掩盖。
+        assertions = list(assertions) if isinstance(assertions, list) else []
+        if expected_status is not None:
+            assertions.insert(0, {"type": "status_code", "expected": expected_status})
+        if not assertions:
+            return {"passed": False, "failures": ["未配置断言，不能判定请求通过"],
+                    "details": {"total_assertions": 0, "passed_assertions": 0,
+                                "failed_assertions": 1, "all_passed": False}}
 
         failures: list[str] = []
         details: dict[str, Any] = {
@@ -124,7 +129,7 @@ class AssertionEngine:
         """状态码断言。"""
         expected_status = assertion.get("expected")
         if expected_status is None:
-            return True, ""
+            return False, "Missing expected status code"
         if status == expected_status:
             return True, ""
         return False, f"Expected status {expected_status}, got {status}"
@@ -150,6 +155,9 @@ class AssertionEngine:
                 return True, ""
             return False, f"Path '{path}' does not exist"
 
+        if "expected" not in assertion:
+            return False, f"Path '{path}' lacks expected value"
+
         expected_value = assertion.get("expected")
         if value == expected_value:
             return True, ""
@@ -160,6 +168,8 @@ class AssertionEngine:
     ) -> tuple[bool, str]:
         """内容包含断言。"""
         expected = assertion.get("expected", "")
+        if not isinstance(expected, str) or not expected:
+            return False, "Missing non-empty contains target"
         body_str = json.dumps(body, ensure_ascii=False) if not isinstance(body, str) else body
         if expected in body_str:
             return True, ""
@@ -170,11 +180,13 @@ class AssertionEngine:
     ) -> tuple[bool, str]:
         """JSON Schema 验证（简化实现）。"""
         schema = assertion.get("schema", {})
-        if not schema:
-            return True, ""
+        if not isinstance(schema, dict) or not schema or not (schema.get("required") or schema.get("type")):
+            return False, "Missing JSON schema constraints"
 
         # 简化验证：检查 required 字段和 type
         required_fields = schema.get("required", [])
+        if required_fields and not isinstance(body, dict):
+            return False, "Response is not an object required by schema"
         if required_fields and isinstance(body, dict):
             for field in required_fields:
                 if field not in body:
@@ -192,6 +204,8 @@ class AssertionEngine:
                 "boolean": bool,
             }
             expected_python_type = type_map.get(expected_type)
+            if expected_python_type is None:
+                return False, f"Unknown schema type {expected_type}"
             if expected_python_type and not isinstance(body, expected_python_type):
                 return False, f"Expected type {expected_type}, got {type(body).__name__}"
 
@@ -201,7 +215,9 @@ class AssertionEngine:
         self, assertion: dict[str, Any], response_time_ms: float
     ) -> tuple[bool, str]:
         """响应时间断言。"""
-        max_ms = assertion.get("max_ms", 5000)
+        max_ms = assertion.get("max_ms")
+        if not isinstance(max_ms, (int, float)) or isinstance(max_ms, bool) or max_ms <= 0:
+            return False, "Missing positive response time limit"
         if response_time_ms <= max_ms:
             return True, ""
         return False, f"Response time {response_time_ms:.0f}ms exceeds {max_ms}ms"

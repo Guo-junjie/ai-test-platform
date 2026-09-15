@@ -196,6 +196,19 @@ class RunOrchestrator:
         except ValueError as exc:
             raise RunBlocked(str(exc)) from exc
 
+        # 旧修订版可能固化了历史需求占位用例；即使当时已发布，也不能发送空请求并误报通过。
+        from app.modules.runs.case_readiness import api_case_errors
+
+        for entry in snapshot_cases:
+            kind = entry["execution_kind"]
+            payload = entry["payload"]
+            if kind == "api":
+                errors = api_case_errors(payload.get("request"), payload.get("expected"))
+                if errors:
+                    raise RunBlocked(f"用例「{entry['title']}」不可执行：{'；'.join(errors)}。请修复并重新发布计划")
+            elif kind not in {"performance", "integration"}:
+                raise RunBlocked(f"用例「{entry['title']}」的执行类型为 {kind}，请重新发布计划")
+
         # ---- 创建 Run ----
         now = datetime.utcnow()
         run = TestRun(

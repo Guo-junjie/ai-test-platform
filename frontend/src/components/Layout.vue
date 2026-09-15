@@ -32,9 +32,10 @@
             <el-icon><VideoPlay /></el-icon>
             <span>测试中心</span>
           </template>
-          <el-menu-item index="/test-run">测试运行</el-menu-item>
+          <el-menu-item index="/requirement-parse">1. 需求分析与用例生成</el-menu-item>
+          <el-menu-item index="/case-library">2. 用例管理与评审</el-menu-item>
+          <el-menu-item index="/test-run">3. API 计划执行</el-menu-item>
           <el-menu-item index="/scheduled-tasks">定时任务</el-menu-item>
-          <el-menu-item index="/case-library">用例库</el-menu-item>
           <el-menu-item index="/scenario">场景编排</el-menu-item>
           <el-menu-item index="/scripts">脚本生成</el-menu-item>
           <el-menu-item index="/database-manage">数据库连接</el-menu-item>
@@ -72,7 +73,6 @@
           <el-menu-item index="/analysis">代码解析</el-menu-item>
           <el-menu-item index="/doc-parser">接口文档解析</el-menu-item>
           <el-menu-item index="/doc-review">接口文档评审</el-menu-item>
-          <el-menu-item index="/requirement-parse">需求文档解析</el-menu-item>
           <el-menu-item index="/sources">仓库配置</el-menu-item>
         </el-sub-menu>
 

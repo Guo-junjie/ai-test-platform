@@ -40,6 +40,7 @@ from app.models.database import (
 )
 from app.modules.auth.dependencies import get_current_user, require_role
 from app.modules.runs.case_snapshot import case_content_hash, executable_case_payload
+from app.modules.runs.case_readiness import case_plan_errors
 from app.utils.database import get_db_session
 from app.utils.logger import get_logger
 
@@ -490,17 +491,21 @@ async def add_plan_cases(
     # 校验属于同一项目
     rows = (
         await db.execute(
-            select(TestCaseAsset.id, TestCaseAsset.project_id)
+            select(TestCaseAsset)
             .where(TestCaseAsset.id.in_(parsed_ids))
         )
-    ).all()
-    id_to_proj = {rid: pid for rid, pid in rows}
-    missing = [str(c) for c in parsed_ids if c not in id_to_proj]
+    ).scalars().all()
+    assets_by_id = {asset.id: asset for asset in rows}
+    missing = [str(c) for c in parsed_ids if c not in assets_by_id]
     if missing:
         raise HTTPException(404, f"Case asset not found: {missing}")
-    cross = [str(c) for c, pid in id_to_proj.items() if pid != plan.project_id]
+    cross = [str(asset.id) for asset in rows if asset.project_id != plan.project_id]
     if cross:
         raise HTTPException(400, f"Case assets cross project: {cross}")
+    invalid = [f"{asset.title}: {'；'.join(case_plan_errors(asset))}" for asset in rows
+               if case_plan_errors(asset)]
+    if invalid:
+        raise HTTPException(422, "用例不能加入自动计划：" + "；".join(invalid[:5]))
 
     # 已存在
     existing = {
@@ -621,6 +626,7 @@ async def bulk_add_plan_cases(
             )
         )
     assets = (await db.execute(stmt.order_by(TestCaseAsset.created_at.desc()).limit(req.limit))).scalars().all()
+    assets = [asset for asset in assets if not case_plan_errors(asset)]
 
     if not assets:
         return {"code": 0, "data": {"matched": 0, "added": 0, "skipped": 0}, "message": "no matches"}
@@ -729,6 +735,10 @@ async def publish_plan(
     enabled_rows = [(pc, a) for pc, a in rows if pc.enabled]
     if not enabled_rows:
         raise HTTPException(400, "计划内无启用用例，无法发布")
+    invalid = [f"{a.title if a else pc.case_asset_id}: {'；'.join(case_plan_errors(a)) if a else '用例已删除'}"
+               for pc, a in enabled_rows if a is None or case_plan_errors(a)]
+    if invalid:
+        raise HTTPException(422, "计划包含未评审或不可执行用例：" + "；".join(invalid[:5]))
 
     # 已发布且状态未变 → 无需重复发布
     latest = await _latest_published_revision(plan.id, db)

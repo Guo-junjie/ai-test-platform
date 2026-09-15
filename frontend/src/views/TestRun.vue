@@ -10,15 +10,15 @@
 
         <!-- 测试计划执行（唯一创建入口；代码经项目版本化后由版本触发执行） -->
           <div class="mode-desc">
-            按计划执行：跳过代码拉取与 AI 生成，直接运行计划内已启用的用例，适合回归测试。
+            基础流程：需求分析生成草稿 → 用例库补齐 API 请求与断言并评审 → 加入计划并发布 → 选择环境执行。
             <br>
-            还没有计划？到<b>「用例库」</b>选择用例 → 点<b>「加入计划」</b>→ 选「新建计划」即可创建。
+            计划执行只使用已发布修订版中的用例，执行时不会临时调用 AI 改写用例。
             <br>
             要测试<b>新代码</b>？到<b>「项目管理」</b>项目详情上传/拉取代码版本 → 点<b>「执行测试」</b>。
           </div>
           <el-empty
             v-if="!plansLoading && plans.length === 0"
-            description="还没有测试计划 —— 去「用例库」选择用例，点「加入计划」新建"
+            description="还没有测试计划 —— 先到「用例库」批准 API 用例，再加入并发布计划"
           >
             <el-button type="primary" plain @click="loadPlans">重新加载</el-button>
           </el-empty>
@@ -218,7 +218,7 @@
         </el-table-column>
       </el-table>
 
-      <el-empty v-if="!loading && testRuns.length === 0" description="暂无测试任务，点击上方任一模式创建" />
+      <el-empty v-if="!loading && testRuns.length === 0" description="暂无测试任务，请先发布 API 测试计划" />
     </el-card>
 
     <!-- Task detail dialog -->

@@ -2,7 +2,7 @@
   <div class="case-library">
     <!-- 生成控制区 -->
     <el-card shadow="hover">
-      <template #header>用例库 —— 测试用例统一存储与管理</template>
+      <template #header>用例库 —— 草稿、评审、批准后进入 API 计划</template>
       <el-form label-width="80px" :inline="true">
         <el-form-item label="项目" required>
           <el-select v-model="projectId" placeholder="选择项目" filterable style="width: 220px" @change="onProjectChange">
@@ -10,11 +10,11 @@
           </el-select>
         </el-form-item>
         <el-form-item>
-          <el-button :loading="batchAdopting" :disabled="!hasDraft" @click="batchAdopt">批量采纳</el-button>
+          <el-button :loading="batchAdopting" :disabled="!selectedRows.length" @click="batchAdopt">批量批准待评审用例</el-button>
           <el-button
             type="primary"
             plain
-            :disabled="selectedRows.length === 0"
+            :disabled="selectedRows.length === 0 || selectedRows.some((r: any) => r.status !== 'adopted' || r.execution_kind === 'manual')"
             @click="openAddToPlan(selectedRows.map((r: any) => r.id))"
           >
             <el-icon><Files /></el-icon>
@@ -25,7 +25,7 @@
       </el-form>
       <div class="kb-tip">
         用例来源：接口文档解析、需求文档解析、代码解析（测试流水线）AI 生成后自动汇聚于此；
-        在此评审采纳后即可「加入计划」执行。
+        需求草稿先补齐真实 API 请求和断言，再提交评审；只有已批准的 API 用例能进入自动计划。
       </div>
     </el-card>
 
@@ -33,11 +33,12 @@
     <el-card shadow="hover" style="margin-top: 16px" v-loading="listLoading">
       <template #header>
         用例库
-        <span class="muted">（共 {{ cases.length }} 条，草稿 {{ draftCount }} 条）</span>
+        <span class="muted">（共 {{ totalCases }} 条，本页草稿 {{ draftCount }} 条）</span>
       </template>
 
-      <el-tabs v-model="activeType">
+      <el-tabs v-model="activeType" @tab-change="onFilterChange">
         <el-tab-pane label="全部" name="all" />
+        <el-tab-pane label="需求/功能" name="functional" />
         <el-tab-pane label="正向" name="positive" />
         <el-tab-pane label="反向" name="negative" />
         <el-tab-pane label="边界" name="boundary" />
@@ -51,28 +52,31 @@
           placeholder="搜索用例标题..."
           clearable
           style="width: 220px; margin-right: 12px"
-          @keyup.enter="loadCases"
-          @clear="loadCases"
+          @keyup.enter="onFilterChange"
+          @clear="onFilterChange"
         >
           <template #append>
-            <el-button icon="Search" @click="loadCases" />
+            <el-button icon="Search" @click="onFilterChange" />
           </template>
         </el-input>
         <span class="filter-label" style="margin-left: 8px">来源：</span>
-        <el-radio-group v-model="activeSource" size="small" @change="loadCases">
+        <el-radio-group v-model="activeSource" size="small" @change="onFilterChange">
           <el-radio-button value="">全部</el-radio-button>
-          <el-radio-button value="requirement">📄 需求生成（{{ sourceCount.requirement }}）</el-radio-button>
-          <el-radio-button value="ai_generated">🤖 AI 接口生成（{{ sourceCount.ai_generated }}）</el-radio-button>
-          <el-radio-button value="manual">👤 手工（{{ sourceCount.manual }}）</el-radio-button>
+          <el-radio-button value="requirement">📄 需求生成</el-radio-button>
+          <el-radio-button value="ai_generated">🤖 AI 接口生成</el-radio-button>
+          <el-radio-button value="manual">👤 手工</el-radio-button>
         </el-radio-group>
         <span class="muted" style="margin-left: 12px">
           点 <b>需求生成</b> 一键筛选来源=requirement 的用例
         </span>
       </div>
 
-      <el-table :data="filteredCases" border @selection-change="onSelectionChange">
+      <el-table :data="cases" border @selection-change="onSelectionChange">
         <el-table-column type="selection" width="48" />
         <el-table-column prop="title" label="标题" min-width="200" show-overflow-tooltip />
+        <el-table-column label="执行类型" width="95" align="center">
+          <template #default="{ row }">{{ row.execution_kind === 'manual' ? '手工设计' : 'API' }}</template>
+        </el-table-column>
         <el-table-column label="来源" width="110" align="center">
           <template #default="{ row }">
             <el-tag size="small" :type="sourceType(row.source)" effect="plain">
@@ -93,15 +97,18 @@
         </el-table-column>
         <el-table-column label="状态" width="100" align="center">
           <template #default="{ row }">
-            <el-tag size="small" :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag>
+            <el-tag size="small" :type="reviewTagType(row)">{{ reviewLabel(row) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="360" fixed="right">
+        <el-table-column label="操作" width="480" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" type="success" plain :disabled="row.status === 'adopted'" @click="adopt(row)">采纳</el-button>
+            <el-button size="small" type="primary" plain :disabled="!['draft', 'changes_requested'].includes(row.review_state)" @click="submitReview(row)">提交评审</el-button>
+            <el-button size="small" type="success" plain :disabled="row.review_state !== 'pending'" @click="adopt(row)">批准</el-button>
+            <el-button size="small" type="warning" plain :disabled="row.review_state !== 'pending'" @click="requestChanges(row)">退回</el-button>
             <el-button size="small" type="warning" plain :disabled="row.status === 'deprecated'" @click="deprecate(row)">废弃</el-button>
             <el-button size="small" plain @click="openEdit(row)">编辑</el-button>
-            <el-button size="small" plain @click="openAddToPlan([row.id])">
+            <el-button size="small" plain @click="showReviewEvents(row)">记录</el-button>
+            <el-button size="small" plain :disabled="row.status !== 'adopted' || row.execution_kind === 'manual'" @click="openAddToPlan([row.id])">
               <el-icon><Files /></el-icon>
               加入计划
             </el-button>
@@ -109,6 +116,9 @@
           </template>
         </el-table-column>
       </el-table>
+      <el-pagination v-if="totalCases > pageSize" style="margin-top: 16px; justify-content: flex-end"
+        v-model:current-page="page" :page-size="pageSize" :total="totalCases"
+        layout="prev, pager, next, total" @current-change="loadCases" />
     </el-card>
 
     <!-- 编辑对话框 -->
@@ -128,6 +138,12 @@
             <el-option label="P3" value="P3" />
           </el-select>
         </el-form-item>
+        <el-form-item label="执行类型">
+          <el-select v-model="editForm.execution_kind" style="width: 180px">
+            <el-option label="手工设计" value="manual" />
+            <el-option label="API 自动执行" value="api" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="请求数据">
           <el-input v-model="editForm.request_json" type="textarea" :rows="5" placeholder="JSON" />
         </el-form-item>
@@ -139,6 +155,15 @@
         <el-button @click="editVisible = false">取消</el-button>
         <el-button type="primary" :loading="savingEdit" @click="saveEdit">保存</el-button>
       </template>
+    </el-dialog>
+
+    <el-dialog v-model="reviewEventsVisible" title="用例评审记录" width="620px">
+      <el-timeline v-if="reviewEvents.length">
+        <el-timeline-item v-for="event in reviewEvents" :key="event.id" :timestamp="event.created_at">
+          {{ event.action }} · {{ event.actor_name || event.actor_id }}<div v-if="event.comment">{{ event.comment }}</div>
+        </el-timeline-item>
+      </el-timeline>
+      <el-empty v-else description="尚无评审记录" />
     </el-dialog>
 
     <!-- P0 阶段7：加入计划弹窗（支持新建计划） -->
@@ -243,6 +268,9 @@ const listLoading = ref(false)
 const batchAdopting = ref(false)
 
 const cases = ref<any[]>([])
+const totalCases = ref(0)
+const page = ref(1)
+const pageSize = 50
 const activeType = ref<string>('all')
 const activeSource = ref<string>('')  // v1.4：来源过滤（''=全部 / requirement / ai_generated / manual）
 const searchKeyword = ref<string>('')  // 搜索关键字
@@ -275,16 +303,13 @@ const editVisible = ref(false)
 const savingEdit = ref(false)
 const editForm = ref<any>({})
 const editId = ref<string>('')
+const reviewEventsVisible = ref(false)
+const reviewEvents = ref<any[]>([])
 
 const STATUS_LABELS: Record<string, string> = {
   draft: '草稿',
   adopted: '已采纳',
   deprecated: '已废弃',
-}
-const STATUS_TYPES: Record<string, any> = {
-  draft: 'info',
-  adopted: 'success',
-  deprecated: 'danger',
 }
 const PRIORITY_TYPES: Record<string, any> = {
   P0: 'danger',
@@ -296,8 +321,13 @@ const PRIORITY_TYPES: Record<string, any> = {
 function statusLabel(s: string): string {
   return STATUS_LABELS[s] || s || '-'
 }
-function statusType(s: string): any {
-  return STATUS_TYPES[s] || 'info'
+function reviewLabel(row: any): string {
+  if (row.status === 'deprecated') return '已废弃'
+  return ({ draft: '草稿', pending: '待评审', approved: '已批准', changes_requested: '已退回' } as Record<string, string>)[row.review_state] || statusLabel(row.status)
+}
+function reviewTagType(row: any): any {
+  if (row.status === 'deprecated') return 'danger'
+  return ({ pending: 'warning', approved: 'success', changes_requested: 'danger' } as Record<string, string>)[row.review_state] || 'info'
 }
 function priorityType(p: string): any {
   return PRIORITY_TYPES[p] || 'info'
@@ -309,26 +339,7 @@ function sourceType(s: string): any {
   return SOURCE_TYPES[s] || 'info'
 }
 
-const filteredCases = computed(() => {
-  let arr = cases.value
-  if (activeType.value !== 'all') {
-    arr = arr.filter((c) => c.case_type === activeType.value)
-  }
-  return arr
-})
 const draftCount = computed(() => cases.value.filter((c) => c.status === 'draft').length)
-const hasDraft = computed(() => draftCount.value > 0)
-
-/** 各来源计数（前端计算，避免 N 次请求） */
-const sourceCount = computed(() => {
-  const acc: Record<string, number> = { requirement: 0, ai_generated: 0, manual: 0 }
-  for (const c of cases.value) {
-    const s = c.source || 'ai_generated'  // 老数据无 source 字段默认归 ai_generated
-    if (acc[s] === undefined) acc[s] = 0
-    acc[s] += 1
-  }
-  return acc
-})
 
 async function loadProjects() {
   try {
@@ -341,26 +352,38 @@ async function loadProjects() {
 }
 
 async function onProjectChange() {
+  plans.value = []
+  selectedRows.value = []
+  page.value = 1
   await loadCases()
+}
+
+function onFilterChange(): void {
+  page.value = 1
+  loadCases()
 }
 
 async function loadCases() {
   if (!projectId.value) {
     cases.value = []
+    totalCases.value = 0
     return
   }
   listLoading.value = true
   try {
     const res: any = await caseApi.list({
       project_id: projectId.value,
-      page: 1,
-      page_size: 200,
+      page: page.value,
+      page_size: pageSize,
+      case_type: activeType.value === 'all' ? undefined : activeType.value,
       source: activeSource.value || undefined,  // ''→不过滤；非空→传后端
       keyword: searchKeyword.value || undefined,  // 搜索关键字
     })
     cases.value = res?.data?.items || []
+    totalCases.value = res?.data?.total || 0
   } catch {
     cases.value = []
+    totalCases.value = 0
   } finally {
     listLoading.value = false
   }
@@ -386,7 +409,7 @@ async function loadPlansIfNeeded(): Promise<void> {
 async function loadPlans(): Promise<void> {
   plansLoading.value = true
   try {
-    const res: any = await planApi.list({ page: 1, page_size: 200 })
+    const res: any = await planApi.list({ project_id: projectId.value, page: 1, page_size: 200 })
     const list = res?.data?.list || res?.data?.items || res?.list || []
     plans.value = Array.isArray(list) ? list : []
   } catch {
@@ -399,6 +422,11 @@ async function loadPlans(): Promise<void> {
 function openAddToPlan(caseIds: string[]): void {
   if (!caseIds || caseIds.length === 0) {
     ElMessage.warning('请先选择至少一条用例')
+    return
+  }
+  const chosen = cases.value.filter((c) => caseIds.includes(c.id))
+  if (chosen.some((c) => c.status !== 'adopted' || c.execution_kind === 'manual')) {
+    ElMessage.warning('只有已批准的 API 用例可以加入自动计划')
     return
   }
   addToPlanCaseIds.value = [...caseIds]
@@ -472,6 +500,10 @@ async function batchAdopt() {
     ElMessage.warning('请先勾选要接纳的用例')
     return
   }
+  if (selectedRows.value.some((r) => r.review_state !== 'pending')) {
+    ElMessage.warning('批量批准仅适用于待评审用例')
+    return
+  }
   batchAdopting.value = true
   try {
     await caseApi.adoptBatch(ids)
@@ -486,12 +518,39 @@ async function batchAdopt() {
 
 async function adopt(row: any) {
   try {
-    await caseApi.adopt(row.id)
-    ElMessage.success('已接纳')
+    await caseApi.review(row.id, 'approve')
+    ElMessage.success('评审已批准')
     await loadCases()
   } catch {
     /* ignore */
   }
+}
+
+async function submitReview(row: any) {
+  try {
+    await caseApi.submitReview(row.id)
+    ElMessage.success('已提交评审')
+    await loadCases()
+  } catch { /* 拦截器已提示 */ }
+}
+
+async function requestChanges(row: any) {
+  try {
+    const result = await ElMessageBox.prompt('填写需要修改的内容', '退回用例', {
+      inputValidator: (value: string) => !!value.trim() || '请填写修改意见',
+    })
+    await caseApi.review(row.id, 'changes_requested', result.value)
+    ElMessage.success('已退回')
+    await loadCases()
+  } catch { /* 取消或请求失败 */ }
+}
+
+async function showReviewEvents(row: any) {
+  try {
+    const result: any = await caseApi.reviewEvents(row.id)
+    reviewEvents.value = result?.data || []
+    reviewEventsVisible.value = true
+  } catch { /* 拦截器已提示 */ }
 }
 
 async function deprecate(row: any) {
@@ -538,6 +597,7 @@ function openEdit(row: any) {
     title: row.title || '',
     description: row.description || '',
     priority: row.priority || 'P2',
+    execution_kind: row.execution_kind || 'api',
     request_json: JSON.stringify(row.request_data || {}, null, 2),
     expected_json: JSON.stringify(row.expected_result || {}, null, 2),
   }
@@ -560,6 +620,7 @@ async function saveEdit() {
       title: editForm.value.title,
       description: editForm.value.description,
       priority: editForm.value.priority,
+      execution_kind: editForm.value.execution_kind,
       request_data,
       expected_result,
     })

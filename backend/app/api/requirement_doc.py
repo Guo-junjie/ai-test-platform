@@ -36,7 +36,6 @@ from app.models.database import (
     DocStatus,
     Project,
     RequirementDoc,
-    TestCase,
     TestCaseAsset,
     User,
 )
@@ -72,7 +71,7 @@ EXT_TO_FORMAT = {
 
 class GenerateCasesRequest(BaseModel):
     use_ai: bool = True
-    test_run_id: str | None = None  # 提供则把生成的用例落库为该测试任务的 TestCase
+    test_run_id: str | None = None  # 兼容旧客户端；禁止向运行中的任务追加未评审实例
 
 
 # ==================== 内部工具 ====================
@@ -146,10 +145,12 @@ async def upload_requirement(
     try:
         items, engine = await parse_requirements(raw_text or "", use_ai=use_ai)
     except ModelNotConfiguredError:
-        items, engine = [], "rule_degraded"
+        os.remove(storage_path)
+        raise
     except Exception as e:  # noqa: BLE001
         logger.error(f"Requirement parse failed: {e}")
-        items, engine = [], "rule_degraded"
+        os.remove(storage_path)
+        raise HTTPException(502, str(e)) from e
 
     req_doc = RequirementDoc(
         project_id=uuid.UUID(project_id),
@@ -260,6 +261,11 @@ async def delete_requirement(
     ).scalar_one_or_none()
     if not r:
         raise HTTPException(404, "需求文档不存在")
+    linked = (await db.execute(select(TestCaseAsset.id).where(
+        TestCaseAsset.request_data["requirement_doc_id"].astext == str(r.id)
+    ).limit(1))).scalar_one_or_none()
+    if linked:
+        raise HTTPException(409, "该需求文档已有用例资产引用，不能删除；请保留追溯记录")
     await db.delete(r)
     await db.commit()
     # 清理本地文件
@@ -298,21 +304,9 @@ async def generate_cases(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ):
-    """基于需求文档一键生成测试用例。
-
-落库策略（v1.4 重构）：
-- **始终落库到 test_case_assets**（项目用例资产库，`project_id` 关联）——这是
-  用户在「用例库」页面看到的库；不依赖 test_run_id 也能立即看到
-- **如果提供 test_run_id**：同时把每条用例实例化为 test_cases（test_run 执行实例表）
-  ，即「项目级资产」+「执行实例」双写，让该 test_run 跑时可直接拉这些用例
-- 不依赖 test_run_id，避免之前「不填就 0 created」的 UX 短板
-
-返回：
-- total: AI/兜底生成的 case 条数
-- assets_created: 写入 test_case_assets 的条数（≥ 1 always）
-- instances_created: 写入 test_cases 的条数（仅在提供 test_run_id 时 > 0）
-- cases: 原始 JSON（不持久化细节）
-"""
+    """需求只生成可追溯的手工用例草稿；不伪造 HTTP 请求和成功断言。"""
+    if req.test_run_id:
+        raise HTTPException(400, "需求草稿不能直接加入运行中任务；请评审并加入测试计划")
     r = (
         await db.execute(select(RequirementDoc).where(RequirementDoc.id == doc_id))
     ).scalar_one_or_none()
@@ -321,6 +315,15 @@ async def generate_cases(
     items = (r.requirements_json or {}).get("items", [])
     if not items:
         raise HTTPException(400, "该需求文档未解析出任何需求，无法生成用例")
+
+    existing = (await db.execute(select(TestCaseAsset).where(
+        TestCaseAsset.project_id == r.project_id,
+        TestCaseAsset.request_data["requirement_doc_id"].astext == str(r.id),
+    ))).scalars().all()
+    if existing:
+        return {"code": 0, "data": {"total": len(existing), "assets_created": 0,
+                "instances_created": 0, "existing_asset_ids": [str(a.id) for a in existing]},
+                "message": "该文档的用例草稿已生成，请到用例库评审"}
 
     cases: list[dict] = []
     if req.use_ai:
@@ -360,14 +363,15 @@ async def generate_cases(
 
             parsed = _extract(resp or "")
             cases = parsed.get("cases", []) or []
+            if not isinstance(cases, list):
+                raise ValueError("AI 返回的 cases 不是列表")
         except ModelNotConfiguredError:
-            cases = []
+            raise
         except Exception as e:  # noqa: BLE001
-            logger.warning(f"AI generate cases failed: {e}")
-            cases = []
+            raise HTTPException(502, f"AI 用例生成失败: {e}") from e
 
-    if not cases:
-        # 兜底：每个需求生成一条基础功能用例
+    if not req.use_ai:
+        # 显式规则模式：只把现有验收标准转为草稿，不补造断言或接口。
         for it in items:
             cases.append(
                 {
@@ -375,96 +379,56 @@ async def generate_cases(
                     "description": it.get("description", ""),
                     "priority": it.get("priority", "P2"),
                     "related_requirement": it.get("rid", ""),
-                    "steps": it.get("acceptance_criteria", []) or ["执行需求对应操作"],
-                    "expected": "行为符合需求描述",
+                    "steps": it.get("test_points", []) or [],
+                    "expected": "；".join(it.get("acceptance_criteria", []) or []),
                     "type": "functional",
                 }
             )
 
-    # 解析 test_run_id（如提供）；并查项目级用例库写 assets 表
-    run_uuid = None
-    if req.test_run_id:
-        try:
-            run_uuid = uuid.UUID(req.test_run_id)
-        except ValueError:
-            raise HTTPException(400, "test_run_id 格式错误")
+    known_requirements = {str(it.get("rid")): it for it in items}
+    normalized = [c for c in cases if isinstance(c, dict)
+                  and str(c.get("title") or "").strip()
+                  and str(c.get("related_requirement", "")) in known_requirements]
+    if not normalized:
+        raise HTTPException(502 if req.use_ai else 422,
+                            "未生成可追溯的用例：需要有效标题和已有需求编号")
 
-    # === 1) 永远写 test_case_assets（项目用例资产库） ===
-    assets_created = 0
-    for c in cases:
-        priority = str(c.get("priority", "P2")).upper()[:2] or "P2"
+    assets = []
+    for c in normalized:
+        priority = str(c.get("priority", "P2")).upper()[:2]
+        if priority not in {"P0", "P1", "P2", "P3"}:
+            priority = "P2"
+        steps = c.get("steps") if isinstance(c.get("steps"), list) else []
+        design_type = c.get("type") if c.get("type") in {"functional", "boundary", "negative", "performance"} else "functional"
         asset = TestCaseAsset(
             project_id=r.project_id,
-            case_type=c.get("type", "functional"),
-            title=c.get("title", "")[:500],
-            description=c.get("description", ""),
+            case_type=design_type,
+            design_type=design_type,
+            execution_kind="manual",
+            title=str(c.get("title") or "")[:500],
+            description=str(c.get("description") or ""),
             request_data={
-                "expected": c.get("expected", ""),
-                "steps": c.get("steps", []),
-                "related_requirement": c.get("related_requirement", ""),
-                "source": "requirement_doc",
+                "steps": [str(step) for step in steps[:30]],
+                "related_requirement": str(c.get("related_requirement", "")),
                 "requirement_doc_id": str(r.id),
-                # 端点 URL 不从需求文档来，留空占位；用户在「用例库」可手动绑定 endpoint
-                "method": None,
-                "url": None,
             },
-            expected_result={
-                "status_code": 200,  # 兜底占位，便于「采纳」后自动派单时使用
-                "assertions": [
-                    {"path": "$.code", "op": "==", "value": 0,
-                     "note": "或业务自定义 HTTP code"}
-                ],
-            },
+            expected_result={"text": str(c.get("expected") or "")},
             priority=priority,
             status=CaseAssetStatus.DRAFT,
-            source=CaseSource.REQUIREMENT,  # 需求驱动：与 AI_GENERATED（接口生成）区分
+            source=CaseSource.REQUIREMENT,
             created_by=current_user.id,
         )
         db.add(asset)
-        assets_created += 1
-
-    # === 2) 如果提供了 test_run_id，额外写 test_cases（执行实例表） ===
-    instances_created = 0
-    if run_uuid:
-        for c in cases:
-            priority = str(c.get("priority", "P2")).upper()[:2] or "P2"
-            db.add(
-                TestCase(
-                    test_run_id=run_uuid,
-                    case_type="requirement",
-                    case_name=c.get("title", "")[:500],
-                    description=c.get("description", ""),
-                    request_data={
-                        "expected": c.get("expected", ""),
-                        "steps": c.get("steps", []),
-                        "related_requirement": c.get("related_requirement", ""),
-                        "source": "requirement_doc",
-                    },
-                    expected_result={},
-                    validation_rules={},
-                    priority=priority,
-                )
-            )
-            instances_created += 1
-
-    if assets_created or instances_created:
-        await db.commit()
-        logger.info(
-            f"Requirement→Cases generated: assets={assets_created}, "
-            f"instances={instances_created}, doc_id={doc_id}"
-        )
+        assets.append(asset)
+    await db.commit()
 
     return {
         "code": 0,
         "data": {
-            "total": len(cases),
-            "assets_created": assets_created,
-            "instances_created": instances_created,
-            "test_run_id": str(run_uuid) if run_uuid else None,
-            "cases": cases,
+            "total": len(assets),
+            "assets_created": len(assets),
+            "instances_created": 0,
+            "case_ids": [str(a.id) for a in assets],
         },
-        "message": (
-            f"生成 {len(cases)} 条用例，已入项目用例库 {assets_created} 条"
-            + (f"，并实例化到测试任务 {instances_created} 条" if instances_created else "")
-        ),
+        "message": f"生成 {len(assets)} 条手工用例草稿，请到用例库评审",
     }

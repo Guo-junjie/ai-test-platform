@@ -838,6 +838,7 @@ class TestCaseAsset(Base):
     expected_result = Column(JSONB, nullable=True)            # {status_code, assertions:[...]}
     priority = Column(String(10), default="P2")               # P0-P3
     status = Column(CasePairEnum(CaseAssetStatus, values_callable=lambda x: [e.value for e in x], name="caseassetstatus"), default=CaseAssetStatus.DRAFT, nullable=False)
+    review_state = Column(String(24), nullable=False, default="draft")  # draft/pending/approved/changes_requested
     source = Column(CasePairEnum(CaseSource, values_callable=lambda x: [e.value for e in x], name="casesource"), default=CaseSource.AI_GENERATED, nullable=False)
     # 能力5/6/7：脚本字段
     pre_script = Column(Text, nullable=True)
@@ -852,6 +853,21 @@ class TestCaseAsset(Base):
         Index("idx_test_case_assets_project_status", "project_id", "status"),
         Index("idx_test_case_assets_endpoint", "endpoint_id"),
     )
+
+
+class CaseReviewEvent(Base):
+    """用例评审的追加式操作记录；修改用例会产生新的待评审版本。"""
+
+    __tablename__ = "case_review_events"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    case_asset_id = Column(UUID(as_uuid=True), ForeignKey("test_case_assets.id", ondelete="RESTRICT"), nullable=False, index=True)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False, index=True)
+    actor_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    action = Column(String(24), nullable=False)  # submit/approve/changes_requested/edit/deprecate
+    comment = Column(Text, nullable=True)
+    content_hash = Column(String(64), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 # ==================== 能力4：测试场景表（steps JSONB 单表） ====================
