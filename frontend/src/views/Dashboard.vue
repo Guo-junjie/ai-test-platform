@@ -275,6 +275,6 @@ onBeforeUnmount(() => {
 }
 .stat-card-clickable:hover {
   transform: translateY(-2px);
-  box-shadow: 0 6px 18px rgba(64, 158, 255, 0.18);
+  box-shadow: 0 6px 18px rgba(var(--app-accent-rgb), 0.18);
 }
 </style>

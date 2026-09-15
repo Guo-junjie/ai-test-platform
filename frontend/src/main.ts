@@ -6,6 +6,8 @@ import 'element-plus/dist/index.css'
 
 /* 全局设计令牌层：必须在 element-plus 样式之后引入，才能覆盖其 CSS 变量 */
 import '@/styles/theme.css'
+/* 变体偏好唯一真相源：默认值 / 读取 / 应用都收敛于此，避免多处各写一份默认值 */
+import { readStoredUiVariant, applyUiVariant } from '@/styles/uiVariant'
 
 import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 
@@ -14,14 +16,10 @@ import router from './router'
 
 /**
  * 视觉方向（变体）：v1 清透白 / v2 深空 / v3 紧凑专业
- * 仅影响样式令牌，不影响任何业务逻辑；缺省 v3。
+ * 仅影响样式令牌，不影响任何业务逻辑；缺省值见 styles/uiVariant（v3）。
+ * 此处只读不写：默认值不落盘，只有用户显式点击切换器才会落盘。
  */
-const UI_VARIANT_KEY = 'ui-variant'
-const UI_VARIANT_WHITELIST = new Set(['v1', 'v2', 'v3'])
-const storedVariant = localStorage.getItem(UI_VARIANT_KEY)
-const variant =
-  storedVariant && UI_VARIANT_WHITELIST.has(storedVariant) ? storedVariant : 'v3'
-document.documentElement.dataset.uiVariant = variant
+applyUiVariant(readStoredUiVariant())
 
 const app = createApp(App)
 

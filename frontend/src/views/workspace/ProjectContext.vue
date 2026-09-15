@@ -114,7 +114,7 @@ export default defineComponent({
 }
 .ctx-card:hover {
   border-color: var(--el-color-primary);
-  box-shadow: 0 2px 8px rgba(64, 158, 255, 0.1);
+  box-shadow: 0 2px 8px rgba(var(--app-accent-rgb), 0.1);
 }
 .ctx-title {
   font-weight: 600;

@@ -45,26 +45,29 @@
  * UiVariantSwitch —— 仅做视觉方向偏好切换，属于展示型组件。
  *
  * 约束：不引入任何业务接口 / store / 路由逻辑；
- *       只负责把用户选择写进 localStorage 与 documentElement.dataset。
+ *       读写变体偏好一律走 @/styles/uiVariant 这个唯一真相源，
+ *       组件自身不再持有任何默认值或存储键名——避免再次出现
+ *       「默认值被当成用户选择、刷新即丢」的问题。
  */
 import { ref, computed, onMounted } from 'vue'
 import { Brush, Check } from '@element-plus/icons-vue'
-
-type UiVariant = 'v1' | 'v2' | 'v3'
+import {
+  DEFAULT_UI_VARIANT,
+  readStoredUiVariant,
+  writeStoredUiVariant,
+  applyUiVariant,
+  type UiVariant,
+} from '@/styles/uiVariant'
 
 interface VariantOption {
   value: UiVariant
   label: string
   desc: string
-  /** 预览色块填充色 */
+  /** 预览色块填充色（纯预览用，允许硬编码） */
   swatch: string
   /** 预览色块描边色 */
   swatchBorder: string
 }
-
-/** 与 main.ts 保持一致的存储键名 */
-const UI_VARIANT_KEY = 'ui-variant'
-const DEFAULT_VARIANT: UiVariant = 'v1'
 
 const options: VariantOption[] = [
   { value: 'v1', label: '清透白', desc: '浅色侧栏 · 舒展留白', swatch: '#ffffff', swatchBorder: 'var(--app-border-base)' },
@@ -72,35 +75,26 @@ const options: VariantOption[] = [
   { value: 'v3', label: '紧凑专业', desc: '高密度 · 一屏更多行', swatch: '#ffffff', swatchBorder: 'var(--app-border-base)' },
 ]
 
-/** 当前变体：与 localStorage 同步 */
-const current = ref<UiVariant>(DEFAULT_VARIANT)
+/** 当前变体：初始值取唯一真相源的默认值，挂载后再同步为已存储值 */
+const current = ref<UiVariant>(DEFAULT_UI_VARIANT)
 
-/** 类型守卫：判断任意字符串是否为合法变体 */
-function isVariant(value: string | null): value is UiVariant {
-  return value === 'v1' || value === 'v2' || value === 'v3'
-}
-
-/** 当前选项的中文名，用于 tooltip 文案 */
+/** 当前选项的中文名，用于 tooltip；兜底项取自默认变体对应选项，避免张冠李戴 */
 const currentLabel = computed<string>(
-  () => options.find((o) => o.value === current.value)?.label ?? '清透白'
+  () =>
+    options.find((o) => o.value === current.value)?.label ??
+    options.find((o) => o.value === DEFAULT_UI_VARIANT)!.label
 )
 
-/** 切换变体：落盘 + 立即生效（不改结构，仅换令牌） */
+/** 切换变体：仅用户显式选择时才落盘，并立即生效（不改结构，仅换令牌） */
 function select(value: UiVariant): void {
   current.value = value
-  localStorage.setItem(UI_VARIANT_KEY, value)
-  document.documentElement.dataset.uiVariant = value
+  writeStoredUiVariant(value)
+  applyUiVariant(value)
 }
 
 onMounted(() => {
-  const stored = localStorage.getItem(UI_VARIANT_KEY)
-  if (isVariant(stored)) {
-    current.value = stored
-  } else {
-    // 无值或缺省非法时回落 v1，并回写一次保持一致性
-    current.value = DEFAULT_VARIANT
-    localStorage.setItem(UI_VARIANT_KEY, DEFAULT_VARIANT)
-  }
+  // 只读不写：默认值不应被当作「用户选择」落盘，否则第二次刷新就会丢回默认
+  current.value = readStoredUiVariant()
 })
 </script>
 

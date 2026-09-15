@@ -51,7 +51,7 @@ function render() {
           {
             value: value(),
             name: '评分',
-            areaStyle: { color: 'rgba(64,158,255,0.25)' },
+            areaStyle: { color: `rgba(${CHART_COLORS.accentRgb}, 0.25)` },
             lineStyle: { color: CHART_COLORS.primary },
             itemStyle: { color: CHART_COLORS.primary },
           },

@@ -20,6 +20,10 @@ export const CHART_COLORS = {
   get primary() {
     return readToken('--el-color-primary')
   },
+  /** 主色的 RGB 三元组（形如 `37, 99, 235`），用于 canvas 里拼 rgba(...) 半透明色 */
+  get accentRgb() {
+    return readToken('--app-accent-rgb')
+  },
   get success() {
     return readToken('--el-color-success')
   },
