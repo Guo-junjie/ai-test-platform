@@ -2,7 +2,11 @@
   <el-container class="layout-container">
     <!-- 侧边栏 -->
     <el-aside
-      :width="isCollapse ? 'var(--app-sidebar-collapsed-width)' : 'var(--app-sidebar-width)'"
+      :width="
+        isCollapse
+          ? 'var(--app-sidebar-collapsed-width)'
+          : 'var(--app-sidebar-width)'
+      "
       class="sidebar"
     >
       <div class="logo">
@@ -30,9 +34,11 @@
             <el-icon><VideoPlay /></el-icon>
             <span>测试中心</span>
           </template>
-          <el-menu-item index="/requirement-parse">1. 需求分析与用例生成</el-menu-item>
-          <el-menu-item index="/case-library">2. 用例管理与评审</el-menu-item>
-          <el-menu-item index="/test-run">3. API 计划执行</el-menu-item>
+          <el-menu-item index="/requirement-parse"
+            >需求分析与用例生成</el-menu-item
+          >
+          <el-menu-item index="/case-library">用例管理与评审</el-menu-item>
+          <el-menu-item index="/test-run">API 计划执行</el-menu-item>
           <el-menu-item index="/scheduled-tasks">定时任务</el-menu-item>
           <el-menu-item index="/scenario">场景编排</el-menu-item>
           <el-menu-item index="/scripts">脚本生成</el-menu-item>
@@ -80,11 +86,19 @@
             <el-icon><Setting /></el-icon>
             <span>系统</span>
           </template>
-          <el-menu-item v-if="authStore.isAdmin" index="/user-management">用户管理</el-menu-item>
-          <el-menu-item v-if="canAudit" index="/approvals">审核中心</el-menu-item>
+          <el-menu-item v-if="authStore.isAdmin" index="/user-management"
+            >用户管理</el-menu-item
+          >
+          <el-menu-item v-if="canAudit" index="/approvals"
+            >审核中心</el-menu-item
+          >
           <el-menu-item index="/notifications">消息通知</el-menu-item>
-          <el-menu-item v-if="authStore.isAdmin" index="/settings">基础配置</el-menu-item>
-          <el-menu-item v-if="authStore.isAdmin" index="/settings/models">AI 模型配置</el-menu-item>
+          <el-menu-item v-if="authStore.isAdmin" index="/settings"
+            >基础配置</el-menu-item
+          >
+          <el-menu-item v-if="authStore.isAdmin" index="/settings/models"
+            >AI 模型配置</el-menu-item
+          >
           <el-menu-item index="/settings/quality-gate">质量门禁</el-menu-item>
           <el-menu-item index="/settings/audit">审计日志</el-menu-item>
           <el-menu-item index="/profile">个人设置</el-menu-item>
@@ -111,12 +125,20 @@
             <span class="user-info">
               <el-avatar :size="30" icon="UserFilled" />
               <span class="username">{{ authStore.username }}</span>
-              <el-tag size="small" :type="roleTagType" effect="plain" class="role-tag">{{ roleLabel }}</el-tag>
+              <el-tag
+                size="small"
+                :type="roleTagType"
+                effect="plain"
+                class="role-tag"
+                >{{ roleLabel }}</el-tag
+              >
             </span>
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item command="profile">个人设置</el-dropdown-item>
-                <el-dropdown-item command="logout" divided>退出登录</el-dropdown-item>
+                <el-dropdown-item command="logout" divided
+                  >退出登录</el-dropdown-item
+                >
               </el-dropdown-menu>
             </template>
           </el-dropdown>
@@ -131,38 +153,43 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
-import NotificationBell from '@/components/NotificationBell.vue'
-import UiVariantSwitch from '@/components/UiVariantSwitch.vue'
-import { useAuthStore } from '@/stores'
-import { roleLabel as toRoleLabel, roleTagType as toRoleTagType } from '@/utils/roles'
+import { ref, computed } from "vue";
+import { useRoute, useRouter } from "vue-router";
+import { ElMessage } from "element-plus";
+import NotificationBell from "@/components/NotificationBell.vue";
+import UiVariantSwitch from "@/components/UiVariantSwitch.vue";
+import { useAuthStore } from "@/stores";
+import {
+  roleLabel as toRoleLabel,
+  roleTagType as toRoleTagType,
+} from "@/utils/roles";
 
-const route = useRoute()
-const router = useRouter()
-const isCollapse = ref(false)
-const authStore = useAuthStore()
+const route = useRoute();
+const router = useRouter();
+const isCollapse = ref(false);
+const authStore = useAuthStore();
 
-const activeMenu = computed(() => route.path)
-const currentTitle = computed(() => (route.meta?.title as string) || '')
+const activeMenu = computed(() => route.path);
+const currentTitle = computed(() => (route.meta?.title as string) || "");
 
 /** 审核中心可见性：审核员或超级管理员 */
-const canAudit = computed<boolean>(() => authStore.isAuditor || authStore.isSuperAdmin)
+const canAudit = computed<boolean>(
+  () => authStore.isAuditor || authStore.isSuperAdmin,
+);
 
 /** 当前用户角色中文名（统一取自角色字典） */
-const roleLabel = computed<string>(() => toRoleLabel(authStore.role))
+const roleLabel = computed<string>(() => toRoleLabel(authStore.role));
 
 /** 当前用户角色 tag 颜色（统一取自角色字典） */
-const roleTagType = computed(() => toRoleTagType(authStore.role))
+const roleTagType = computed(() => toRoleTagType(authStore.role));
 
 function handleUserCommand(cmd: string) {
-  if (cmd === 'logout') {
-    authStore.logout()
-    ElMessage.success('已退出登录')
-    router.push('/login')
-  } else if (cmd === 'profile') {
-    router.push('/profile')
+  if (cmd === "logout") {
+    authStore.logout();
+    ElMessage.success("已退出登录");
+    router.push("/login");
+  } else if (cmd === "profile") {
+    router.push("/profile");
   }
 }
 </script>
