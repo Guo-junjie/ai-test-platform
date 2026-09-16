@@ -35,6 +35,7 @@ import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { notificationApi } from '@/api'
+import { safeGetItem } from '@/utils/safeStorage'
 
 interface Notification {
   id: string
@@ -63,7 +64,7 @@ function normalize(raw: any): Notification {
 /** 轮询拉取最新通知（仅展示最近 10 条） */
 async function loadNotifications() {
   // 未登录（无 token）时不发起请求，避免登录页 / 未认证状态下产生 401 噪音
-  if (!localStorage.getItem('token')) {
+  if (!safeGetItem('token')) {
     notifications.value = []
     unreadCount.value = 0
     return
@@ -157,6 +158,9 @@ onBeforeUnmount(() => {
 
 .notification-menu {
   min-width: 260px;
+  /* 通知较多时限制下拉高度并内部滚动，避免超出视口 */
+  max-height: min(60vh, 520px);
+  overflow-y: auto;
 }
 
 .notification-item {

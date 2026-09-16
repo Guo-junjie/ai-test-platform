@@ -19,13 +19,13 @@
         <!-- 工作台 -->
         <el-menu-item index="/dashboard">
           <el-icon><DataLine /></el-icon>
-          <span>工作台</span>
+          <template #title>工作台</template>
         </el-menu-item>
 
         <!-- 项目（M4：项目工作区为第一入口） -->
         <el-menu-item index="/projects">
           <el-icon><Folder /></el-icon>
-          <span>项目</span>
+          <template #title>项目</template>
         </el-menu-item>
 
         <!-- 测试中心：跨项目的执行与资产 -->
