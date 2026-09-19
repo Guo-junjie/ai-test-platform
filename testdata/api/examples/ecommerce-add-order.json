@@ -1,0 +1,11 @@
+[
+  {
+    "user_id": "U1001",
+    "product_id": "P1001",
+    "product_name": "Enterprise Test Package",
+    "product_amount": 199,
+    "qty": 2,
+    "tax_amt": 39.8,
+    "total_amt": 437.8
+  }
+]

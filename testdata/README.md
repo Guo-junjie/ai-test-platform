@@ -14,6 +14,8 @@
 | 覆盖率报告 | `coverage/coverage-python.xml` | 覆盖率手动上传（Cobertura） | 覆盖率页上传；或跑流水线自动采集（推荐） |
 | 测试规范 | `knowledge/order-test-spec.md` | 知识库文档 | 知识库页上传，AI 用例生成/缺陷分析/问答会引用 |
 | 业务术语表 | `knowledge/order-glossary.md` | 知识库术语 | 参考「术语表维护」人工录入（SKU/VIP 折扣/超卖等） |
+| PetClinic 接口文档 | `api/petclinic-openapi.json` | 接口文档解析（OpenAPI） | 对应虚拟机 `8301` 上运行的 Java 被测产品，含 43 个接口操作 |
+| E-Commerce 接口文档 | `api/ecommerce-openapi.json` | 接口文档解析（OpenAPI） | 对应虚拟机 `8302` 上运行的 Node.js 被测产品，含 10 个接口操作 |
 
 ## 被测服务速览
 
@@ -43,3 +45,14 @@
 | 无 token 访问 /api/v1/orders | **401** |
 | 重复取消同一订单 | 第二次 **409** |
 | stack 识别 | **python_flask**（requirements.txt 含 flask，置信度 ≥1.0） |
+
+## 常驻的开源被测产品
+
+虚拟机 `/opt/aitp-test-products` 还部署了两套独立开源产品，可直接作为平台项目的被测服务：
+
+| 产品 | 被测服务地址 | Swagger UI | 测试特点 |
+|------|-------------|------------|----------|
+| Spring PetClinic REST | `http://192.168.125.128:8301/petclinic` | `http://192.168.125.128:8301/petclinic/swagger-ui.html` | Java/Spring Boot，主人、宠物、兽医、就诊等关联 CRUD |
+| RESTful E-Commerce | `http://192.168.125.128:8302` | `http://192.168.125.128:8302/api-docs` | Node.js/Express，JWT 认证、订单 CRUD、文件上传 |
+
+电商测试账号为 `admin / secretPass123`。可直接上传 `api/` 下对应的 OpenAPI JSON；示例请求体位于 `api/examples/`。虚拟机中可运行 `/opt/aitp-test-products/smoke-test.py` 复验服务，或运行 `refresh-interface-docs.py` 重新导出文档。
