@@ -40,8 +40,14 @@
     </el-card>
 
     <!-- 新建项目 -->
-    <el-dialog v-model="createVisible" title="新建项目" width="560px" :close-on-click-modal="false">
-      <el-form label-width="90px">
+    <el-dialog
+      v-model="createVisible"
+      title="新建项目"
+      width="620px"
+      class="project-create-dialog"
+      :close-on-click-modal="false"
+    >
+      <el-form label-width="112px" class="create-project-form">
         <el-form-item label="名称" required>
           <el-input v-model="createForm.name" placeholder="例如：订单中心" maxlength="200" show-word-limit />
         </el-form-item>
@@ -106,12 +112,15 @@
               <el-button :loading="probing" @click="handleProbeUrl(createForm.target_service_url)">连通测试</el-button>
             </template>
           </el-input>
+          <div class="field-hint">用于接口测试和连通性检查，可暂不填写，之后在项目环境中维护。</div>
         </el-form-item>
         <el-alert
+          class="create-next-step-tip"
           type="info"
           :closable="false"
           show-icon
-          title="创建后进入项目详情：可继续上传代码或从仓库拉取，形成项目代码版本；测试任务将引用这些版本执行"
+          title="创建后的下一步"
+          description="进入项目详情后，可继续上传代码或从仓库拉取并形成代码版本；测试任务将引用已登记的版本执行。"
         />
       </el-form>
       <template #footer>
@@ -926,5 +935,53 @@ export default defineComponent({
   font-size: 12px;
   color: var(--el-text-color-secondary);
   line-height: 1.8;
+}
+.field-hint {
+  width: 100%;
+  margin-top: 6px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.create-next-step-tip {
+  margin-top: 6px;
+  align-items: flex-start;
+}
+:deep(.create-next-step-tip .el-alert__content) {
+  min-width: 0;
+}
+:deep(.create-next-step-tip .el-alert__description) {
+  margin-top: 4px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+:deep(.project-create-dialog) {
+  max-width: calc(100vw - 32px);
+}
+:deep(.project-create-dialog .el-dialog__body) {
+  max-height: calc(100vh - 180px);
+  overflow-y: auto;
+}
+@media (max-width: 640px) {
+  .create-project-form {
+    --el-form-label-font-size: 13px;
+  }
+
+  :deep(.create-project-form .el-form-item) {
+    display: block;
+  }
+
+  :deep(.create-project-form .el-form-item__label) {
+    display: block;
+    width: auto !important;
+    height: auto;
+    margin-bottom: 6px;
+    line-height: 1.4;
+    text-align: left;
+  }
+
+  :deep(.create-project-form .el-form-item__content) {
+    margin-left: 0 !important;
+  }
 }
 </style>
