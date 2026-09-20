@@ -44,6 +44,7 @@ class SchedulerService:
         nl_schedule: str | None = None,
         target_config: dict[str, Any] | None = None,
         env_config: dict[str, Any] | None = None,
+        status: str = "active",
         created_by: str | None = None,
         db: AsyncSession | None = None,
     ) -> dict[str, Any]:
@@ -53,6 +54,12 @@ class SchedulerService:
                 tt = ScheduledTaskTargetType(target_type)
             except ValueError:
                 raise ValueError(f"Invalid target_type: {target_type}")
+            try:
+                task_status = ScheduledTaskStatus(status)
+            except ValueError:
+                raise ValueError(f"Invalid status: {status}")
+            if task_status not in {ScheduledTaskStatus.ACTIVE, ScheduledTaskStatus.PAUSED}:
+                raise ValueError(f"Invalid status: {status}")
 
             tgt_id = uuid.UUID(target_id) if target_id else None
             cby = uuid.UUID(created_by) if created_by else None
@@ -68,7 +75,7 @@ class SchedulerService:
                 target_id=tgt_id,
                 target_config=target_config or {},
                 env_config=env_config or {},
-                status=ScheduledTaskStatus.ACTIVE,
+                status=task_status,
                 created_by=cby,
             )
             session.add(task)
@@ -104,6 +111,7 @@ class SchedulerService:
         nl_schedule: str | None = None,
         target_config: dict[str, Any] | None = None,
         env_config: dict[str, Any] | None = None,
+        status: str | None = None,
         db: AsyncSession | None = None,
     ) -> dict[str, Any] | None:
         """更新定时任务。"""
@@ -129,6 +137,14 @@ class SchedulerService:
                 task.target_config = target_config
             if env_config is not None:
                 task.env_config = env_config
+            if status is not None:
+                try:
+                    task_status = ScheduledTaskStatus(status)
+                except ValueError:
+                    raise ValueError(f"Invalid status: {status}")
+                if task_status not in {ScheduledTaskStatus.ACTIVE, ScheduledTaskStatus.PAUSED}:
+                    raise ValueError(f"Invalid status: {status}")
+                task.status = task_status
 
             await session.flush()
             await session.refresh(task)

@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -21,7 +21,7 @@ class ScheduledTaskRequest(BaseModel):
     nl_schedule: Optional[str] = Field(default=None, description="自然语言调度描述")
     target_config: Optional[dict] = Field(default=None, description="目标配置（JSON）")
     env_config: Optional[dict] = Field(default=None, description="环境配置（JSON）")
-    status: str = Field(default="active", description="状态: active / paused")
+    status: Literal["active", "paused"] = Field(default="active", description="状态: active / paused")
 
 
 class ScheduledTaskUpdate(BaseModel):
@@ -34,7 +34,9 @@ class ScheduledTaskUpdate(BaseModel):
     project_id: Optional[str] = Field(default=None, description="所属项目 ID")
     description: Optional[str] = Field(default=None, description="任务描述")
     nl_schedule: Optional[str] = Field(default=None, description="自然语言调度描述")
-    status: Optional[str] = Field(default=None, description="状态")
+    target_config: Optional[dict] = Field(default=None, description="目标配置（JSON）")
+    env_config: Optional[dict] = Field(default=None, description="环境配置（JSON）")
+    status: Optional[Literal["active", "paused"]] = Field(default=None, description="状态")
 
 
 class ParseCronRequest(BaseModel):

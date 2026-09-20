@@ -509,19 +509,22 @@ async def generate_report(
             ),
         )
 
-    # 异步执行报告生成（项目归属上下文在 _generate_report_async 内统一构造）
-    import asyncio
-
-    asyncio.create_task(_generate_report_async(run_id, test_results))
+    # 手动触发需要等待报告真正落库，保证接口成功返回后立即可查看，不再出现短暂 404。
+    try:
+        report_result = await _generate_report_async(run_id, test_results)
+    except Exception as exc:
+        raise HTTPException(500, f"报告生成失败: {str(exc)[:200]}") from exc
 
     source = test_results.get("summary", {}).get("source", "redis")
     return {
         "code": 0,
         "data": {
             "test_run_id": run_id,
-            "status": "generating",
+            "status": "completed",
             "data_source": source,
-            "message": f"Report generation started (data source: {source})",
+            "quality_score": report_result.get("quality_score"),
+            "overall_pass": report_result.get("overall_pass"),
+            "message": f"Report generated (data source: {source})",
         },
         "message": "success",
     }
@@ -719,7 +722,7 @@ async def _generate_report_async(
     test_run_id: str,
     test_results: dict[str, Any],
     context: dict[str, Any] | None = None,
-) -> None:
+) -> dict[str, Any]:
     """异步执行报告生成流程。context 为项目归属信息（project_name/branch/commit_sha）。"""
     from app.utils.redis_client import set_task_status, set_task_progress
 
@@ -735,7 +738,7 @@ async def _generate_report_async(
         logger.warning(f"[{test_run_id}] model router refresh failed: {e}")
 
     # 项目归属上下文（报告头部展示：项目/分支/commit/来源）
-    context: dict[str, Any] = {}
+    resolved_context: dict[str, Any] = dict(context or {})
     try:
         from app.models.database import Project as _P
 
@@ -749,7 +752,7 @@ async def _generate_report_async(
             ).first()
             if run_row:
                 run_obj, pname = run_row
-                context = {
+                resolved_context = {
                     "project_name": pname or "",
                     "branch": run_obj.branch or "",
                     "commit_sha": run_obj.commit_sha or "",
@@ -782,7 +785,7 @@ async def _generate_report_async(
 
         generator = ReportGenerator()
         report_result = await generator.generate(
-            test_run_id, test_results, defects, context=context
+            test_run_id, test_results, defects, context=resolved_context
         )
 
         logger.info(
@@ -795,8 +798,10 @@ async def _generate_report_async(
             "overall_pass": report_result["overall_pass"],
         })
         await set_task_progress(test_run_id, 100, "报告生成完成")
+        return report_result
 
     except Exception as e:
         logger.error(f"[{test_run_id}] Report generation failed: {e}", exc_info=True)
         await set_task_status(test_run_id, "failed", {"error": str(e)})
         await set_task_progress(test_run_id, 0, f"报告生成失败: {str(e)[:100]}")
+        raise

@@ -110,8 +110,8 @@ async def get_pass_rate_trend(
         select(
             func.date_trunc("day", TestRun.created_at).label("date"),
             func.count(TestRun.id).label("total"),
-            func.count(
-                func.nullif(TestRun.status != TestStatus.COMPLETED, False)  # type: ignore
+            func.count(TestRun.id).filter(
+                TestRun.status.in_([TestStatus.COMPLETED, TestStatus.FAILED])
             ).label("completed"),
         )
         .where(TestRun.created_at >= since)
@@ -258,11 +258,8 @@ async def get_summary(
     # 测试运行总数
     run_query = select(
         func.count(TestRun.id).label("total_runs"),
-        func.count(
-            func.nullif(
-                TestRun.status.notin_([TestStatus.COMPLETED, TestStatus.FAILED]),
-                True,
-            )
+        func.count(TestRun.id).filter(
+            TestRun.status.in_([TestStatus.COMPLETED, TestStatus.FAILED])
         ).label("completed_runs"),
     ).where(TestRun.created_at >= since)
 
@@ -278,8 +275,8 @@ async def get_summary(
     report_query = (
         select(
             func.count(TestReport.id).label("total_reports"),
-            func.count(
-                func.nullif(TestReport.gate_passed != True, False)  # type: ignore # noqa: E712
+            func.count(TestReport.id).filter(
+                TestReport.gate_passed.is_(True)
             ).label("gate_passed_count"),
             func.avg(TestReport.quality_score).label("avg_score"),
         )

@@ -46,17 +46,17 @@ class ModelRoutingConfig(BaseModel):
     defect_analysis_model_id: str = "default"
     fix_suggestion_model_id: str = "default"
     # 能力1：AI 解析接口文档（文本 → 结构化接口定义）
-    doc_parse_model_id: str = "default"
+    doc_parse_model_id: Optional[str] = None
     # 能力2：AI 评审接口文档（接口定义 → 多维质检评分）
-    doc_review_model_id: str = "default"
+    doc_review_model_id: Optional[str] = None
     # 能力4：AI 编排测试场景（自然语言 → 结构化多步串联）
-    scenario_orchestration_model_id: str = "default"
+    scenario_orchestration_model_id: Optional[str] = None
     # 能力5/6/7：AI 脚本生成（pre/post/sql）
-    script_generation_model_id: str = "default"
+    script_generation_model_id: Optional[str] = None
     # 能力7：AI SQL 生成
-    sql_generation_model_id: str = "default"
+    sql_generation_model_id: Optional[str] = None
     # 能力9：AI 报告分析（失败分析/摘要/对比）
-    report_analysis_model_id: str = "default"
-    # 能力12：嵌入模型插槽（未单独配置时降级到 fallback）
-    embedding_model_id: str = "default"
+    report_analysis_model_id: Optional[str] = None
+    # 能力12：嵌入模型必须显式配置，不能拿聊天模型生成向量。
+    embedding_model_id: Optional[str] = None
     fallback_model_id: str = "default"

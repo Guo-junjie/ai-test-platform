@@ -50,6 +50,16 @@ ROUTING_FIELDS: tuple[str, ...] = (
     "embedding_model_id",
     "fallback_model_id",
 )
+REQUIRED_ROUTING_FIELDS: tuple[str, ...] = (
+    "code_analysis_model_id",
+    "case_generation_model_id",
+    "defect_analysis_model_id",
+    "fix_suggestion_model_id",
+    "fallback_model_id",
+)
+OPTIONAL_ROUTING_FIELDS: tuple[str, ...] = tuple(
+    field for field in ROUTING_FIELDS if field not in REQUIRED_ROUTING_FIELDS
+)
 
 
 # ==================== 请求模型 ====================
@@ -495,14 +505,13 @@ async def update_model_routing(
     """
     更新模型路由配置（upsert，仅管理员）。
 
-    - 已有记录：仅覆盖请求中非 None 的字段。
-    - 无记录：五个字段均为 NOT NULL，缺失项用「请求中第一个非空值」补齐；
-      若请求全为空则返回 400。
+    - 已有记录：仅覆盖请求中明确传入的字段；可选插槽传 null 表示清空。
+    - 无记录：仅为数据库必填插槽补齐主模型，可选插槽保持为空。
     """
     provided = {
-        field: getattr(req, field)
-        for field in ROUTING_FIELDS
-        if getattr(req, field) is not None
+        field: value
+        for field, value in req.model_dump(exclude_unset=True).items()
+        if field in ROUTING_FIELDS
     }
 
     if not provided:
@@ -510,6 +519,8 @@ async def update_model_routing(
 
     # 校验引用的模型配置均存在
     for field, cfg_id in provided.items():
+        if cfg_id is None:
+            continue
         exists = await db.execute(
             select(AIModelConfig.id).where(AIModelConfig.id == cfg_id)
         )
@@ -519,15 +530,28 @@ async def update_model_routing(
     routing = await _load_routing(db)
 
     if routing is None:
-        # 新建：用第一个提供的值补齐缺失字段，满足 NOT NULL 约束
-        default_id = next(iter(provided.values()))
+        # 新建：只补齐数据库必填插槽，嵌入等专用模型必须显式配置。
+        default_id = next(
+            (provided.get(field) for field in REQUIRED_ROUTING_FIELDS if provided.get(field)),
+            None,
+        )
+        if default_id is None:
+            raise HTTPException(400, "首次配置路由时至少需要选择一个必填场景模型")
+        values = {field: default_id for field in REQUIRED_ROUTING_FIELDS}
+        values.update({field: provided.get(field) for field in OPTIONAL_ROUTING_FIELDS})
+        values.update({
+            field: value for field, value in provided.items()
+            if value is not None or field in OPTIONAL_ROUTING_FIELDS
+        })
         routing = ModelRouting(
-            **{field: provided.get(field, default_id) for field in ROUTING_FIELDS}
+            **values
         )
         db.add(routing)
         logger.info(f"Model routing created by {current_user.username}")
     else:
         for field, cfg_id in provided.items():
+            if cfg_id is None and field in REQUIRED_ROUTING_FIELDS:
+                raise HTTPException(400, f"{field} 为必填路由，不能清空")
             setattr(routing, field, cfg_id)
         logger.info(f"Model routing updated by {current_user.username}")
 

@@ -13,6 +13,12 @@ class TestRuleParse:
     def test_daily_hour(self, parser):
         assert parser._rule_parse("每天早上8点") == "0 8 * * *"
 
+    def test_daily_early_morning_chinese_hour(self, parser):
+        assert parser._rule_parse("每天凌晨两点执行") == "0 2 * * *"
+
+    def test_chinese_number_does_not_change_weekday(self, parser):
+        assert parser._rule_parse("每周一执行") == "0 0 * * 1"
+
     def test_daily_hour_minute(self, parser):
         cron = parser._rule_parse("每天8点30分")
         assert cron == "30 8 * * *"
@@ -45,6 +51,9 @@ class TestRuleParse:
 class TestDescribe:
     def test_describe_daily(self, parser):
         assert "8" in parser.describe("0 8 * * *")
+
+    def test_describe_generic_hour_has_no_duplicate_time(self, parser):
+        assert parser.describe("0 2 * * *") == "每天 02:00"
 
     def test_describe_invalid_len(self, parser):
         assert "Cron" in parser.describe("* * *")

@@ -159,6 +159,7 @@ class TestCaseGenerator:
         all_api_cases: list[dict[str, Any]] = []
         for api, cases in zip(apis, results):
             for case in cases:
+                case["endpoint_id"] = api.get("endpoint_id")
                 case["api_path"] = api.get("path", "")
                 case["http_method"] = api.get("http_method", "")
                 all_api_cases.append(case)

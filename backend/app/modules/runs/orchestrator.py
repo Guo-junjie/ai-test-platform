@@ -227,6 +227,7 @@ class RunOrchestrator:
             environment_revision_id=env_revision.id if env_revision else None,
             trigger_type=trigger_type,
             trigger_context=trigger_context or {},
+            started_at=now,
         )
         db.add(run)
         await db.flush()

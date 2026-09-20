@@ -149,6 +149,7 @@ async def generate_cases(
         asset = TestCaseAsset(
             id=str(uuid.uuid4()),
             project_id=req.project_id,
+            endpoint_id=(uuid.UUID(case["endpoint_id"]) if case.get("endpoint_id") else None),
             case_type=case.get("case_type", "positive"),
             # M2：语义拆分——AI 接口用例 execution_kind=api，设计类型沿用 case_type
             execution_kind="api",
@@ -175,6 +176,7 @@ async def generate_cases(
             "cases": [
                 {
                     "id": a.id,
+                    "endpoint_id": a.endpoint_id,
                     "case_type": a.case_type,
                     "title": a.title,
                     "status": a.status,
@@ -191,6 +193,7 @@ async def generate_cases(
 def _ep_to_dict(ep) -> dict[str, Any]:
     """ApiEndpoint ORM → 生成器所需 dict 的标准化映射（前后端字段名统一）。"""
     return {
+        "endpoint_id": str(ep.id),
         "path": ep.path,
         "http_method": ep.method,  # ApiEndpoint 列名是 method，前端/生成器期望 http_method
         "params": ep.params or [],

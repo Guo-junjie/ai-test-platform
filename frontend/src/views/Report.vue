@@ -333,15 +333,13 @@ async function handleManualCreateReport() {
   generatingReport.value = true
   try {
     await reportApi.generate(selectedCreateRunId.value)
-    ElMessage.success('报告生成已启动，正在获取最新报告...')
+    ElMessage.success('报告生成完成')
     createModalVisible.value = false
-    setTimeout(async () => {
-      await loadReports()
-      const target = reports.value.find(r => r.test_run_id === selectedCreateRunId.value)
-      if (target) {
-        viewReport(target)
-      }
-    }, 2500)
+    await loadReports()
+    const target = reports.value.find(r => r.test_run_id === selectedCreateRunId.value)
+    if (target) {
+      viewReport(target)
+    }
   } catch (err: any) {
     ElMessage.error(err?.message || '生成报告失败')
   } finally {
@@ -451,8 +449,8 @@ async function shareReport(row: any) {
 async function generateReport(row: any) {
   try {
     await reportApi.generate(row.test_run_id)
-    ElMessage.success('报告生成已启动，请稍后刷新查看')
-    setTimeout(() => loadReports(), 3000)
+    ElMessage.success('报告生成完成')
+    await loadReports()
   } catch {
     ElMessage.error('报告生成失败')
   }

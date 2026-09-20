@@ -12,11 +12,32 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+_CN_DIGITS = {
+    "零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
+    "五": 5, "六": 6, "七": 7, "八": 8, "九": 9,
+}
+
+
+def _chinese_number(value: str) -> int:
+    """解析时间表达式中 0～59 的常用中文数字。"""
+    if value == "十":
+        return 10
+    if "十" in value:
+        tens, ones = value.split("十", 1)
+        return (_CN_DIGITS.get(tens, 1) * 10) + _CN_DIGITS.get(ones, 0)
+    number = 0
+    for char in value:
+        number = number * 10 + _CN_DIGITS[char]
+    return number
+
+
 # 规则映射表：中文常见时间表达 → Cron 表达式
 # 【顺序敏感】长模式必须排在短模式之前："每天8点30分"若被"每天{hour}点"抢先
 # 匹配会丢掉分钟；"每月5号8点"同理。回归测试：tests/test_cron_parser.py
 _RULE_MAP: list[tuple[str, str, str]] = [
     # (正则模式, Cron 表达式, 描述)
+    (r"每天\s*凌晨\s*(\d{1,2})\s*点\s*(\d{1,2})\s*分", r"{min} {hour} * * *", "每天凌晨 {hour}:{min}"),
+    (r"每天\s*凌晨\s*(\d{1,2})\s*点", r"0 {hour} * * *", "每天凌晨 {hour} 点"),
     (r"每天\s*(\d{1,2})\s*点\s*(\d{1,2})\s*分", r"{min} {hour} * * *", "每天 {hour}:{min}"),
     (r"每月\s*(\d{1,2})\s*(?:号|日)\s*(\d{1,2})\s*点", r"0 {dayhour_1} {dayhour_0} * *", "每月 {day} 号 {hour} 点"),
     (r"每天\s*(\d{1,2})\s*点", r"0 {hour} * * *", "每天 {hour} 点"),
@@ -103,8 +124,14 @@ class CronParser:
         Returns:
             匹配到的 Cron 表达式，或 None。
         """
+        # 只转换紧邻“点/时/分”的中文数字，避免把“每周一”错误改成“每周1”。
+        normalized = re.sub(
+            r"([零〇一二两三四五六七八九十]+)(?=\s*(?:点|时|分))",
+            lambda match: str(_chinese_number(match.group(1))),
+            nl_input,
+        )
         for pattern, cron_template, _desc in self._rule_map:
-            match = re.search(pattern, nl_input)
+            match = re.search(pattern, normalized)
             if match:
                 groups = match.groups()
                 cron = cron_template
@@ -219,7 +246,7 @@ Cron 表达式："""
                 descriptions.append("每天晚上")
         else:
             if not descriptions:
-                descriptions.append(f"每天{hour}点")
+                descriptions.append("每天")
 
         # 日
         if day != "*" and day != "?":
@@ -259,7 +286,7 @@ Cron 表达式："""
         if minute not in ("*", "0") and not minute.startswith("*/"):
             time_str = f"{hour}:{minute.zfill(2)}"
         elif hour not in ("*",):
-            time_str = f"{hour}:00"
+            time_str = f"{hour.zfill(2)}:00"
 
         result = "".join(descriptions)
         if time_str:

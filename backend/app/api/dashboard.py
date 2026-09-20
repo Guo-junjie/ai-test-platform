@@ -322,7 +322,7 @@ async def get_recent_runs(
                     "branch": run.branch,
                     "quality_score": report.quality_score if report else None,
                     "gate_passed": report.gate_passed if report else None,
-                    "started_at": run.started_at.isoformat() if run.started_at else None,
+                    "started_at": (run.started_at or run.created_at).isoformat() if (run.started_at or run.created_at) else None,
                     "completed_at": run.completed_at.isoformat() if run.completed_at else None,
                     "created_at": run.created_at.isoformat() if run.created_at else None,
                 }

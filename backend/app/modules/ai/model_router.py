@@ -62,16 +62,24 @@ class ModelRouter:
             "sql_generation": self.routing.sql_generation_model_id or self.routing.case_generation_model_id,
             # 能力9：报告分析；未单独配置时降级到 fallback 插槽
             "report_analysis": self.routing.report_analysis_model_id or self.routing.fallback_model_id,
-            # 能力12：嵌入模型；未单独配置时降级到 fallback 插槽
-            "embedding": self.routing.embedding_model_id or self.routing.fallback_model_id,
+            # 能力12：嵌入模型必须显式配置，聊天模型不能替代向量模型。
+            "embedding": self.routing.embedding_model_id,
         }
 
         config_id = config_id_map.get(use_case)
         if not config_id:
+            if use_case == "embedding":
+                raise ModelNotConfiguredError(
+                    "尚未配置嵌入模型，请在「AI 模型配置」的模型路由中单独选择嵌入模型。"
+                )
             raise ValueError(f"Unknown use case: {use_case}")
 
         config = self.configs.get(config_id)
         if not config or not config.is_active:
+            if use_case == "embedding":
+                raise ModelNotConfiguredError(
+                    "已配置的嵌入模型不可用，请检查该模型是否存在并已启用。"
+                )
             logger.warning(f"Model {config_id} not available, falling back")
             config = self.configs.get(self.routing.fallback_model_id)
             if not config:
@@ -79,10 +87,11 @@ class ModelRouter:
                     "尚未配置 AI 模型，请先在「AI 模型配置」页面添加并启用至少一个模型后再使用此功能。"
                 )
 
-        if config_id not in self._clients:
-            self._clients[config_id] = UnifiedModelClient(config)
+        resolved_config_id = config.config_id
+        if resolved_config_id not in self._clients:
+            self._clients[resolved_config_id] = UnifiedModelClient(config)
 
-        return self._clients[config_id]
+        return self._clients[resolved_config_id]
 
     async def call(
         self,
@@ -146,6 +155,7 @@ async def refresh_model_router_from_db(db) -> None:
     rows = result.scalars().all()
 
     router.configs.clear()
+    router.routing = ModelRoutingConfig()
     for c in rows:
         try:
             api_key = decrypt(c.api_key_encrypted) if c.api_key_encrypted else ""
@@ -192,8 +202,13 @@ async def refresh_model_router_from_db(db) -> None:
         fallback_model_id = fallback_model or other_active or main_model_id
 
         if main_model_id:
-            routing_dict = {f: main_model_id for f in routing_fields}
-            routing_dict["fallback_model_id"] = fallback_model_id
+            routing_dict = {
+                "code_analysis_model_id": main_model_id,
+                "case_generation_model_id": main_model_id,
+                "defect_analysis_model_id": main_model_id,
+                "fix_suggestion_model_id": main_model_id,
+                "fallback_model_id": fallback_model_id,
+            }
             router.set_routing(ModelRoutingConfig(**routing_dict))
 
     logger.info(

@@ -73,6 +73,7 @@ async def create_task(
         nl_schedule=req.nl_schedule,
         target_config=req.target_config,
         env_config=req.env_config,
+        status=req.status,
         db=db,
     )
     return {"code": 0, "data": result, "message": "ok"}
@@ -115,10 +116,10 @@ async def update_task(
 ) -> dict[str, Any]:
     """更新定时任务。"""
     data = {k: v for k, v in req.model_dump().items() if v is not None}
-    # service 的 update_task 仅接受以下字段，过滤掉其它（status/target_type/target_id/project_id）
+    # service 的 update_task 仅接受可安全原地修改的字段。
     allowed = {
         "name", "description", "cron_expression", "nl_schedule",
-        "target_config", "env_config",
+        "target_config", "env_config", "status",
     }
     filtered = {k: v for k, v in data.items() if k in allowed}
     result = await SchedulerService.update_task(task_id=task_id, db=db, **filtered)

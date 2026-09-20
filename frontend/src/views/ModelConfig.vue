@@ -57,11 +57,18 @@
     <el-card shadow="hover" style="margin-top: var(--app-sp-5);">
       <template #header>模型路由配置</template>
       <el-form label-width="150px" style="max-width: 600px;" v-loading="routingLoading">
+        <el-alert
+          title="嵌入模型需支持 Embeddings 接口；未配置时语义检索保持关闭，不会自动使用聊天模型。"
+          type="info"
+          :closable="false"
+          show-icon
+          style="margin-bottom: 16px"
+        />
         <el-form-item v-for="item in routingFields" :key="item.key" :label="item.label">
           <el-select
             v-model="routingForm[item.key]"
-            placeholder="选择模型"
-            clearable
+            :placeholder="item.required ? '请选择模型（必填）' : item.key === 'embedding_model_id' ? '可选，留空则关闭语义检索' : '可选，留空使用默认路由'"
+            :clearable="!item.required"
             style="width: 100%"
           >
             <el-option
@@ -192,18 +199,18 @@ const providerOptions = [
 
 /** 模型路由字段定义 */
 const routingFields = [
-  { key: 'code_analysis_model_id', label: '代码解析模型' },
-  { key: 'case_generation_model_id', label: '用例生成模型' },
-  { key: 'defect_analysis_model_id', label: '缺陷分析模型' },
-  { key: 'fix_suggestion_model_id', label: '修复建议模型' },
-  { key: 'doc_parse_model_id', label: '文档解析模型' },
-  { key: 'doc_review_model_id', label: '文档评审模型' },
-  { key: 'scenario_orchestration_model_id', label: '场景编排模型' },
-  { key: 'script_generation_model_id', label: '脚本生成模型' },
-  { key: 'sql_generation_model_id', label: 'SQL生成模型' },
-  { key: 'report_analysis_model_id', label: '报告分析模型' },
-  { key: 'embedding_model_id', label: '嵌入模型（语义检索）' },
-  { key: 'fallback_model_id', label: '备用模型' },
+  { key: 'code_analysis_model_id', label: '代码解析模型', required: true },
+  { key: 'case_generation_model_id', label: '用例生成模型', required: true },
+  { key: 'defect_analysis_model_id', label: '缺陷分析模型', required: true },
+  { key: 'fix_suggestion_model_id', label: '修复建议模型', required: true },
+  { key: 'doc_parse_model_id', label: '文档解析模型', required: false },
+  { key: 'doc_review_model_id', label: '文档评审模型', required: false },
+  { key: 'scenario_orchestration_model_id', label: '场景编排模型', required: false },
+  { key: 'script_generation_model_id', label: '脚本生成模型', required: false },
+  { key: 'sql_generation_model_id', label: 'SQL生成模型', required: false },
+  { key: 'report_analysis_model_id', label: '报告分析模型', required: false },
+  { key: 'embedding_model_id', label: '嵌入模型（语义检索）', required: false },
+  { key: 'fallback_model_id', label: '备用模型', required: true },
 ] as const
 
 const modelConfigs = ref<any[]>([])

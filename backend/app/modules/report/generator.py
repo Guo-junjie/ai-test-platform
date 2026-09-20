@@ -539,7 +539,9 @@ class ReportGenerator:
                 if run:
                     run.status = TestStatus.COMPLETED
                     run.progress = 100
-                    run.completed_at = datetime.utcnow()
+                    run.started_at = run.started_at or run.created_at
+                    # 重新生成报告不属于再次执行测试，不能改写原任务完成时间。
+                    run.completed_at = run.completed_at or datetime.utcnow()
 
                 # 同步落库自动化测试缺陷到 defects 独立表（事务内原子提交）
                 raw_defects = report_data.get("defects", {})
@@ -554,6 +556,7 @@ class ReportGenerator:
                 logger.info(f"Report saved to DB for test_run: {test_run_id}")
         except Exception as e:
             logger.error(f"Failed to save report to DB: {e}", exc_info=True)  # exc_info 定位偶发 KeyError（如历史 'userId'）
+            raise
 
 
 CATEGORY_TO_DEFECT_TYPE: dict[str, DefectType] = {

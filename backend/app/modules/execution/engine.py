@@ -86,12 +86,15 @@ def _set_task_status_sync(task_id: str, status: str, extra: dict[str, Any] | Non
                 status_upper = status_lower.upper()
                 if status_upper in ("COMPLETED", "FAILED", "CANCELLED"):
                     _cur.execute(
-                        "UPDATE test_runs SET status = %s::teststatus, current_step = %s, completed_at = COALESCE(completed_at, NOW()) WHERE id = %s",
-                        (status_upper, step_text[:50], task_id),
+                        "UPDATE test_runs SET status = %s::teststatus, current_step = %s, "
+                        "started_at = COALESCE(started_at, created_at), "
+                        "completed_at = COALESCE(completed_at, %s) WHERE id = %s",
+                        (status_upper, step_text[:50], datetime_module_utcnow(), task_id),
                     )
                 else:
                     _cur.execute(
-                        "UPDATE test_runs SET status = %s::teststatus, current_step = %s WHERE id = %s",
+                        "UPDATE test_runs SET status = %s::teststatus, current_step = %s, "
+                        "started_at = COALESCE(started_at, created_at) WHERE id = %s",
                         (status_upper, step_text[:50], task_id),
                     )
             else:
@@ -866,7 +869,7 @@ def aggregate_results(
                 # started_at 从 first_test_results / created_at 取（若 available）
                 started = run_row.started_at or run_row.created_at
                 finished = run_row.completed_at or started
-                duration_ms = int((finished - started).total_seconds() * 1000) if (started and finished) else 0
+                duration_ms = max(0, int((finished - started).total_seconds() * 1000)) if (started and finished) else 0
                 s.add(_TPE(
                     plan_id=run_row.plan_id,
                     test_run_id=run_row.id,
