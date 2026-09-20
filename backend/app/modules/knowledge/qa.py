@@ -114,6 +114,7 @@ async def ask_knowledge(
     question: str,
     project_id: str | None = None,
     top_k: int = 5,
+    history: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """知识问答主入口。
 
@@ -127,7 +128,17 @@ async def ask_knowledge(
         return {"answer": "请输入问题。", "sources": [], "refused": True, "elapsed_ms": 0}
 
     start = time.monotonic()
-    hits = await _retrieve_for_qa(db, question.strip(), project_id, top_k)
+    safe_history = [
+        {"role": item.get("role", ""), "content": str(item.get("content", ""))[:4000]}
+        for item in (history or [])[-10:]
+        if item.get("role") in {"user", "assistant"} and item.get("content")
+    ]
+    # 追问往往省略主题（如“那异常场景呢”），用最近两条用户消息补全检索语义。
+    previous_questions = [
+        item["content"] for item in safe_history if item["role"] == "user"
+    ][-2:]
+    retrieval_query = "\n".join([*previous_questions, question.strip()])[-1200:]
+    hits = await _retrieve_for_qa(db, retrieval_query, project_id, top_k)
     # 统一编号（引用标记 [n] 的 n）；sources 与上下文构建都依赖它
     for i, h in enumerate(hits, start=1):
         h["index"] = i
@@ -164,6 +175,7 @@ async def ask_knowledge(
         use_case="report_analysis",
         messages=[
             {"role": "system", "content": _SYSTEM_PROMPT},
+            *safe_history,
             {"role": "user", "content": prompt},
         ],
         temperature=0.2,

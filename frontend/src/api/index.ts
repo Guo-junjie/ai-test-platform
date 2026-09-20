@@ -562,6 +562,17 @@ export const knowledgeApi = {
   /** 提问：多类型检索 → LLM 带引用回答。data { question, project_id?, top_k? } */
   ask: (data: { question: string; project_id?: string; top_k?: number }) =>
     api.post('/knowledge/ask', data, { timeout: 300000 }),
+  /** 当前用户的持久化问答会话。 */
+  listConversations: (params?: { q?: string; project_id?: string; page?: number; page_size?: number }) =>
+    api.get('/knowledge/conversations', { params }),
+  createConversation: (data: { title?: string; project_id?: string }) =>
+    api.post('/knowledge/conversations', data),
+  getConversation: (id: string) => api.get(`/knowledge/conversations/${id}`),
+  updateConversation: (id: string, data: { title?: string; project_id?: string | null }) =>
+    api.patch(`/knowledge/conversations/${id}`, data),
+  removeConversation: (id: string) => api.delete(`/knowledge/conversations/${id}`),
+  askInConversation: (id: string, data: { question: string; top_k?: number }) =>
+    api.post(`/knowledge/conversations/${id}/messages`, data, { timeout: 300000 }),
   /** 提交反馈（点赞/点踩）。data { question, answer?, rating: 'up'|'down', comment?, retrieved? } */
   submitFeedback: (data: {
     question: string
@@ -569,6 +580,8 @@ export const knowledgeApi = {
     rating: 'up' | 'down'
     comment?: string
     retrieved?: Array<Record<string, unknown>>
+    conversation_id?: string
+    message_id?: string
   }) => api.post('/knowledge/feedback', data),
   /** 反馈列表与统计（admin/manager）。params { rating?, page, size } */
   listFeedback: (params?: any) => api.get('/knowledge/feedback', { params }),

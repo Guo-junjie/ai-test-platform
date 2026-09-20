@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status as http_status
 from loguru import logger
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -23,6 +23,8 @@ from app.config import settings
 from app.models.database import (
     KnowledgeChunk,
     KnowledgeDocument,
+    KnowledgeConversation,
+    KnowledgeMessage,
     KnowledgeFeedback,
     KnowledgeTerm,
     KBChunkType,
@@ -31,6 +33,7 @@ from app.models.database import (
     Defect,
     TestCase,
     ApiEndpoint,
+    Project,
 )
 from app.modules.auth.dependencies import (
     get_current_user,
@@ -131,6 +134,27 @@ class AskRequest(BaseModel):
     top_k: int = Field(default=5, ge=1, le=10)
 
 
+class ConversationCreate(BaseModel):
+    """新建知识问答会话。"""
+
+    title: str | None = Field(default=None, max_length=200)
+    project_id: str | None = None
+
+
+class ConversationUpdate(BaseModel):
+    """修改会话标题或空会话的项目范围。"""
+
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    project_id: str | None = None
+
+
+class ConversationAskRequest(BaseModel):
+    """在指定会话中发送一条消息。"""
+
+    question: str = Field(min_length=1, max_length=10000)
+    top_k: int = Field(default=5, ge=1, le=10)
+
+
 class FeedbackCreate(BaseModel):
     """知识问答反馈提交。"""
 
@@ -139,6 +163,8 @@ class FeedbackCreate(BaseModel):
     rating: str  # up / down
     comment: str | None = None
     retrieved: list[dict] = Field(default_factory=list)  # 当次召回明细
+    conversation_id: str | None = None
+    message_id: str | None = None
 
 
 # ==================== 内部工具 ====================
@@ -155,6 +181,103 @@ def _term_to_dict(t: KnowledgeTerm) -> dict[str, Any]:
         "created_at": t.created_at.isoformat() if t.created_at else None,
         "updated_at": t.updated_at.isoformat() if t.updated_at else None,
     }
+
+
+def _conversation_title(question: str) -> str:
+    """用首个问题生成稳定、可扫描的会话标题。"""
+    compact = " ".join(question.strip().split())
+    return compact[:40] + ("…" if len(compact) > 40 else "") or "新对话"
+
+
+def _conversation_to_dict(
+    conversation: KnowledgeConversation,
+    project_name: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": str(conversation.id),
+        "title": conversation.title,
+        "project_id": str(conversation.project_id) if conversation.project_id else None,
+        "project_name": project_name,
+        "message_count": conversation.message_count or 0,
+        "created_at": conversation.created_at.isoformat() if conversation.created_at else None,
+        "updated_at": conversation.updated_at.isoformat() if conversation.updated_at else None,
+        "last_message_at": (
+            conversation.last_message_at.isoformat() if conversation.last_message_at else None
+        ),
+    }
+
+
+def _message_to_dict(message: KnowledgeMessage) -> dict[str, Any]:
+    return {
+        "id": str(message.id),
+        "conversation_id": str(message.conversation_id),
+        "sequence": message.sequence,
+        "role": message.role,
+        "content": message.content,
+        "sources": message.sources or [],
+        "refused": bool(message.refused),
+        "elapsed_ms": message.elapsed_ms,
+        "feedback": message.feedback_rating,
+        "feedback_comment": message.feedback_comment,
+        "created_at": message.created_at.isoformat() if message.created_at else None,
+    }
+
+
+async def _owned_conversation(
+    conversation_id: str,
+    user_id: uuid.UUID,
+    db: AsyncSession,
+    *,
+    for_update: bool = False,
+) -> KnowledgeConversation:
+    try:
+        cid = uuid.UUID(conversation_id)
+    except (ValueError, TypeError):
+        raise HTTPException(400, "无效的会话 ID")
+    stmt = select(KnowledgeConversation).where(
+        KnowledgeConversation.id == cid,
+        KnowledgeConversation.user_id == user_id,
+    )
+    if for_update:
+        stmt = stmt.with_for_update()
+    conversation = (await db.execute(stmt)).scalar_one_or_none()
+    if conversation is None:
+        raise HTTPException(404, "会话不存在或无权访问")
+    return conversation
+
+
+async def _append_conversation_message(
+    db: AsyncSession,
+    conversation_id: str,
+    user_id: uuid.UUID,
+    *,
+    role: str,
+    content: str,
+    sources: list[dict] | None = None,
+    refused: bool = False,
+    elapsed_ms: int | None = None,
+) -> KnowledgeMessage:
+    conversation = await _owned_conversation(
+        conversation_id, user_id, db, for_update=True
+    )
+    now = datetime.utcnow()
+    sequence = (conversation.message_count or 0) + 1
+    message = KnowledgeMessage(
+        id=uuid.uuid4(),
+        conversation_id=conversation.id,
+        sequence=sequence,
+        role=role,
+        content=content,
+        sources=sources or [],
+        refused=refused,
+        elapsed_ms=elapsed_ms,
+        created_at=now,
+    )
+    conversation.message_count = sequence
+    conversation.last_message_at = now
+    conversation.updated_at = now
+    db.add(message)
+    return message
 
 
 def _escape_like(s: str) -> str:
@@ -820,6 +943,251 @@ async def reindex_document(
 # ==================== 知识问答（RAG Chat）与反馈 ====================
 
 
+@router.get("/conversations")
+async def list_knowledge_conversations(
+    q: str | None = Query(None, max_length=100),
+    project_id: str | None = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(30, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """分页列出当前用户的知识问答会话。"""
+    conditions = [KnowledgeConversation.user_id == current_user.id]
+    if q and q.strip():
+        conditions.append(KnowledgeConversation.title.ilike(f"%{_escape_like(q.strip())}%", escape="\\"))
+    if project_id:
+        try:
+            conditions.append(KnowledgeConversation.project_id == uuid.UUID(project_id))
+        except ValueError:
+            raise HTTPException(400, "无效的 project_id")
+
+    total = (
+        await db.execute(
+            select(func.count()).select_from(KnowledgeConversation).where(*conditions)
+        )
+    ).scalar() or 0
+    rows = (
+        await db.execute(
+            select(KnowledgeConversation, Project.name)
+            .outerjoin(Project, Project.id == KnowledgeConversation.project_id)
+            .where(*conditions)
+            .order_by(
+                KnowledgeConversation.last_message_at.desc(),
+                KnowledgeConversation.created_at.desc(),
+            )
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+    ).all()
+    return {
+        "code": 0,
+        "data": {
+            "list": [_conversation_to_dict(conversation, project_name) for conversation, project_name in rows],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+        },
+        "message": "success",
+    }
+
+
+@router.post("/conversations")
+async def create_knowledge_conversation(
+    req: ConversationCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """创建一个空会话；前端通常在用户发送首条消息时调用。"""
+    project_uuid = None
+    project_name = None
+    if req.project_id:
+        try:
+            project_uuid = uuid.UUID(req.project_id)
+        except ValueError:
+            raise HTTPException(400, "无效的 project_id")
+        project = (
+            await db.execute(select(Project).where(Project.id == project_uuid))
+        ).scalar_one_or_none()
+        if project is None:
+            raise HTTPException(404, "项目不存在")
+        project_name = project.name
+    now = datetime.utcnow()
+    conversation = KnowledgeConversation(
+        id=uuid.uuid4(),
+        user_id=current_user.id,
+        project_id=project_uuid,
+        title=(req.title or "").strip() or "新对话",
+        message_count=0,
+        created_at=now,
+        updated_at=now,
+        last_message_at=now,
+    )
+    db.add(conversation)
+    await db.commit()
+    await db.refresh(conversation)
+    return {
+        "code": 0,
+        "data": _conversation_to_dict(conversation, project_name),
+        "message": "会话已创建",
+    }
+
+
+@router.get("/conversations/{conversation_id}")
+async def get_knowledge_conversation(
+    conversation_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """读取会话及其完整消息历史。"""
+    conversation = await _owned_conversation(conversation_id, current_user.id, db)
+    project_name = None
+    if conversation.project_id:
+        project_name = (
+            await db.execute(select(Project.name).where(Project.id == conversation.project_id))
+        ).scalar_one_or_none()
+    messages = (
+        await db.execute(
+            select(KnowledgeMessage)
+            .where(KnowledgeMessage.conversation_id == conversation.id)
+            .order_by(KnowledgeMessage.sequence.asc())
+            .limit(500)
+        )
+    ).scalars().all()
+    return {
+        "code": 0,
+        "data": {
+            "conversation": _conversation_to_dict(conversation, project_name),
+            "messages": [_message_to_dict(message) for message in messages],
+        },
+        "message": "success",
+    }
+
+
+@router.patch("/conversations/{conversation_id}")
+async def update_knowledge_conversation(
+    conversation_id: str,
+    req: ConversationUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """重命名会话；项目范围仅允许在尚未提问时调整。"""
+    conversation = await _owned_conversation(
+        conversation_id, current_user.id, db, for_update=True
+    )
+    if "title" in req.model_fields_set and req.title is not None:
+        conversation.title = req.title.strip()
+    if "project_id" in req.model_fields_set:
+        if conversation.message_count:
+            raise HTTPException(409, "已有消息的会话不能更换项目，请新建会话")
+        if req.project_id:
+            try:
+                project_uuid = uuid.UUID(req.project_id)
+            except ValueError:
+                raise HTTPException(400, "无效的 project_id")
+            exists = (
+                await db.execute(select(Project.id).where(Project.id == project_uuid))
+            ).scalar_one_or_none()
+            if exists is None:
+                raise HTTPException(404, "项目不存在")
+            conversation.project_id = project_uuid
+        else:
+            conversation.project_id = None
+    conversation.updated_at = datetime.utcnow()
+    await db.commit()
+    await db.refresh(conversation)
+    return {"code": 0, "data": _conversation_to_dict(conversation), "message": "会话已更新"}
+
+
+@router.delete("/conversations/{conversation_id}")
+async def delete_knowledge_conversation(
+    conversation_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """删除当前用户的一条会话及其全部消息。"""
+    conversation = await _owned_conversation(conversation_id, current_user.id, db)
+    await db.delete(conversation)
+    await db.commit()
+    return {"code": 0, "data": {"deleted": True}, "message": "会话已删除"}
+
+
+@router.post("/conversations/{conversation_id}/messages")
+async def ask_in_knowledge_conversation(
+    conversation_id: str,
+    req: ConversationAskRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """持久化用户问题，携带最近多轮上下文问答，再持久化 AI 回答。"""
+    conversation = await _owned_conversation(conversation_id, current_user.id, db)
+    recent = (
+        await db.execute(
+            select(KnowledgeMessage)
+            .where(KnowledgeMessage.conversation_id == conversation.id)
+            .order_by(KnowledgeMessage.sequence.desc())
+            .limit(10)
+        )
+    ).scalars().all()
+    history = [
+        {"role": message.role, "content": message.content}
+        for message in reversed(recent)
+        if message.role in {"user", "assistant"}
+    ]
+
+    user_message = await _append_conversation_message(
+        db,
+        conversation_id,
+        current_user.id,
+        role="user",
+        content=req.question.strip(),
+    )
+    if (conversation.message_count or 0) <= 1 and conversation.title == "新对话":
+        conversation.title = _conversation_title(req.question)
+    await db.commit()
+    await db.refresh(user_message)
+
+    from app.modules.knowledge.qa import ask_knowledge
+    from app.modules.ai.model_router import ModelNotConfiguredError
+
+    try:
+        result = await ask_knowledge(
+            db,
+            req.question,
+            project_id=str(conversation.project_id) if conversation.project_id else None,
+            top_k=req.top_k,
+            history=history,
+        )
+    except ModelNotConfiguredError as exc:
+        raise HTTPException(http_status.HTTP_409_CONFLICT, str(exc))
+    except Exception as exc:
+        logger.exception(f"[KB QA] conversation ask failed: {exc}")
+        raise HTTPException(http_status.HTTP_500_INTERNAL_SERVER_ERROR, f"AI 模型问答失败: {str(exc)[:300]}")
+
+    assistant_message = await _append_conversation_message(
+        db,
+        conversation_id,
+        current_user.id,
+        role="assistant",
+        content=(result.get("answer") or "").strip(),
+        sources=result.get("sources") or [],
+        refused=bool(result.get("refused")),
+        elapsed_ms=result.get("elapsed_ms"),
+    )
+    await db.commit()
+    await db.refresh(assistant_message)
+    refreshed = await _owned_conversation(conversation_id, current_user.id, db)
+    return {
+        "code": 0,
+        "data": {
+            "conversation": _conversation_to_dict(refreshed),
+            "user_message": _message_to_dict(user_message),
+            "assistant_message": _message_to_dict(assistant_message),
+        },
+        "message": "success",
+    }
+
+
 @router.post("/ask")
 async def ask_knowledge_qa(
     req: AskRequest,
@@ -840,7 +1208,7 @@ async def ask_knowledge_qa(
         return {"code": 0, "data": result, "message": "success"}
     except ModelNotConfiguredError as exc:
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
+            status_code=http_status.HTTP_409_CONFLICT,
             detail=str(exc),
         )
     except Exception as exc:
@@ -856,7 +1224,7 @@ async def ask_knowledge_qa(
         else:
             detail = f"AI 模型问答失败: {err_msg}"
         logger.error(f"[KB QA] ask_knowledge failed: {detail}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=detail)
+        raise HTTPException(status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR, detail=detail)
 
 
 @router.post("/feedback")
@@ -868,9 +1236,35 @@ async def submit_knowledge_feedback(
     """提交问答反馈（点赞/点踩 + 可选评论），记录当次召回明细供质量分析。"""
     if req.rating not in ("up", "down"):
         return {"code": 1, "data": None, "message": "rating 仅支持 up / down"}
+    conversation_uuid = None
+    message_uuid = None
+    if req.conversation_id or req.message_id:
+        if not req.conversation_id or not req.message_id:
+            raise HTTPException(400, "conversation_id 与 message_id 必须同时提供")
+        conversation = await _owned_conversation(req.conversation_id, current_user.id, db)
+        try:
+            message_uuid = uuid.UUID(req.message_id)
+        except ValueError:
+            raise HTTPException(400, "无效的 message_id")
+        message = (
+            await db.execute(
+                select(KnowledgeMessage).where(
+                    KnowledgeMessage.id == message_uuid,
+                    KnowledgeMessage.conversation_id == conversation.id,
+                    KnowledgeMessage.role == "assistant",
+                )
+            )
+        ).scalar_one_or_none()
+        if message is None:
+            raise HTTPException(404, "回答消息不存在或无权访问")
+        message.feedback_rating = req.rating
+        message.feedback_comment = (req.comment or "").strip() or None
+        conversation_uuid = conversation.id
     fb = KnowledgeFeedback(
         id=uuid.uuid4(),
         user_id=current_user.id,
+        conversation_id=conversation_uuid,
+        message_id=message_uuid,
         question=req.question,
         answer=req.answer,
         rating=req.rating,

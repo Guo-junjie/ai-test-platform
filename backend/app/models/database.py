@@ -1279,6 +1279,63 @@ class KnowledgeDocument(Base):
     )
 
 
+class KnowledgeConversation(Base):
+    """知识问答会话 — 按用户隔离，保存项目上下文与会话标题。"""
+
+    __tablename__ = "knowledge_conversations"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True)
+    title = Column(String(200), nullable=False, default="新对话")
+    message_count = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_message_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    messages = relationship(
+        "KnowledgeMessage",
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="KnowledgeMessage.sequence",
+    )
+
+    __table_args__ = (
+        Index("idx_knowledge_conversations_user_updated", "user_id", "updated_at"),
+        Index("idx_knowledge_conversations_project", "project_id"),
+    )
+
+
+class KnowledgeMessage(Base):
+    """知识问答消息 — 持久化多轮问题、回答、引用与反馈状态。"""
+
+    __tablename__ = "knowledge_messages"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    conversation_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("knowledge_conversations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    sequence = Column(Integer, nullable=False)
+    role = Column(String(20), nullable=False)  # user / assistant
+    content = Column(Text, nullable=False)
+    sources = Column(JSONB, nullable=False, default=list)
+    refused = Column(Boolean, nullable=False, default=False)
+    elapsed_ms = Column(Integer, nullable=True)
+    feedback_rating = Column(String(10), nullable=True)  # up / down
+    feedback_comment = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    conversation = relationship("KnowledgeConversation", back_populates="messages")
+
+    __table_args__ = (
+        UniqueConstraint("conversation_id", "sequence", name="uq_knowledge_message_sequence"),
+        Index("idx_knowledge_messages_conversation_created", "conversation_id", "created_at"),
+    )
+
+
 class KnowledgeFeedback(Base):
     """知识问答反馈 — 对 AI 回答/召回质量点赞点踩（质量优化闭环）。
 
@@ -1289,6 +1346,12 @@ class KnowledgeFeedback(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    conversation_id = Column(
+        UUID(as_uuid=True), ForeignKey("knowledge_conversations.id", ondelete="SET NULL"), nullable=True
+    )
+    message_id = Column(
+        UUID(as_uuid=True), ForeignKey("knowledge_messages.id", ondelete="SET NULL"), nullable=True
+    )
     question = Column(Text, nullable=False)
     answer = Column(Text, nullable=True)
     rating = Column(String(10), nullable=False)  # up / down
@@ -1298,6 +1361,7 @@ class KnowledgeFeedback(Base):
 
     __table_args__ = (
         Index("idx_knowledge_feedback_rating_created", "rating", "created_at"),
+        Index("idx_knowledge_feedback_conversation", "conversation_id"),
     )
 
 
