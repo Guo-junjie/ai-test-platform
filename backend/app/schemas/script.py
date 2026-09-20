@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 from typing import Any, Optional
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
@@ -22,7 +23,7 @@ class GenerateScriptRequest(BaseModel):
     context: dict[str, Any] = Field(
         default_factory=dict, description="上下文信息（api_info, case_info, schema_context 等）"
     )
-    project_id: Optional[int] = Field(
+    project_id: Optional[UUID] = Field(
         default=None, description="项目 ID（用于 SQL 白名单校验）"
     )
 
@@ -35,6 +36,9 @@ class GenerateScriptResponse(BaseModel):
     script_type: str = Field(default="", description="脚本类型")
     valid: bool = Field(default=True, description="语法校验是否通过")
     error: Optional[str] = Field(default=None, description="校验错误信息")
+    generation_engine: str = Field(default="ai", description="生成引擎: ai / rule_degraded")
+    degraded: bool = Field(default=False, description="是否已降级为规则模板")
+    degraded_reason: Optional[str] = Field(default=None, description="降级原因")
 
 
 class BindScriptRequest(BaseModel):

@@ -35,7 +35,7 @@ async def generate_script(
     result = await generator.generate(
         script_type=req.script_type,
         context=req.context,
-        project_id=req.project_id or 0,
+        project_id=req.project_id,
         db_session=db,
     )
     return {"code": 0, "data": result, "message": "ok"}

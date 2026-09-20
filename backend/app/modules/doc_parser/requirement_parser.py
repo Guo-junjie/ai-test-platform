@@ -223,6 +223,71 @@ def _regex_fallback(raw_text: str, max_requirements: int = 200) -> list[Requirem
             f"(len={len(raw_text.strip())}); skip"
         )
         return items
+    # 优先解析常见的 FR/NFR/REQ 编号块，并把后续项目符号保留为验收标准。
+    # 旧实现只读取标题行，导致规则降级生成的手工用例没有步骤和预期结果。
+    heading = re.compile(
+        r"^\s*(?P<rid>(?:FR|NFR|REQ|US)-[A-Z0-9_\-]+)\s*[:：、\.\s]\s*(?P<title>.+)$",
+        re.IGNORECASE,
+    )
+    bullet = re.compile(r"^\s*[-*•]\s*(.+)$")
+    blocks: list[dict] = []
+    current: dict | None = None
+    for raw_line in raw_text.splitlines():
+        line = raw_line.strip()
+        match = heading.match(line)
+        if match:
+            if current:
+                blocks.append(current)
+            current = {
+                "rid": match.group("rid").upper(),
+                "title": match.group("title").strip(),
+                "criteria": [],
+                "test_points": [],
+                "details": [],
+            }
+            continue
+        if current:
+            criterion = bullet.match(line)
+            if criterion:
+                text = criterion.group(1).strip().rstrip("；;")
+                if text:
+                    current["criteria"].append(text)
+            elif re.match(r"^验收标准\s*[:：]", line):
+                text = re.sub(r"^验收标准\s*[:：]\s*", "", line).strip().rstrip("；;")
+                if text:
+                    current["criteria"].append(text)
+            elif re.match(r"^测试(?:点|需要|要求)?\s*[:：]?", line):
+                text = re.sub(r"^测试(?:点|需要|要求)?\s*[:：]?\s*", "", line).strip().rstrip("；;")
+                if text:
+                    current["test_points"].append(text)
+            elif line and re.match(r"^[一二三四五六七八九十]+[、.]", line):
+                blocks.append(current)
+                current = None
+            elif line:
+                current["details"].append(line)
+    if current:
+        blocks.append(current)
+
+    for block in blocks[:max_requirements]:
+        criteria = list(dict.fromkeys(block["criteria"]))
+        description = "；".join(block["details"] or criteria) or block["title"]
+        test_points = list(dict.fromkeys(block["test_points"]))
+        items.append(
+            RequirementItem(
+                rid=block["rid"],
+                title=block["title"][:200],
+                description=description[:2000],
+                category="non_functional" if block["rid"].startswith("NFR-") else "functional",
+                priority="P2",
+                acceptance_criteria=criteria,
+                test_points=test_points or [f"验证：{item}" for item in criteria],
+                confidence=0.55 if criteria else 0.3,
+                evidence="regex fallback",
+            )
+        )
+    if items:
+        return items
+
     seen: set[str] = set()
     # 匹配编号段落开头：数字编号、中文编号、方括号标题、以"需求/功能"开头的行
     patterns = [
@@ -269,17 +334,18 @@ def _regex_fallback(raw_text: str, max_requirements: int = 200) -> list[Requirem
 
 async def parse_requirements(
     raw_text: str, use_ai: bool = True, max_requirements: int = 200
-) -> tuple[list[RequirementItem], str]:
+) -> tuple[list[RequirementItem], str, str | None]:
     """
-    解析需求文本，返回 (需求条目列表, parse_engine)。
+    解析需求文本，返回 (需求条目列表, parse_engine, degraded_reason)。
 
     parse_engine: "ai" | "rule_degraded"
-    仅显式 use_ai=False 时使用规则抽取；AI 模式失败由调用方明确提示。
+    AI 不可用、调用失败或响应不可解析时自动使用规则抽取，并返回降级原因。
     """
     if not raw_text or not raw_text.strip():
-        return [], "rule_degraded"
+        return [], "rule_degraded", "文档没有可解析文本"
 
     if use_ai:
+        degraded_reason = None
         try:
             router = get_model_router()
             glossary = ""
@@ -325,12 +391,13 @@ async def parse_requirements(
                         order += 1
             if merged:
                 items = list(merged.values())[:max_requirements]
-                return items, "ai"
+                return items, "ai", None
             raise ValueError("AI 未提取到有效需求，请检查文档内容或选择规则模式")
-        except ModelNotConfiguredError:
-            raise
         except Exception as e:  # noqa: BLE001
-            raise RuntimeError(f"AI 需求解析失败: {e}") from e
+            degraded_reason = f"AI 需求解析失败: {e}"
+            logger.warning(f"{degraded_reason}; fallback to rule parser")
+        items = _regex_fallback(raw_text, max_requirements)
+        return items, "rule_degraded", degraded_reason
 
     items = _regex_fallback(raw_text, max_requirements)
-    return items, "rule_degraded"
+    return items, "rule_degraded", None

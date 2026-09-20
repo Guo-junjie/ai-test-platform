@@ -38,7 +38,7 @@ class ScriptGenerator:
         self,
         script_type: str,
         context: Dict[str, Any],
-        project_id: int = 0,
+        project_id: str | uuid.UUID | None = None,
         db_session: Any = None,
     ) -> Dict[str, Any]:
         """
@@ -64,6 +64,8 @@ class ScriptGenerator:
 
         prompt = self._build_prompt(script_type, context)
 
+        generation_engine = "ai"
+        degraded_reason = None
         try:
             response = await self.router.call(
                 use_case="script_generation",
@@ -71,20 +73,30 @@ class ScriptGenerator:
                 temperature=0.3,
             )
             code = self._extract_code(response, script_type)
-        except ModelNotConfiguredError:
-            raise
+            if not code.strip():
+                raise ValueError("AI 未返回可执行脚本")
+        except ModelNotConfiguredError as e:
+            degraded_reason = str(e) or "未配置脚本生成模型"
+            generation_engine = "rule_degraded"
+            logger.warning("AI script model is not configured, using fallback: %s", degraded_reason)
+            code = self._fallback_script(script_type, context)
         except Exception as e:
+            degraded_reason = str(e)
+            generation_engine = "rule_degraded"
             logger.warning(f"AI script generation failed: {e}, using fallback")
             code = self._fallback_script(script_type, context)
 
         # 校验与记录
-        result = self._validate_and_record(
+        result = await self._validate_and_record(
             script_type=script_type,
             code=code,
             context=context,
             project_id=project_id,
             db_session=db_session,
         )
+        result["generation_engine"] = generation_engine
+        result["degraded"] = generation_engine != "ai"
+        result["degraded_reason"] = degraded_reason
         return result
 
     async def preview(
@@ -105,7 +117,7 @@ class ScriptGenerator:
         result = await self.generate(
             script_type=script_type,
             context=context,
-            project_id=0,
+            project_id=None,
             db_session=None,
         )
         return result
@@ -210,7 +222,7 @@ API 信息:
         script_type: str,
         code: str,
         context: Dict[str, Any],
-        project_id: int = 0,
+        project_id: str | uuid.UUID | None = None,
         db_session: Any = None,
     ) -> Dict[str, Any]:
         """校验脚本语法并记录生成结果。"""
@@ -260,15 +272,14 @@ API 信息:
         code: str,
         context: Dict[str, Any],
         nl_input: str,
-        project_id: int = 0,
+        project_id: str | uuid.UUID | None = None,
         db_session: Any = None,
     ) -> None:
         """记录生成记录到数据库。"""
         try:
             if db_session is not None:
-                # project_id 为 NOT NULL 列；generate() 默认 project_id=0，
-                # 若为 0/None 则跳过落库，避免 NOT NULL 约束违反。
-                if not project_id or project_id == 0:
+                # project_id 为 NOT NULL 列；预览或未指定项目时不记录数据库。
+                if not project_id:
                     return
 
                 from app.models.database import ScriptGenerationRecord, ScriptType

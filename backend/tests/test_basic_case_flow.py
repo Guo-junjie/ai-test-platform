@@ -51,7 +51,7 @@ def test_missing_assertion_never_passes_and_status_is_always_checked():
 
 
 @pytest.mark.asyncio
-async def test_ai_requirement_parse_does_not_silently_become_rule_result(monkeypatch):
+async def test_ai_requirement_parse_falls_back_to_reviewable_rule_result(monkeypatch):
     class MissingModel:
         async def call(self, **_kwargs):
             raise ModelNotConfiguredError("未配置模型")
@@ -61,7 +61,11 @@ async def test_ai_requirement_parse_does_not_silently_become_rule_result(monkeyp
             "并在订单不存在时返回明确错误。\n验收标准：已存在订单返回编号、金额和状态。\n"
             "验收标准：不存在的订单返回可识别错误。\n测试需要覆盖正常订单、异常编号和空编号。\n"
             "非功能要求：接口返回内容应保持字段类型稳定，状态码应与接口契约一致，错误响应需要包含可排查的信息。")
-    with pytest.raises(ModelNotConfiguredError):
-        await requirement_parser.parse_requirements(text, use_ai=True)
-    items, engine = await requirement_parser.parse_requirements(text, use_ai=False)
+    items, engine, reason = await requirement_parser.parse_requirements(text, use_ai=True)
     assert engine == "rule_degraded" and items
+    assert "未配置模型" in reason
+    assert items[0].acceptance_criteria
+    assert items[0].test_points
+
+    items, engine, reason = await requirement_parser.parse_requirements(text, use_ai=False)
+    assert engine == "rule_degraded" and items and reason is None

@@ -35,6 +35,7 @@ from app.models.database import (
     CoverageSource,
     CoverageTool,
     Project,
+    TestRun,
     User,
     UserRole,
 )
@@ -80,8 +81,12 @@ async def upload_coverage(
     db: AsyncSession = Depends(get_db_session),
 ):
     """上传 JaCoCo/Cobertura XML 或 Go coverprofile 并解析入库。"""
+    try:
+        project_uuid = uuid.UUID(project_id)
+    except ValueError as exc:
+        raise HTTPException(400, "project_id 格式错误") from exc
     proj = (
-        await db.execute(select(Project).where(Project.id == project_id))
+        await db.execute(select(Project).where(Project.id == project_uuid))
     ).scalar_one_or_none()
     if not proj:
         raise HTTPException(404, "项目不存在")
@@ -106,12 +111,6 @@ async def upload_coverage(
     if tool == "go_cover" and not raw_xml.lstrip().startswith("mode:"):
         raise HTTPException(400, "选择 Go coverprofile 时请上传 go test -coverprofile 生成的 .out 文件")
 
-    # 落盘原始报告
-    stored_name = f"{uuid.uuid4()}{ext}"
-    storage_path = os.path.join(COV_DIR, stored_name)
-    with open(storage_path, "wb") as f:
-        f.write(content)
-
     # 工具枚举
     actual_tool = "go_cover" if raw_xml.lstrip().startswith("mode:") else (
         "jacoco" if "<report" in raw_xml else tool
@@ -122,15 +121,48 @@ async def upload_coverage(
         raise HTTPException(400, f"不支持的覆盖率工具: {tool}")
 
     run_uuid = None
+    test_run = None
+    coverage_run = None
     if test_run_id:
         try:
             run_uuid = uuid.UUID(test_run_id)
         except ValueError:
             raise HTTPException(400, "test_run_id 格式错误")
+        test_run = (
+            await db.execute(select(TestRun).where(TestRun.id == run_uuid))
+        ).scalar_one_or_none()
+        if not test_run:
+            raise HTTPException(404, "测试任务不存在")
+        if test_run.project_id != project_uuid:
+            raise HTTPException(400, "测试任务与覆盖率项目不一致")
+        coverage_run = (
+            await db.execute(select(CoverageRun).where(CoverageRun.test_run_id == run_uuid))
+        ).scalar_one_or_none()
+        if coverage_run and coverage_run.status in {"PREPARING", "RUNNING", "COLLECTING"}:
+            raise HTTPException(409, "该测试任务正在自动采集覆盖率，请等待采集完成后再上传报告")
+        if not coverage_run:
+            coverage_run = CoverageRun(
+                test_run_id=run_uuid,
+                project_id=project_uuid,
+                commit_sha=test_run.commit_sha,
+                mode="upload",
+                status="CREATED",
+                required=False,
+                started_at=datetime.utcnow(),
+            )
+            db.add(coverage_run)
+            await db.flush()
+
+    # 所有项目与运行关联校验通过后再落盘，避免无效请求留下孤儿文件。
+    stored_name = f"{uuid.uuid4()}{ext}"
+    storage_path = os.path.join(COV_DIR, stored_name)
+    with open(storage_path, "wb") as f:
+        f.write(content)
 
     report = CoverageReport(
-        project_id=uuid.UUID(project_id),
+        project_id=project_uuid,
         test_run_id=run_uuid,
+        coverage_run_id=coverage_run.id if coverage_run else None,
         uploader_id=current_user.id,
         tool=tool_enum,
         language=language or ("go" if actual_tool == "go_cover" else "java" if actual_tool == "jacoco" else None),
@@ -154,6 +186,18 @@ async def upload_coverage(
         storage_key=storage_path,
     )
     db.add(report)
+    if coverage_run:
+        coverage_run.mode = "upload"
+        coverage_run.status = "COMPLETED"
+        coverage_run.error_message = None
+        coverage_run.total_lines = result["total_lines"]
+        coverage_run.covered_lines = result["covered_lines"]
+        coverage_run.line_rate = result["line_rate"]
+        coverage_run.total_branches = result["total_branches"]
+        coverage_run.covered_branches = result["covered_branches"]
+        coverage_run.branch_rate = result["branch_rate"]
+        coverage_run.started_at = coverage_run.started_at or datetime.utcnow()
+        coverage_run.finished_at = datetime.utcnow()
     await db.commit()
     await db.refresh(report)
 
@@ -161,6 +205,9 @@ async def upload_coverage(
         "code": 0,
         "data": {
             "id": str(report.id),
+            "coverage_run_id": str(coverage_run.id) if coverage_run else None,
+            "test_run_id": str(run_uuid) if run_uuid else None,
+            "coverage_status": coverage_run.status if coverage_run else None,
             "tool": report.tool.value,
             "line_rate": report.line_rate,
             "branch_rate": report.branch_rate,

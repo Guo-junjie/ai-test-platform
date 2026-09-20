@@ -43,7 +43,7 @@ from app.modules.auth.dependencies import get_current_user
 from app.modules.doc_parser.docx_parser import extract_text_docx
 from app.modules.doc_parser.pdf_parser import extract_text_pdf
 from app.modules.doc_parser.requirement_parser import parse_requirements
-from app.modules.ai.model_router import ModelNotConfiguredError, get_model_router
+from app.modules.ai.model_router import get_model_router
 from app.utils.database import get_db_session
 from app.utils.logger import get_logger
 
@@ -143,10 +143,7 @@ async def upload_requirement(
 
     # 解析需求
     try:
-        items, engine = await parse_requirements(raw_text or "", use_ai=use_ai)
-    except ModelNotConfiguredError:
-        os.remove(storage_path)
-        raise
+        items, engine, degraded_reason = await parse_requirements(raw_text or "", use_ai=use_ai)
     except Exception as e:  # noqa: BLE001
         logger.error(f"Requirement parse failed: {e}")
         os.remove(storage_path)
@@ -161,6 +158,7 @@ async def upload_requirement(
         raw_text=raw_text,
         status=DocStatus.PARSED if items else DocStatus.FAILED,
         parse_engine=engine,
+        error=degraded_reason,
         requirements_json={
             "title": file.filename or "",
             "total": len(items),
@@ -182,6 +180,8 @@ async def upload_requirement(
             "filename": req_doc.filename,
             "status": req_doc.status.value,
             "parse_engine": engine,
+            "degraded": bool(use_ai and engine != "ai"),
+            "degraded_reason": degraded_reason,
             "total": len(items),
             "requirements": [i.model_dump() for i in items],
         },
@@ -297,6 +297,50 @@ _PROMPT_GEN = """需求条目如下（JSON）：
 请基于上述需求生成测试用例，输出 JSON。"""
 
 
+def _rule_case(requirement: dict) -> dict:
+    """把需求条目转换成内容完整、可提交评审的手工用例。"""
+    rid = str(requirement.get("rid") or "")
+    title = str(requirement.get("title") or rid or "未命名需求")
+    criteria = [str(item).strip() for item in (requirement.get("acceptance_criteria") or [])
+                if str(item).strip()]
+    points = [str(item).strip() for item in (requirement.get("test_points") or [])
+              if str(item).strip()]
+    description = str(requirement.get("description") or "").strip()
+    steps = points or [
+        f"准备满足需求 {rid or title} 的测试数据和前置条件",
+        f"执行需求场景：{title}",
+        "记录实际结果并与预期结果比较",
+    ]
+    expected = "；".join(criteria)
+    if not expected:
+        expected = f"系统行为符合需求「{title}」"
+        if description and description != title:
+            expected += f"：{description}"
+    return {
+        "title": f"验证需求：{title}",
+        "description": description or f"验证需求 {rid or title}",
+        "priority": requirement.get("priority", "P2"),
+        "related_requirement": rid,
+        "steps": steps,
+        "expected": expected,
+        "type": "functional",
+    }
+
+
+def _complete_case(case: dict, requirement: dict) -> dict:
+    """使用需求原文补齐 AI 可能遗漏的步骤、预期和追踪字段。"""
+    fallback = _rule_case(requirement)
+    completed = {**fallback, **case}
+    if not isinstance(completed.get("steps"), list) or not any(
+        str(item).strip() for item in completed.get("steps", [])
+    ):
+        completed["steps"] = fallback["steps"]
+    if not str(completed.get("expected") or "").strip():
+        completed["expected"] = fallback["expected"]
+    completed["related_requirement"] = str(case.get("related_requirement") or requirement.get("rid") or "")
+    return completed
+
+
 @router.post("/{doc_id}/generate-cases")
 async def generate_cases(
     doc_id: str,
@@ -321,11 +365,36 @@ async def generate_cases(
         TestCaseAsset.request_data["requirement_doc_id"].astext == str(r.id),
     ))).scalars().all()
     if existing:
+        requirements_by_id = {str(item.get("rid") or ""): item for item in items}
+        updated = 0
+        for asset in existing:
+            # 已通过评审的用例属于受控基线，不能在重复生成时静默改写。
+            if asset.review_state not in {"draft", "changes_requested"}:
+                continue
+            request_data = dict(asset.request_data or {})
+            requirement = requirements_by_id.get(str(request_data.get("related_requirement") or ""), {})
+            fallback = _rule_case(requirement) if requirement else None
+            changed = False
+            if fallback and not any(str(step).strip() for step in (request_data.get("steps") or [])):
+                request_data["steps"] = fallback["steps"]
+                asset.request_data = request_data
+                changed = True
+            expected = dict(asset.expected_result or {})
+            if fallback and not str(expected.get("text") or "").strip():
+                asset.expected_result = {**expected, "text": fallback["expected"]}
+                changed = True
+            if changed:
+                updated += 1
+        if updated:
+            await db.commit()
         return {"code": 0, "data": {"total": len(existing), "assets_created": 0,
-                "instances_created": 0, "existing_asset_ids": [str(a.id) for a in existing]},
-                "message": "该文档的用例草稿已生成，请到用例库评审"}
+                "assets_updated": updated, "instances_created": 0,
+                "existing_asset_ids": [str(a.id) for a in existing]},
+                "message": "该文档的用例草稿已生成，已补齐缺失内容，请到用例库评审"}
 
     cases: list[dict] = []
+    generation_engine = "rule"
+    degraded_reason = None
     if req.use_ai:
         try:
             router_ai = get_model_router()
@@ -365,30 +434,28 @@ async def generate_cases(
             cases = parsed.get("cases", []) or []
             if not isinstance(cases, list):
                 raise ValueError("AI 返回的 cases 不是列表")
-        except ModelNotConfiguredError:
-            raise
+            generation_engine = "ai"
         except Exception as e:  # noqa: BLE001
-            raise HTTPException(502, f"AI 用例生成失败: {e}") from e
+            generation_engine = "rule_degraded"
+            degraded_reason = f"AI 用例生成失败: {e}"
+            logger.warning(f"{degraded_reason}; fallback to rule cases")
+            cases = [_rule_case(item) for item in items]
 
     if not req.use_ai:
-        # 显式规则模式：只把现有验收标准转为草稿，不补造断言或接口。
-        for it in items:
-            cases.append(
-                {
-                    "title": f"验证需求：{it.get('title','')}",
-                    "description": it.get("description", ""),
-                    "priority": it.get("priority", "P2"),
-                    "related_requirement": it.get("rid", ""),
-                    "steps": it.get("test_points", []) or [],
-                    "expected": "；".join(it.get("acceptance_criteria", []) or []),
-                    "type": "functional",
-                }
-            )
+        cases = [_rule_case(item) for item in items]
 
     known_requirements = {str(it.get("rid")): it for it in items}
-    normalized = [c for c in cases if isinstance(c, dict)
-                  and str(c.get("title") or "").strip()
-                  and str(c.get("related_requirement", "")) in known_requirements]
+    normalized = [
+        _complete_case(c, known_requirements[str(c.get("related_requirement", ""))])
+        for c in cases
+        if isinstance(c, dict)
+        and str(c.get("title") or "").strip()
+        and str(c.get("related_requirement", "")) in known_requirements
+    ]
+    if not normalized and req.use_ai:
+        generation_engine = "rule_degraded"
+        degraded_reason = degraded_reason or "AI 未返回具有有效需求编号的用例"
+        normalized = [_rule_case(item) for item in items]
     if not normalized:
         raise HTTPException(502 if req.use_ai else 422,
                             "未生成可追溯的用例：需要有效标题和已有需求编号")
@@ -427,8 +494,12 @@ async def generate_cases(
         "data": {
             "total": len(assets),
             "assets_created": len(assets),
+            "assets_updated": 0,
             "instances_created": 0,
             "case_ids": [str(a.id) for a in assets],
+            "generation_engine": generation_engine,
+            "degraded": generation_engine == "rule_degraded",
+            "degraded_reason": degraded_reason,
         },
         "message": f"生成 {len(assets)} 条手工用例草稿，请到用例库评审",
     }

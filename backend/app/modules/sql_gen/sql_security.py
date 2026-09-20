@@ -8,6 +8,7 @@ config, falls back to default whitelist (SELECT/INSERT/UPDATE/DELETE).
 
 import logging
 from typing import Any, Dict, List
+from uuid import UUID
 
 import sqlglot
 from sqlglot import exp
@@ -84,7 +85,7 @@ class SqlSecurity:
         return allowed
 
     @staticmethod
-    async def _load_whitelist(project_id: int) -> List[str]:
+    async def _load_whitelist(project_id: str | UUID) -> List[str]:
         """
         Load SQL whitelist from project quality gate config.
 
@@ -116,7 +117,7 @@ class SqlSecurity:
     async def check(
         cls,
         sql: str,
-        project_id: int = 0,
+        project_id: str | UUID | None = None,
         session: AsyncSession | None = None,
     ) -> Dict[str, Any]:
         """
@@ -151,7 +152,7 @@ class SqlSecurity:
 
         # Load whitelist
         whitelist = DEFAULT_SQL_WHITELIST
-        if project_id > 0:
+        if project_id:
             try:
                 whitelist = await cls._load_whitelist(project_id)
             except Exception as e:
