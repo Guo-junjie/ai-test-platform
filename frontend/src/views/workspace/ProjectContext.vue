@@ -4,14 +4,14 @@
       <template #header>代码与文档 —— 平台测试本项目所需的事实</template>
       <el-row :gutter="16">
         <el-col :xs="24" :md="12">
-          <div class="ctx-card" @click="$router.push('/doc-parser')">
-            <div class="ctx-title">接口文档解析</div>
+          <div class="ctx-card" @click="openCaseGeneration('interface')">
+            <div class="ctx-title">接口文档生成</div>
             <div class="ctx-desc">上传 OpenAPI/HAR 文档 → 解析出接口 → 导入接口资产 → 生成用例</div>
           </div>
         </el-col>
         <el-col :xs="24" :md="12">
-          <div class="ctx-card" @click="$router.push('/requirement-parse')">
-            <div class="ctx-title">需求文档解析</div>
+          <div class="ctx-card" @click="openCaseGeneration('requirement')">
+            <div class="ctx-title">需求文档生成</div>
             <div class="ctx-desc">上传需求文档 → 结构化解析 → AI 生成用例进用例库</div>
           </div>
         </el-col>
@@ -77,6 +77,12 @@ export default defineComponent({
     }
   },
   methods: {
+    openCaseGeneration(source: 'requirement' | 'interface'): void {
+      this.$router.push({
+        path: '/case-generation',
+        query: { source, project_id: this.projectId },
+      })
+    },
     formatTime(t?: string): string {
       if (!t) return '—'
       try {

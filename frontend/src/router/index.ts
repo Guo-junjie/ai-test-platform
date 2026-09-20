@@ -86,16 +86,24 @@ const routes = [
     meta: { title: '代码解析' },
   },
   {
+    path: '/case-generation',
+    name: 'CaseGeneration',
+    component: () => import('@/views/CaseGeneration.vue'),
+    meta: { title: '智能用例生成' },
+  },
+  {
     path: '/doc-parser',
-    name: 'DocParser',
-    component: () => import('@/views/DocParser.vue'),
-    meta: { title: '接口文档解析' },
+    redirect: (to: any) => ({
+      path: '/case-generation',
+      query: { ...to.query, source: 'interface' },
+    }),
   },
   {
     path: '/requirement-parse',
-    name: 'RequirementParse',
-    component: () => import('@/views/RequirementParse.vue'),
-    meta: { title: '需求文档解析' },
+    redirect: (to: any) => ({
+      path: '/case-generation',
+      query: { ...to.query, source: 'requirement' },
+    }),
   },
   {
     path: '/doc-review',

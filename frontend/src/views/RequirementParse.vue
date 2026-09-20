@@ -20,7 +20,7 @@
             </el-form-item>
             <el-form-item label="使用 AI">
               <el-switch v-model="useAi" active-text="AI 结构化" inactive-text="仅规则" />
-              <span class="hint">AI 模式失败会明确提示；规则模式只抽取文档中已有内容</span>
+              <span class="hint">AI 不可用时自动降级为规则解析，并保留降级原因</span>
             </el-form-item>
           </el-form>
 
@@ -61,6 +61,16 @@
             2. 解析出的需求（{{ requirements.length }} 条）
             <el-tag size="small" style="margin-left: 8px">{{ currentDoc.parse_engine }}</el-tag>
           </template>
+
+          <el-alert
+            v-if="currentDoc.error"
+            type="warning"
+            :closable="false"
+            show-icon
+            title="本次使用规则解析结果"
+            :description="currentDoc.error"
+            style="margin-bottom: 12px"
+          />
 
           <el-table :data="requirements" v-loading="uploading" size="small" border stripe max-height="520">
             <el-table-column prop="rid" label="编号" width="90" />
@@ -150,10 +160,11 @@
 <script setup lang="ts">
 import { ref, onMounted, watch } from 'vue'
 import { ElMessage, type UploadFile } from 'element-plus'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { requirementApi, projectApi } from '@/api'
 
 const router = useRouter()
+const route = useRoute()
 const projects = ref<any[]>([])
 const projectId = ref<string>('')
 const useAi = ref(true)
@@ -320,8 +331,30 @@ async function loadProjects() {
   }
 }
 
-onMounted(() => {
-  loadProjects()
+function queryProjectId(): string {
+  const value = route.query.project_id
+  return Array.isArray(value) ? String(value[0] || '') : String(value || '')
+}
+
+watch(
+  () => route.query.project_id,
+  async () => {
+    const id = queryProjectId()
+    if (!id || id === projectId.value) return
+    projectId.value = id
+    currentDoc.value = null
+    requirements.value = []
+    await loadDocs()
+  },
+)
+
+onMounted(async () => {
+  await loadProjects()
+  const id = queryProjectId()
+  if (id) {
+    projectId.value = id
+    await loadDocs()
+  }
 })
 </script>
 

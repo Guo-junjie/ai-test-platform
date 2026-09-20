@@ -34,9 +34,7 @@
             <el-icon><VideoPlay /></el-icon>
             <span>测试中心</span>
           </template>
-          <el-menu-item index="/requirement-parse"
-            >需求分析与用例生成</el-menu-item
-          >
+          <el-menu-item index="/case-generation">智能用例生成</el-menu-item>
           <el-menu-item index="/case-library">用例管理与评审</el-menu-item>
           <el-menu-item index="/test-run">API 计划执行</el-menu-item>
           <el-menu-item index="/scheduled-tasks">定时任务</el-menu-item>
@@ -75,7 +73,6 @@
             <span>解析与集成</span>
           </template>
           <el-menu-item index="/analysis">代码解析</el-menu-item>
-          <el-menu-item index="/doc-parser">接口文档解析</el-menu-item>
           <el-menu-item index="/doc-review">接口文档评审</el-menu-item>
           <el-menu-item index="/sources">仓库配置</el-menu-item>
         </el-sub-menu>

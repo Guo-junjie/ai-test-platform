@@ -80,8 +80,8 @@
           <template #header>快捷操作</template>
           <div class="quick-actions">
             <el-button type="primary" @click="$router.push(`/projects/${projectId}/plans`)">执行测试计划</el-button>
-            <el-button plain @click="$router.push('/doc-parser')">接口文档解析</el-button>
-            <el-button plain @click="$router.push('/requirement-parse')">需求文档解析</el-button>
+            <el-button plain @click="openCaseGeneration('interface')">接口文档生成</el-button>
+            <el-button plain @click="openCaseGeneration('requirement')">需求文档生成</el-button>
           </div>
         </el-card>
       </el-col>
@@ -183,6 +183,12 @@ export default defineComponent({
     goRun(row: any): void {
       // 运行详情在测试运行页的任务详情对话框中呈现
       this.$router.push('/test-run')
+    },
+    openCaseGeneration(source: 'requirement' | 'interface'): void {
+      this.$router.push({
+        path: '/case-generation',
+        query: { source, project_id: this.projectId },
+      })
     },
     async loadAll(): Promise<void> {
       const pid = this.projectId

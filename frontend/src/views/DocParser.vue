@@ -184,13 +184,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, computed, onMounted, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus'
 import { caseApi, docApi, projectApi } from '@/api'
 import ApiSpecTable from '@/components/ApiSpecTable.vue'
 
 const router = useRouter()
+const route = useRoute()
 
 const projects = ref<any[]>([])
 const projectId = ref<string>('')
@@ -317,7 +318,15 @@ async function generateCases() {
     await loadAssets()
 
     // 第二步：按项目生成用例（覆盖刚导入的接口）
-    const res: any = await caseApi.generate({ project_id: projectId.value })
+    const endpointIds = Array.isArray(imp.endpoint_ids) ? imp.endpoint_ids : []
+    if (endpointIds.length === 0) {
+      ElMessage.warning('当前文档没有可用于生成用例的接口资产')
+      return
+    }
+    const res: any = await caseApi.generate({
+      project_id: projectId.value,
+      endpoint_ids: endpointIds,
+    })
     const cnt = res?.data?.inserted ?? 0
     try {
       await ElMessageBox.confirm(
@@ -407,8 +416,31 @@ async function loadProjects() {
   }
 }
 
-onMounted(() => {
-  loadProjects()
+function queryProjectId(): string {
+  const value = route.query.project_id
+  return Array.isArray(value) ? String(value[0] || '') : String(value || '')
+}
+
+watch(
+  () => route.query.project_id,
+  async () => {
+    const id = queryProjectId()
+    if (!id || id === projectId.value) return
+    projectId.value = id
+    currentDoc.value = null
+    endpoints.value = []
+    selectedKeys.value = []
+    await loadAssets()
+  },
+)
+
+onMounted(async () => {
+  await loadProjects()
+  const id = queryProjectId()
+  if (id) {
+    projectId.value = id
+    await loadAssets()
+  }
 })
 </script>
 
