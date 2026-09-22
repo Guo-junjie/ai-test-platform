@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import Enum as PyEnum
 from sqlalchemy import (
     Column, Integer, String, Text, Boolean, DateTime, JSON, Float,
-    ForeignKey, Enum as SAEnum, Index, UniqueConstraint, text
+    ForeignKey, Enum as SAEnum, Index, UniqueConstraint, CheckConstraint, text
 )
 from app.utils.case_pair_enum import CasePairEnum  # 修复后替代裸 SAEnum（兼容老数据大小写）
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -172,6 +172,20 @@ class Project(Base):
 
     # 关系
     test_runs = relationship("TestRun", back_populates="project")
+
+
+class ProjectMember(Base):
+    """显式项目授权；全局角色仍作为动作权限上限。"""
+    __tablename__ = "project_members"
+
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    access = Column(String(16), nullable=False, default="read")
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    __table_args__ = (
+        CheckConstraint("access IN ('read', 'write')", name="ck_project_member_access"),
+        Index("ix_project_members_user_id", "user_id"),
+    )
 
 
 class EnvironmentProfile(Base):

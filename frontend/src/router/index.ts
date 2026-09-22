@@ -77,13 +77,13 @@ const routes = [
     path: '/sources',
     name: 'SourceManage',
     component: () => import('@/views/SourceManage.vue'),
-    meta: { title: '仓库配置' },
+    meta: { title: '仓库配置', requireAdmin: true },
   },
   {
     path: '/analysis',
     name: 'Analysis',
     component: () => import('@/views/Analysis.vue'),
-    meta: { title: '代码解析' },
+    meta: { title: '代码解析', requireAdmin: true },
   },
   {
     path: '/case-generation',
@@ -145,7 +145,7 @@ const routes = [
     path: '/settings/audit',
     name: 'AuditLog',
     component: () => import('@/views/AuditLog.vue'),
-    meta: { title: '审计日志' },
+    meta: { title: '审计日志', requireAuditLog: true },
   },
   {
     path: '/quality-trend',
@@ -263,6 +263,10 @@ router.beforeEach((to, _from, next) => {
   }
 
   // 需要审核权限的路由：审核员或超级管理员可访问
+  if (to.meta?.requireAuditLog && !(authStore.isAdmin || authStore.isAuditor)) {
+    next({ path: '/dashboard' })
+    return
+  }
   if (to.meta?.requireAuditor && !(authStore.isAuditor || authStore.isSuperAdmin)) {
     next({ path: '/dashboard' })
     return

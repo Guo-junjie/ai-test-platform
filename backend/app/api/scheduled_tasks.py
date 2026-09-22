@@ -25,6 +25,7 @@ from app.schemas.scheduled_task import (
     ParseCronRequest,
 )
 from app.utils.database import get_db_session
+from app.modules.auth.dependencies import get_current_user
 
 router = APIRouter()
 
@@ -52,6 +53,7 @@ async def list_tasks(
 async def create_task(
     req: ScheduledTaskRequest,
     db: AsyncSession = Depends(get_db_session),
+    current_user=Depends(get_current_user),
 ) -> dict[str, Any]:
     """创建定时任务。"""
     if not req.project_id:
@@ -74,6 +76,7 @@ async def create_task(
         target_config=req.target_config,
         env_config=req.env_config,
         status=req.status,
+        created_by=str(current_user.id),
         db=db,
     )
     return {"code": 0, "data": result, "message": "ok"}

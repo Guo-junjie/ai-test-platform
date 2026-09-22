@@ -6,7 +6,7 @@ import inspect
 from contextlib import asynccontextmanager
 from typing import Any, Callable
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from loguru import logger
@@ -15,6 +15,7 @@ from sqlalchemy import text
 from app.config import settings
 from app.utils.logger import setup_logger
 from app.modules.ai.model_router import ModelNotConfiguredError
+from app.modules.auth.access_policy import authorize_request
 
 
 async def _run_lifecycle_step(
@@ -49,6 +50,8 @@ async def _run_lifecycle_step(
         logger.info(f"[{phase}] {name}: OK")
         return True
     except Exception as exc:
+        if settings.APP_ENV == "production" and phase == "startup":
+            raise
         logger.exception(
             f"[{phase}] {name}: FAILED -> {exc.__class__.__name__}: {exc} "
             f"(已跳过该步骤，HTTP 服务继续运行)"
@@ -59,6 +62,7 @@ async def _run_lifecycle_step(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
+    settings.validate_production()
     # 初始化日志系统
     setup_logger()
     logger.info(f"Starting AI Test Platform in {settings.APP_ENV} mode...")
@@ -92,6 +96,10 @@ app = FastAPI(
     description="企业级 AI 自动化测试与质量保障平台",
     version="1.0.0",
     lifespan=lifespan,
+    dependencies=[Depends(authorize_request)],
+    docs_url=None if settings.APP_ENV == "production" else "/docs",
+    redoc_url=None if settings.APP_ENV == "production" else "/redoc",
+    openapi_url=None if settings.APP_ENV == "production" else "/openapi.json",
     # 前端 axios 仍有部分调用带尾斜杠（/test-runs/、/upload/、/settings/ 等），
     # 后端索引路由统一用 ("") 无斜杠约定；开启后 Starlette 自动把尾斜杠
     # 重定向到无斜杠路径，消除大量 307 + 个别页面的 network error（如覆盖率页空白）。
@@ -101,7 +109,7 @@ app = FastAPI(
 # CORS 配置
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"] if settings.APP_DEBUG else ["http://localhost:3000"],
+    allow_origins=[origin.strip() for origin in settings.CORS_ORIGINS.split(",") if origin.strip()],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -166,6 +174,8 @@ app.include_router(model_config_router, prefix="/api/models", tags=["AI模型配
 # 项目
 from app.api.project import router as project_router
 app.include_router(project_router, prefix="/api/projects", tags=["项目"])
+from app.api.project_members import router as project_members_router
+app.include_router(project_members_router, prefix="/api/projects", tags=["项目成员"])
 
 # 项目代码版本（R1：代码是项目的属性）
 from app.api.project_code import router as project_code_router

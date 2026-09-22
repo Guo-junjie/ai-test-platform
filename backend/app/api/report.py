@@ -191,6 +191,7 @@ async def delete_report(
 @router.get("/{run_id}/share-view")
 async def share_view(
     run_id: str,
+    token: str = "",
     db: AsyncSession = Depends(get_db_session),
 ):
     """
@@ -199,6 +200,8 @@ async def share_view(
     与 /{run_id}/html 的区别：后者返回 JSON 包裹（供前端 iframe 取 html 字段），
     本路由直接返回裸 HTML，浏览器打开即整页渲染，图表也能正常显示。
     """
+    from app.modules.auth.report_sharing import verify_report_token
+    verify_report_token(token, run_id)
     try:
         run_uuid = uuid.UUID(run_id)
     except ValueError:
@@ -210,27 +213,8 @@ async def share_view(
     report = result.scalar_one_or_none()
 
     if report is None:
-        # 即时生成兜底：检查任务是否存在
-        run_obj = (
-            await db.execute(select(TestRun).where(TestRun.id == run_uuid))
-        ).scalar_one_or_none()
-        if run_obj is not None:
-            test_results = await _load_test_results(run_id, db)
-            if test_results is not None:
-                try:
-                    await _generate_report_async(run_id, test_results)
-                    result = await db.execute(
-                        select(TestReport).where(TestReport.test_run_id == run_uuid)
-                    )
-                    report = result.scalar_one_or_none()
-                except Exception as _gen_err:
-                    logger.error(f"On-demand report generation in share_view failed: {_gen_err}")
-
-    if report is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"报告尚未生成（run_id={run_id}）。请先点击「重新生成报告」按钮。",
-        )
+        raise HTTPException(404, "分享报告不存在")
+    verify_report_token(token, run_id, report.share_token or "")
 
     html_object_name = report.html_path
     if not html_object_name:
@@ -240,7 +224,9 @@ async def share_view(
     if html_content is None:
         raise HTTPException(500, "Failed to read HTML report")
 
-    return Response(content=html_content, media_type="text/html")
+    return Response(content=html_content, media_type="text/html", headers={
+        "Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+    })
 
 
 
@@ -311,23 +297,6 @@ async def get_html_report(
         select(TestReport).where(TestReport.test_run_id == run_uuid)
     )
     report = result.scalar_one_or_none()
-
-    if report is None:
-        # 即时生成兜底：检查任务是否存在
-        run_obj = (
-            await db.execute(select(TestRun).where(TestRun.id == run_uuid))
-        ).scalar_one_or_none()
-        if run_obj is not None:
-            test_results = await _load_test_results(run_id, db)
-            if test_results is not None:
-                try:
-                    await _generate_report_async(run_id, test_results)
-                    result = await db.execute(
-                        select(TestReport).where(TestReport.test_run_id == run_uuid)
-                    )
-                    report = result.scalar_one_or_none()
-                except Exception as _gen_err:
-                    logger.error(f"On-demand report generation failed: {_gen_err}")
 
     if report is None:
         raise HTTPException(
@@ -461,7 +430,12 @@ async def get_share_link(
 
     try:
         base = _report_share_base(request)
-        share_url = f"{base}/api/reports/{run_id}/share-view"
+        from app.modules.auth.report_sharing import create_report_token
+        if not report.share_token:
+            report.share_token = uuid.uuid4().hex
+            await db.commit()
+        token = create_report_token(run_id, report.share_token)
+        share_url = f"{base}/api/reports/{run_id}/share-view?token={token}"
         return {
             "code": 0,
             "data": {

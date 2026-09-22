@@ -31,7 +31,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # 创建数据目录（日志、仓库、报告、上传）
-RUN mkdir -p /app/data/logs /app/data/repos /app/data/reports /app/data/uploads
+RUN groupadd -g 10001 aitp && useradd -u 10001 -g aitp -d /app/data aitp \
+    && mkdir -p /app/data/logs /app/data/repos /app/data/reports /app/data/uploads \
+    && chown -R 10001:10001 /app/data
 
 EXPOSE 8000
 

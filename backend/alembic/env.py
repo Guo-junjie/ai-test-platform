@@ -34,7 +34,7 @@ from app.models.database import (  # noqa: F401
 config = context.config
 
 # 从应用配置动态设置数据库 URL（覆盖 alembic.ini 中的静态值）
-config.set_main_option("sqlalchemy.url", settings.database_url)
+config.set_main_option("sqlalchemy.url", settings.database_url.replace("%", "%%"))
 
 # 日志配置
 if config.config_file_name is not None:

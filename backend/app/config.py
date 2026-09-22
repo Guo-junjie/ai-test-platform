@@ -3,6 +3,7 @@ AI 自动化测试平台 — 全局配置
 """
 
 import os
+from urllib.parse import quote
 from functools import lru_cache
 from pydantic import BaseModel
 
@@ -15,6 +16,27 @@ class Settings(BaseModel):
     APP_DEBUG: bool = os.getenv("APP_DEBUG", "true").lower() == "true"
     SECRET_KEY: str = os.getenv("SECRET_KEY", "dev-secret-key-change-in-production")
     AES_ENCRYPTION_KEY: str = os.getenv("AES_ENCRYPTION_KEY", "0" * 32)
+    CORS_ORIGINS: str = os.getenv("CORS_ORIGINS", "http://localhost:3000")
+    BOOTSTRAP_ADMIN_USERNAME: str = os.getenv("BOOTSTRAP_ADMIN_USERNAME", "superadmin")
+    BOOTSTRAP_ADMIN_PASSWORD: str = os.getenv("BOOTSTRAP_ADMIN_PASSWORD", "")
+
+    def validate_production(self) -> None:
+        if self.APP_ENV != "production":
+            return
+        errors = []
+        if self.APP_DEBUG:
+            errors.append("APP_DEBUG 必须为 false")
+        if len(self.SECRET_KEY) < 32 or self.SECRET_KEY == "dev-secret-key-change-in-production":
+            errors.append("SECRET_KEY 必须使用独立的强密钥")
+        if self.AES_ENCRYPTION_KEY == "0" * 32 or len(self.AES_ENCRYPTION_KEY) < 32:
+            errors.append("AES_ENCRYPTION_KEY 必须为至少 32 字符非默认密钥；旧库必须保留原密钥")
+        for field in ("POSTGRES_PASSWORD", "RABBITMQ_PASSWORD", "MINIO_SECRET_KEY", "REDIS_PASSWORD"):
+            if len(getattr(self, field)) < 16 or getattr(self, field) == "aitp_secret_2026":
+                errors.append(f"{field} 必须使用至少 16 字符的非默认密码")
+        if "*" in {origin.strip() for origin in self.CORS_ORIGINS.split(",")}:
+            errors.append("生产 CORS 不允许通配符")
+        if errors:
+            raise RuntimeError("生产配置校验失败：" + "；".join(errors))
 
     # 数据库
     POSTGRES_HOST: str = os.getenv("POSTGRES_HOST", "localhost")
@@ -76,7 +98,7 @@ class Settings(BaseModel):
     def database_url(self) -> str:
         """同步数据库连接 URL（用于 Alembic 迁移等）"""
         return (
-            f"postgresql+psycopg2://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}"
+            f"postgresql+psycopg2://{quote(self.POSTGRES_USER, safe='')}:{quote(self.POSTGRES_PASSWORD, safe='')}"
             f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
         )
 
@@ -84,7 +106,7 @@ class Settings(BaseModel):
     def async_database_url(self) -> str:
         """异步数据库连接 URL（用于 SQLAlchemy async）"""
         return (
-            f"postgresql+asyncpg://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}"
+            f"postgresql+asyncpg://{quote(self.POSTGRES_USER, safe='')}:{quote(self.POSTGRES_PASSWORD, safe='')}"
             f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
         )
 
@@ -92,14 +114,14 @@ class Settings(BaseModel):
     def redis_url(self) -> str:
         """Redis 连接 URL"""
         if self.REDIS_PASSWORD:
-            return f"redis://:{self.REDIS_PASSWORD}@{self.REDIS_HOST}:{self.REDIS_PORT}/0"
+            return f"redis://:{quote(self.REDIS_PASSWORD, safe='')}@{self.REDIS_HOST}:{self.REDIS_PORT}/0"
         return f"redis://{self.REDIS_HOST}:{self.REDIS_PORT}/0"
 
     @property
     def celery_broker_url(self) -> str:
         """Celery broker URL (RabbitMQ)"""
         return (
-            f"amqp://{self.RABBITMQ_USER}:{self.RABBITMQ_PASSWORD}"
+            f"amqp://{quote(self.RABBITMQ_USER, safe='')}:{quote(self.RABBITMQ_PASSWORD, safe='')}"
             f"@{self.RABBITMQ_HOST}:{self.RABBITMQ_PORT}//"
         )
 

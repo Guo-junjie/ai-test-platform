@@ -72,9 +72,9 @@
             <el-icon><Cpu /></el-icon>
             <span>解析与集成</span>
           </template>
-          <el-menu-item index="/analysis">代码解析</el-menu-item>
+          <el-menu-item v-if="authStore.isAdmin" index="/analysis">代码解析</el-menu-item>
           <el-menu-item index="/doc-review">接口文档评审</el-menu-item>
-          <el-menu-item index="/sources">仓库配置</el-menu-item>
+          <el-menu-item v-if="authStore.isAdmin" index="/sources">仓库配置</el-menu-item>
         </el-sub-menu>
 
         <!-- 系统 -->
@@ -97,7 +97,7 @@
             >AI 模型配置</el-menu-item
           >
           <el-menu-item index="/settings/quality-gate">质量门禁</el-menu-item>
-          <el-menu-item index="/settings/audit">审计日志</el-menu-item>
+          <el-menu-item v-if="authStore.isAdmin || authStore.isAuditor" index="/settings/audit">审计日志</el-menu-item>
           <el-menu-item index="/profile">个人设置</el-menu-item>
         </el-sub-menu>
       </el-menu>

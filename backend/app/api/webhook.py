@@ -115,9 +115,7 @@ async def github_webhook(
             logger.warning("GitHub webhook signature verification failed")
             raise HTTPException(401, "Invalid webhook signature")
     else:
-        logger.warning(
-            "GITHUB_WEBHOOK_SECRET not configured, skipping signature verification"
-        )
+        raise HTTPException(503, "GitHub Webhook 未配置签名密钥，入口已关闭")
 
     # 3. 解析事件类型
     if x_github_event != "push":

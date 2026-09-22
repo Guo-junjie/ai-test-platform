@@ -16,6 +16,7 @@
           </div>
         </div>
         <div class="ws-actions">
+          <ProjectMembers :project-id="projectId" :owner-id="project?.owner_id" />
           <el-button type="primary" @click="$router.push(`/projects/${projectId}/plans`)">执行测试计划</el-button>
         </div>
       </div>
@@ -45,12 +46,13 @@
 import { defineComponent } from 'vue'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import { projectApi } from '@/api'
+import ProjectMembers from '@/components/ProjectMembers.vue'
 
 const SOURCE_LABELS: Record<string, string> = { github: 'GitHub', svn: 'SVN', upload: '本地上传' }
 
 export default defineComponent({
   name: 'ProjectWorkspace',
-  components: { ArrowLeft },
+  components: { ArrowLeft, ProjectMembers },
   data() {
     return {
       projectId: (this.$route.params.id as string) || '',

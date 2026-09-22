@@ -96,6 +96,28 @@ async def execute_scheduled_chain(task_id: str) -> dict[str, Any]:
             await session.execute(select(Project).where(Project.id == task.project_id))
         ).scalar_one_or_none()
         owner_id = (project.owner_id if project else None) or task.created_by
+        # 定时任务可能在创建人被停用/移出项目后才执行，执行时再次检查。
+        from app.models.database import User, UserRole, TestPlan
+        from app.modules.auth.project_scope import ADMIN_ROLES, load_project_scope
+        actor_id = task.created_by or owner_id
+        actor = (await session.execute(select(User).where(User.id == actor_id))).scalar_one_or_none()
+        allowed = actor is not None and actor.is_active and actor.role in (
+            ADMIN_ROLES | {UserRole.TEST_MANAGER, UserRole.TESTER}
+        )
+        if allowed and actor.role not in ADMIN_ROLES:
+            scope = await load_project_scope(session, actor)
+            allowed = task.project_id in scope.writable_ids
+        if not allowed:
+            return {"status": "failed", "error": "任务创建人已停用或不再具有项目执行权限",
+                    "test_run_id": None, "total": 0, "passed": 0, "failed": 0}
+        if task.target_type.value in {"plan", "scenario"}:
+            target_model = TestPlan if task.target_type.value == "plan" else Scenario
+            target = (await session.execute(select(target_model).where(
+                target_model.id == task.target_id, target_model.project_id == task.project_id
+            ))).scalar_one_or_none()
+            if target is None:
+                return {"status": "failed", "error": "任务目标不存在或不属于此项目",
+                        "test_run_id": None, "total": 0, "passed": 0, "failed": 0}
 
         service_url = (task.env_config or {}).get("service_url") or ""
         if not service_url:

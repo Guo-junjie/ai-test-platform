@@ -169,6 +169,9 @@ export const changeRequestApi = {
 
 // ============ 项目 ============
 export const projectApi = {
+  members: (id: string) => api.get(`/projects/${id}/members`),
+  setMember: (id: string, data: { username: string; access: 'read' | 'write' }) => api.put(`/projects/${id}/members`, data),
+  removeMember: (id: string, userId: string) => api.delete(`/projects/${id}/members/${userId}`),
   /** 获取项目列表，返回 [{ id, name }]（id 为后端真实 UUID） */
   getList: (params?: any) => api.get('/projects', { params }),
   /** 创建项目（super_admin/admin/test_manager） */

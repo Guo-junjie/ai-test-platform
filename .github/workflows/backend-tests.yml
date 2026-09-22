@@ -4,14 +4,26 @@ on:
   push:
     paths:
       - "backend/**"
+      - "testdata/**"
       - ".github/workflows/backend-tests.yml"
   pull_request:
     paths:
       - "backend/**"
+      - "testdata/**"
+      - ".github/workflows/backend-tests.yml"
 
 jobs:
   pytest:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: aitp
+          POSTGRES_PASSWORD: integration-only-password
+          POSTGRES_DB: aitp_security_test_ci
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U aitp" --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
@@ -20,14 +32,17 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      # 只装测试所需依赖（全量 requirements 含 weasyprint/locust 等重依赖，拉慢 CI）
       - name: Install test dependencies
         run: |
-          pip install -q pytest sqlalchemy celery redis pydantic loguru pyyaml \
-            python-dotenv aiofiles asyncpg psycopg2-binary
+          pip install -r backend/requirements.txt
 
       - name: Run pytest
         working-directory: backend
         env:
           APP_DEBUG: "false"
+          LOG_DIR: /tmp/aitp-test-logs
+          ENTERPRISE_ACCESS_INTEGRATION: "true"
+          POSTGRES_DB: aitp_security_test_ci
+          POSTGRES_USER: aitp
+          POSTGRES_PASSWORD: integration-only-password
         run: pytest

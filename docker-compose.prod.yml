@@ -1,0 +1,152 @@
+# 独立使用，不与开发 compose 合并。镜像必须使用经过验收的 tag/digest。
+name: ai-test-platform-prod
+
+x-app-env: &app-env
+  APP_ENV: production
+  APP_DEBUG: "false"
+  POSTGRES_HOST: postgres
+  REDIS_HOST: redis
+  RABBITMQ_HOST: rabbitmq
+  MINIO_ENDPOINT: minio:9000
+  HOME: /tmp
+  MPLCONFIGDIR: /tmp/matplotlib
+  PYTHONDONTWRITEBYTECODE: "1"
+
+x-app: &app
+  image: ${BACKEND_IMAGE:?Set BACKEND_IMAGE to a tested immutable image}
+  user: "10001:10001"
+  env_file: ${PROD_ENV_FILE:-.env.production}
+  environment: *app-env
+  restart: unless-stopped
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs: [/tmp:size=512m,mode=1777]
+  volumes: [app_data:/app/data]
+  mem_limit: 2g
+  cpus: 2
+  pids_limit: 256
+  logging: &logs
+    driver: json-file
+    options: {max-size: "10m", max-file: "5"}
+  depends_on:
+    postgres: {condition: service_healthy}
+    redis: {condition: service_healthy}
+    rabbitmq: {condition: service_healthy}
+    minio: {condition: service_healthy}
+
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:?Set a pinned POSTGRES_IMAGE}
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ai_test_platform}
+      POSTGRES_USER: ${POSTGRES_USER:-aitp}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    restart: unless-stopped
+    mem_limit: 2g
+    cpus: 2
+    logging: *logs
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  redis:
+    image: ${REDIS_IMAGE:?Set a pinned REDIS_IMAGE}
+    environment: {REDIS_PASSWORD: "${REDIS_PASSWORD:?Set REDIS_PASSWORD}"}
+    command: [sh, -c, 'exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"']
+    volumes: [redis_data:/data]
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 1
+    logging: *logs
+    healthcheck:
+      test: [CMD-SHELL, 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -q PONG']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  rabbitmq:
+    image: ${RABBITMQ_IMAGE:?Set a pinned RABBITMQ_IMAGE}
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-aitp}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?Set RABBITMQ_PASSWORD}
+    volumes: [rabbitmq_data:/var/lib/rabbitmq]
+    restart: unless-stopped
+    mem_limit: 1g
+    cpus: 1
+    logging: *logs
+    healthcheck:
+      test: [CMD, rabbitmq-diagnostics, -q, ping]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+  minio:
+    image: ${MINIO_IMAGE:?Set a pinned MINIO_IMAGE}
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-aitp}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?Set MINIO_SECRET_KEY}
+    command: server /data --console-address :9001
+    volumes: [minio_data:/data]
+    restart: unless-stopped
+    mem_limit: 1g
+    cpus: 1
+    logging: *logs
+    healthcheck:
+      test: [CMD, curl, -f, http://localhost:9000/minio/health/live]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+  backend:
+    <<: *app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers
+    healthcheck:
+      test: [CMD, curl, -fsS, http://localhost:8000/api/health]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+  celery-worker:
+    <<: *app
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=2 -Q celery,execution
+    healthcheck:
+      test: [CMD-SHELL, 'celery -A app.celery_app inspect ping -d "celery@$$HOSTNAME" --timeout 5 | grep -q pong']
+      interval: 60s
+      timeout: 15s
+      retries: 3
+  celery-beat:
+    <<: *app
+    command: celery -A app.celery_app beat --loglevel=info --schedule=/app/data/celerybeat-schedule --pidfile=/tmp/celerybeat.pid
+    mem_limit: 512m
+    cpus: 1
+    healthcheck:
+      test: [CMD-SHELL, 'test -s /tmp/celerybeat.pid && kill -0 "$$(cat /tmp/celerybeat.pid)"']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  frontend:
+    image: ${FRONTEND_IMAGE:?Set FRONTEND_IMAGE built with Dockerfile.prod}
+    user: "101:101"
+    ports: ["${FRONTEND_BIND:-127.0.0.1}:${FRONTEND_PORT:-3000}:8080"]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp:size=64m,mode=1777]
+    restart: unless-stopped
+    mem_limit: 128m
+    cpus: 1
+    logging: *logs
+    depends_on:
+      backend: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, http://localhost:8080/]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  app_data:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
+  minio_data:

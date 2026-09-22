@@ -98,7 +98,7 @@ async def get_statistics(
             func.avg(
                 func.extract("epoch", TestRun.completed_at - TestRun.started_at)
             )
-        ).where(
+        ).select_from(TestRun).where(
             and_(
                 TestRun.created_at >= since,
                 TestRun.started_at.isnot(None),

@@ -82,6 +82,8 @@ class AuthService:
         """
         try:
             payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[JWT_ALGORITHM])
+            if payload.get("purpose") == "report_share":
+                return None
             return payload
         except JWTError as e:
             logger.warning(f"JWT verification failed: {e}")
@@ -307,6 +309,26 @@ class AuthService:
             viewer     / Viewer123      (viewer)
         """
         async with AsyncSessionLocal() as session:
+            if settings.APP_ENV == "production":
+                existing = (await session.execute(select(User).where(
+                    User.role == UserRole.SUPER_ADMIN, User.is_active.is_(True)
+                ).limit(1))).scalar_one_or_none()
+                if existing is not None:
+                    return
+                password = settings.BOOTSTRAP_ADMIN_PASSWORD
+                if len(password) < 16 or password in {p for _, p, _ in AuthService.DEFAULT_TEAM}:
+                    raise RuntimeError("首次生产启动须配置至少 16 字符 BOOTSTRAP_ADMIN_PASSWORD")
+                occupied = (await session.execute(select(User).where(
+                    User.username == settings.BOOTSTRAP_ADMIN_USERNAME
+                ))).scalar_one_or_none()
+                if occupied is not None:
+                    raise RuntimeError("初始化管理员用户名已被占用，不会自动提升现有账号权限")
+                session.add(User(id=uuid.uuid4(), username=settings.BOOTSTRAP_ADMIN_USERNAME,
+                    email=f"{settings.BOOTSTRAP_ADMIN_USERNAME}@ai-test-platform.local",
+                    hashed_password=AuthService.hash_password(password),
+                    role=UserRole.SUPER_ADMIN, is_active=True))
+                await session.commit()
+                return
             # ---- 1. 空表时种子完整演示团队 ----
             result = await session.execute(select(User).limit(1))
             if result.scalar_one_or_none() is None:

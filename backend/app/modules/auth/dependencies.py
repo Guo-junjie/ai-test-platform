@@ -42,6 +42,9 @@ async def get_current_user(
     Raises:
         HTTPException(401): 未提供 token 或 token 无效。
     """
+    cached = getattr(request.state, "current_user", None)
+    if cached is not None:
+        return cached
     token = _extract_token(request)
     if not token:
         raise HTTPException(

@@ -1,0 +1,16 @@
+ARG NODE_IMAGE
+ARG NGINX_IMAGE
+FROM ${NODE_IMAGE} AS builder
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts --no-audit --no-fund
+COPY . .
+RUN npm run build
+
+FROM ${NGINX_IMAGE}
+COPY --from=builder /app/dist /usr/share/nginx/html
+COPY nginx.prod.conf /etc/nginx/nginx.conf
+USER 101:101
+EXPOSE 8080
+ENTRYPOINT ["nginx"]
+CMD ["-g", "daemon off;"]
