@@ -48,6 +48,13 @@ def is_personal_action(path):
 
 def enforce_role(user, method, path):
     admin = user.role in ADMIN_ROLES
+    # 审批动作是审核员唯一允许执行的管理类写操作。必须在通用只读角色
+    # 拦截之前放行，否则 approve/reject 会被下面的 mutation 规则误判为
+    # 业务资源写入，导致接口自身的 require_reviewer 永远无法生效。
+    if path.startswith("/api/change-requests"):
+        if user.role not in {m.UserRole.SUPER_ADMIN, m.UserRole.AUDITOR}:
+            raise HTTPException(403, "变更审批仅限超级管理员和审核员")
+        return
     if path.startswith(("/api/models", "/api/settings", "/api/source", "/api/analysis")):
         if not admin:
             raise HTTPException(403, "此功能仅限管理员")

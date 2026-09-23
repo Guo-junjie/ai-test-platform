@@ -163,6 +163,18 @@ def test_audit_and_personal_actions_have_separate_permissions():
     policy.enforce_role(SimpleNamespace(role=m.UserRole.VIEWER), "POST", "/api/notifications/read-all")
 
 
+def test_auditor_can_review_change_requests_only():
+    auditor = SimpleNamespace(role=m.UserRole.AUDITOR)
+    policy.enforce_role(auditor, "GET", "/api/change-requests")
+    policy.enforce_role(auditor, "POST", "/api/change-requests/{cr_id}/approve")
+    policy.enforce_role(auditor, "POST", "/api/change-requests/{cr_id}/reject")
+    with pytest.raises(HTTPException) as error:
+        policy.enforce_role(SimpleNamespace(role=m.UserRole.ADMIN), "GET", "/api/change-requests")
+    assert error.value.status_code == 403
+    with pytest.raises(HTTPException):
+        policy.enforce_role(auditor, "POST", "/api/projects")
+
+
 def test_production_rejects_development_credentials_and_handles_url_passwords():
     from app.config import Settings
     config = Settings(APP_ENV="production", APP_DEBUG=True, SECRET_KEY="short",
