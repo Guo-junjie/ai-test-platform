@@ -140,12 +140,12 @@ export const modelApi = {
 // ============ 认证 ============
 export const authApi = {
   login: (data: { username: string; password: string }) => api.post('/auth/login', data),
-  /** 管理员新建用户（可能进入审核流，返回 data.status === 'pending'） */
+  /** 管理员新建用户；普通管理员只能授予业务角色 */
   register: (data: any) => api.post('/auth/users', data),
   me: () => api.get('/auth/me'),
   listUsers: (params?: any) => api.get('/auth/users', { params }),
   updateRole: (userId: string, role: string) => api.put(`/auth/users/${userId}/role`, { role }),
-  /** 删除用户（可能进入审核流，返回 data.status === 'pending'） */
+  /** 删除用户；有关联运行记录时后端执行软删除 */
   deleteUser: (userId: string) => api.delete(`/auth/users/${userId}`),
   updateStatus: (userId: string, isActive: boolean) =>
     api.put(`/auth/users/${userId}/status`, { is_active: isActive }),
@@ -175,7 +175,7 @@ export const projectApi = {
   /** 获取项目列表，返回 [{ id, name }]（id 为后端真实 UUID） */
   getList: (params?: any) => api.get('/projects', { params }),
   /** 创建项目（super_admin/admin/test_manager） */
-  create: (data: { name: string; description?: string; source_type?: string }) =>
+  create: (data: { name: string; description?: string; project_kind?: string; source_type?: string }) =>
     api.post('/projects', data),
   /** 项目详情（含脱敏仓库配置） */
   get: (id: string) => api.get(`/projects/${id}`),

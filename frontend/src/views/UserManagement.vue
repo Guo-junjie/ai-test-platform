@@ -19,7 +19,7 @@
 
       <el-alert
         title="基于角色的访问控制（RBAC）"
-        description="管理员可在此新建用户、分配角色与启停账号。新建用户、删除用户、修改角色等敏感操作可能需要审核员审批后才会生效。"
+        description="用户变更立即生效并完整记录审计日志。系统管理员只能管理普通业务账号；管理员和超级管理员等特权角色仅由超级管理员管理。"
         type="info"
         :closable="false"
         style="margin-bottom: 16px;"
@@ -53,11 +53,11 @@
               :model-value="row.role"
               size="small"
               style="width: 130px;"
-              :disabled="updatingId === row.id"
+              :disabled="updatingId === row.id || !canManageUser(row)"
               @change="(val: string) => handleRoleChange(row, val)"
             >
               <el-option
-                v-for="opt in ROLE_OPTIONS"
+                v-for="opt in assignableRoles"
                 :key="opt.value"
                 :label="opt.label"
                 :value="opt.value"
@@ -69,6 +69,7 @@
               style="margin-left: 8px;"
               :type="row.is_active ? 'warning' : 'success'"
               :loading="statusUpdatingId === row.id"
+              :disabled="!canManageUser(row)"
               @click="handleToggleStatus(row)"
             >
               {{ row.is_active ? '禁用' : '启用' }}
@@ -78,6 +79,7 @@
               plain
               type="danger"
               :loading="deletingId === row.id"
+              :disabled="!canManageUser(row)"
               @click="handleDelete(row)"
             >
               删除
@@ -125,7 +127,7 @@
         <el-form-item label="角色" prop="role">
           <el-select v-model="createForm.role" placeholder="请选择角色" style="width: 100%;">
             <el-option
-              v-for="opt in ROLE_OPTIONS"
+              v-for="opt in assignableRoles"
               :key="opt.value"
               :label="opt.label"
               :value="opt.value"
@@ -146,14 +148,23 @@
  * 用户管理页（仅管理员可访问）。
  *
  * 支持：新建用户、修改角色、启停账号、删除用户。
- * 其中新建 / 改角色 / 删除三类敏感操作，后端可能返回 data.status === 'pending'
- * 表示已进入审核流，此时前端提示「已提交审核，待审核员审批」且不做本地乐观更新。
+ * 用户变更立即生效并写审计日志；普通管理员不能管理特权账号。
  */
-import { ref, reactive, onMounted } from 'vue'
+import { computed, ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { Plus, Refresh } from '@element-plus/icons-vue'
 import { authApi } from '@/api'
 import { ROLE_OPTIONS, roleLabel, roleTagType } from '@/utils/roles'
+import { useAuthStore } from '@/stores'
+
+const authStore = useAuthStore()
+const assignableRoles = computed(() => authStore.isSuperAdmin
+  ? ROLE_OPTIONS
+  : ROLE_OPTIONS.filter((item) => ['test_manager', 'tester', 'developer', 'viewer'].includes(item.value)))
+function canManageUser(row: any): boolean {
+  if (row.id === authStore.user?.id) return false
+  return authStore.isSuperAdmin || !['super_admin', 'admin', 'auditor'].includes(row.role)
+}
 
 const users = ref<any[]>([])
 const loading = ref<boolean>(false)
@@ -186,12 +197,6 @@ const createRules: FormRules = {
     { min: 6, message: '密码长度至少 6 位', trigger: 'blur' },
   ],
   role: [{ required: true, message: '请选择角色', trigger: 'change' }],
-}
-
-/** 判断后端响应是否表示「已提交审核」 */
-function isPending(res: any): boolean {
-  const d = res?.data ?? res ?? {}
-  return d?.status === 'pending'
 }
 
 /** 格式化 ISO 时间为本地可读格式 */
@@ -252,17 +257,13 @@ async function submitCreate(): Promise<void> {
 
   creating.value = true
   try {
-    const res: any = await authApi.register({
+    await authApi.register({
       username: createForm.username,
       email: createForm.email,
       password: createForm.password,
       role: createForm.role,
     })
-    if (isPending(res)) {
-      ElMessage.success('已提交审核，待审核员审批')
-    } else {
-      ElMessage.success('用户创建成功')
-    }
+    ElMessage.success('用户创建成功')
     createDialogVisible.value = false
     await loadUsers()
   } catch (e: any) {
@@ -278,15 +279,9 @@ async function handleRoleChange(row: any, newRole: string): Promise<void> {
   const oldRole = row.role
   updatingId.value = row.id
   try {
-    const res: any = await authApi.updateRole(row.id, newRole)
-    if (isPending(res)) {
-      // 进入审核流：不做本地乐观更新，等待审批通过后再生效
-      row.role = oldRole
-      ElMessage.success('已提交审核，待审核员审批')
-    } else {
-      row.role = newRole
-      ElMessage.success(`已将 ${row.username} 的角色修改为「${roleLabel(newRole)}」`)
-    }
+    await authApi.updateRole(row.id, newRole)
+    row.role = newRole
+    ElMessage.success(`已将 ${row.username} 的角色修改为「${roleLabel(newRole)}」`)
   } catch (e: any) {
     row.role = oldRole // 失败回滚
     ElMessage.error(e?.message || '角色修改失败')
@@ -340,12 +335,8 @@ async function handleDelete(row: any): Promise<void> {
 
   deletingId.value = row.id
   try {
-    const res: any = await authApi.deleteUser(row.id)
-    if (isPending(res)) {
-      ElMessage.success('已提交审核，待审核员审批')
-    } else {
-      ElMessage.success(`已删除用户 ${row.username}`)
-    }
+    await authApi.deleteUser(row.id)
+    ElMessage.success(`已删除用户 ${row.username}`)
     await loadUsers()
   } catch (e: any) {
     ElMessage.error(e?.message || '删除失败')

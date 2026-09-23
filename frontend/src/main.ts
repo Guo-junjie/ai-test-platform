@@ -13,6 +13,7 @@ import * as ElementPlusIconsVue from '@element-plus/icons-vue'
 
 import App from './App.vue'
 import router from './router'
+import { installAccessibilityNames } from '@/utils/accessibility'
 
 /**
  * 视觉方向（变体）：v1 清透白 / v2 深空 / v3 紧凑专业
@@ -34,3 +35,4 @@ app.use(router)
 app.use(ElementPlus, { locale: zhCn })
 
 app.mount('#app')
+installAccessibilityNames()

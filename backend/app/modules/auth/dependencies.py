@@ -125,5 +125,5 @@ require_developer = require_role(
 # 管理类操作（用户 CRUD / 角色变更）：super_admin 立即生效，admin 需走审批
 require_manager = require_role(UserRole.SUPER_ADMIN, UserRole.ADMIN)
 
-# 审批类操作（通过 / 驳回变更申请）
-require_reviewer = require_role(UserRole.SUPER_ADMIN, UserRole.AUDITOR)
+# 仅用于处理升级前遗留审批单；新用户管理不再产生审批申请。
+require_reviewer = require_role(UserRole.SUPER_ADMIN)

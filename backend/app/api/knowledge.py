@@ -326,10 +326,17 @@ async def get_kb_status(
         term_count = 0
 
     embedding_model_id = None
+    embedding_model_name = None
     try:
         from app.modules.ai.model_router import get_model_router
 
-        embedding_model_id = get_model_router().routing.embedding_model_id
+        router = get_model_router()
+        embedding_model_id = router.routing.embedding_model_id
+        embedding_config = router.configs.get(embedding_model_id) if embedding_model_id else None
+        if not embedding_config or not embedding_config.is_active or "embedding" not in embedding_config.capabilities:
+            embedding_model_id = None
+        else:
+            embedding_model_name = embedding_config.name
     except Exception:
         embedding_model_id = None
 
@@ -371,6 +378,7 @@ async def get_kb_status(
             "chunk_counts": chunk_counts,
             "term_count": term_count,
             "embedding_model_id": embedding_model_id,
+            "embedding_model_name": embedding_model_name,
             "embedding_ready": embedding_ready,
             "retrieval_mode": retrieval_mode,
             "state": state_info.get("state", "idle"),

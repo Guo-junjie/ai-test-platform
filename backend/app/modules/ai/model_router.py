@@ -75,6 +75,11 @@ class ModelRouter:
             raise ValueError(f"Unknown use case: {use_case}")
 
         config = self.configs.get(config_id)
+        required_capability = "embedding" if use_case == "embedding" else "chat"
+        if config and required_capability not in (config.capabilities or ["chat"]):
+            raise ModelNotConfiguredError(
+                f"路由模型「{config.name}」未声明 {required_capability} 能力，请修正模型能力或路由配置。"
+            )
         if not config or not config.is_active:
             if use_case == "embedding":
                 raise ModelNotConfiguredError(
@@ -82,7 +87,11 @@ class ModelRouter:
                 )
             logger.warning(f"Model {config_id} not available, falling back")
             config = self.configs.get(self.routing.fallback_model_id)
-            if not config:
+            if (
+                not config
+                or not config.is_active
+                or required_capability not in (config.capabilities or ["chat"])
+            ):
                 raise ModelNotConfiguredError(
                     "尚未配置 AI 模型，请先在「AI 模型配置」页面添加并启用至少一个模型后再使用此功能。"
                 )
@@ -110,10 +119,14 @@ class ModelRouter:
             fallback_id = getattr(self.routing, "fallback_model_id", None) if self.routing else None
             if fallback_id == current_config_id:
                 fallback_id = next(
-                    (cid for cid, c in self.configs.items() if c.is_active and cid != current_config_id),
+                    (cid for cid, c in self.configs.items()
+                     if c.is_active and cid != current_config_id
+                     and "chat" in (c.capabilities or ["chat"])),
                     None
                 )
-            if fallback_id and fallback_id in self.configs and self.configs[fallback_id].is_active:
+            if (fallback_id and fallback_id in self.configs
+                    and self.configs[fallback_id].is_active
+                    and "chat" in (self.configs[fallback_id].capabilities or ["chat"])):
                 fallback_config = self.configs[fallback_id]
                 logger.info(f"Retrying with fallback model: {fallback_config.name} ({fallback_config.model_name})")
                 fallback_client = UnifiedModelClient(fallback_config)
@@ -174,6 +187,7 @@ async def refresh_model_router_from_db(db) -> None:
             timeout=c.timeout or 120,
             max_retries=c.max_retries or 3,
             use_cases=list(c.use_cases or []),
+            capabilities=list(c.capabilities or ["chat"]),
             is_active=bool(c.is_active),
             is_default=bool(c.is_default),
             is_fallback=bool(c.is_fallback),

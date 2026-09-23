@@ -163,7 +163,7 @@ const routes = [
     path: '/approvals',
     name: 'Approvals',
     component: () => import('@/views/Approvals.vue'),
-    meta: { title: '审核中心', requireAuditor: true },
+    meta: { title: '历史审批', requireSuperAdmin: true },
   },
   {
     path: '/notifications',
@@ -267,11 +267,16 @@ router.beforeEach((to, _from, next) => {
     next({ path: '/dashboard' })
     return
   }
-  if (to.meta?.requireAuditor && !(authStore.isAuditor || authStore.isSuperAdmin)) {
-    next({ path: '/dashboard' })
+
+  if (to.meta?.requireSuperAdmin && !authStore.isSuperAdmin) {
+    next({ path: authStore.isAuditor ? '/settings/audit' : '/dashboard' })
     return
   }
 
+  if (authStore.isAuditor && !['/settings/audit', '/notifications', '/profile'].includes(to.path)) {
+    next({ path: '/settings/audit' })
+    return
+  }
   next()
 })
 

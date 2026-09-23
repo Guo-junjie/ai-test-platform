@@ -57,11 +57,11 @@ class ModelProvider(PyEnum):
 
 class UserRole(PyEnum):
     SUPER_ADMIN = "super_admin"   # 超级管理员：所有管理操作立即生效
-    ADMIN = "admin"               # 管理员：管理类操作需审核员审批
+    ADMIN = "admin"               # 管理员：直接管理普通账号与系统配置
     TEST_MANAGER = "test_manager" # 测试经理
     TESTER = "tester"
     DEVELOPER = "developer"
-    AUDITOR = "auditor"           # 审核员：审批管理类变更申请
+    AUDITOR = "auditor"           # 历史兼容：只读合规审计账号
     VIEWER = "viewer"
 
 
@@ -163,12 +163,22 @@ class Project(Base):
     name = Column(String(200), nullable=False)
     description = Column(Text)
     owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    # full=源码+测试，api_testing=仅接口测试，source_analysis=仅源码分析。
+    # 被测服务属于环境档案，不是项目类型。
+    project_kind = Column(String(32), nullable=False, default="full")
     source_type = Column(SAEnum(SourceType, values_callable=lambda x: [e.value for e in x], name="sourcetype"), nullable=False)
     source_config = Column(JSONB, default={})  # 仓库地址、分支等配置
     quality_gate_config = Column(JSONB, default={})  # 质量门禁规则
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        CheckConstraint(
+            "project_kind IN ('full', 'api_testing', 'source_analysis')",
+            name="ck_projects_project_kind",
+        ),
+    )
 
     # 关系
     test_runs = relationship("TestRun", back_populates="project")
@@ -278,6 +288,7 @@ class AIModelConfig(Base):
     timeout = Column(Integer, default=120)
     max_retries = Column(Integer, default=3)
     use_cases = Column(JSONB, default=[])  # ["code_analysis", "case_generation", ...]
+    capabilities = Column(JSONB, default=["chat"], nullable=False)  # chat / embedding
     is_active = Column(Boolean, default=True)
     is_default = Column(Boolean, default=False)
     is_fallback = Column(Boolean, default=False)

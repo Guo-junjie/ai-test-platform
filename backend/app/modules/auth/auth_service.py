@@ -288,7 +288,6 @@ class AuthService:
         ("admin", "Admin123", UserRole.ADMIN),
         ("tester", "Tester123", UserRole.TESTER),
         ("developer", "Developer123", UserRole.DEVELOPER),
-        ("auditor", "Auditor123", UserRole.AUDITOR),
         ("viewer", "Viewer123", UserRole.VIEWER),
     ]
 
@@ -297,15 +296,14 @@ class AuthService:
         """
         初始化默认账户（幂等）。
 
-        1. users 表为空时，种子一整套演示团队账户（7 角色体系中的 6 个常用账户）。
-        2. 每次启动都确保至少存在一个 SUPER_ADMIN，保证旧库也有可用的审核人。
+        1. users 表为空时，种子基础演示团队账户。
+        2. 每次启动都确保至少存在一个 SUPER_ADMIN。
 
         默认凭据（明文均 < 72 字节，满足 bcrypt 限制）:
             superadmin / SuperAdmin123  (super_admin)
             admin      / Admin123       (admin)
             tester     / Tester123      (tester)
             developer  / Developer123   (developer)
-            auditor    / Auditor123     (auditor)
             viewer     / Viewer123      (viewer)
         """
         async with AsyncSessionLocal() as session:

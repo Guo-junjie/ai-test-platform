@@ -10,6 +10,7 @@
           <div>
             <div class="ws-name">{{ project?.name || '...' }}</div>
             <div class="ws-sub">
+              <el-tag size="small" :type="projectKindTag(project?.project_kind)">{{ projectKindLabel(project?.project_kind) }}</el-tag>
               <el-tag size="small" effect="plain">{{ sourceLabel(project?.source_type) }}</el-tag>
               <span v-if="project?.description" class="ws-desc">{{ project.description }}</span>
             </div>
@@ -17,16 +18,16 @@
         </div>
         <div class="ws-actions">
           <ProjectMembers :project-id="projectId" :owner-id="project?.owner_id" />
-          <el-button type="primary" @click="$router.push(`/projects/${projectId}/plans`)">执行测试计划</el-button>
+          <el-button v-if="hasCapability('test_execution')" type="primary" @click="$router.push(`/projects/${projectId}/plans`)">执行测试计划</el-button>
         </div>
       </div>
       <!-- 分区导航 -->
       <el-tabs v-model="activeTab" class="ws-tabs" @tab-change="onTab">
         <el-tab-pane label="概览" name="overview" />
         <el-tab-pane label="测试上下文" name="context" />
-        <el-tab-pane label="测试计划" name="plans" />
-        <el-tab-pane label="运行中心" name="runs" />
-        <el-tab-pane label="质量结果" name="quality" />
+        <el-tab-pane v-if="hasCapability('test_plans')" label="测试计划" name="plans" />
+        <el-tab-pane v-if="hasCapability('test_execution')" label="运行中心" name="runs" />
+        <el-tab-pane v-if="hasCapability('reports')" label="质量结果" name="quality" />
       </el-tabs>
     </el-card>
 
@@ -49,6 +50,9 @@ import { projectApi } from '@/api'
 import ProjectMembers from '@/components/ProjectMembers.vue'
 
 const SOURCE_LABELS: Record<string, string> = { github: 'GitHub', svn: 'SVN', upload: '本地上传' }
+const PROJECT_KIND_LABELS: Record<string, string> = {
+  full: '完整测试项目', api_testing: '接口测试项目', source_analysis: '源码分析项目',
+}
 
 export default defineComponent({
   name: 'ProjectWorkspace',
@@ -72,6 +76,15 @@ export default defineComponent({
   methods: {
     sourceLabel(t?: string): string {
       return SOURCE_LABELS[t || ''] || t || '—'
+    },
+    projectKindLabel(kind?: string): string {
+      return PROJECT_KIND_LABELS[kind || 'full'] || kind || '完整测试项目'
+    },
+    projectKindTag(kind?: string): 'success' | 'warning' | 'info' {
+      return kind === 'api_testing' ? 'success' : kind === 'source_analysis' ? 'warning' : 'info'
+    },
+    hasCapability(capability: string): boolean {
+      return (this.project?.capabilities || []).includes(capability)
     },
     onTab(tab: string): void {
       this.$router.push(`/projects/${this.projectId}/${tab}`)

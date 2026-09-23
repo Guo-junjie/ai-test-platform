@@ -163,16 +163,25 @@ def test_audit_and_personal_actions_have_separate_permissions():
     policy.enforce_role(SimpleNamespace(role=m.UserRole.VIEWER), "POST", "/api/notifications/read-all")
 
 
-def test_auditor_can_review_change_requests_only():
+def test_legacy_change_requests_are_super_admin_only():
     auditor = SimpleNamespace(role=m.UserRole.AUDITOR)
-    policy.enforce_role(auditor, "GET", "/api/change-requests")
-    policy.enforce_role(auditor, "POST", "/api/change-requests/{cr_id}/approve")
-    policy.enforce_role(auditor, "POST", "/api/change-requests/{cr_id}/reject")
+    for method, path in (("GET", "/api/change-requests"),
+                         ("POST", "/api/change-requests/{cr_id}/approve"),
+                         ("POST", "/api/change-requests/{cr_id}/reject")):
+        with pytest.raises(HTTPException) as error:
+            policy.enforce_role(auditor, method, path)
+        assert error.value.status_code == 403
+    policy.enforce_role(SimpleNamespace(role=m.UserRole.SUPER_ADMIN), "GET", "/api/change-requests")
+
+
+def test_legacy_auditor_is_confined_to_compliance_console():
+    auditor = SimpleNamespace(role=m.UserRole.AUDITOR)
+    policy.enforce_role(auditor, "GET", "/api/audit")
+    policy.enforce_role(auditor, "GET", "/api/notifications")
+    policy.enforce_role(auditor, "PUT", "/api/auth/me")
     with pytest.raises(HTTPException) as error:
-        policy.enforce_role(SimpleNamespace(role=m.UserRole.ADMIN), "GET", "/api/change-requests")
+        policy.enforce_role(auditor, "GET", "/api/projects")
     assert error.value.status_code == 403
-    with pytest.raises(HTTPException):
-        policy.enforce_role(auditor, "POST", "/api/projects")
 
 
 def test_production_rejects_development_credentials_and_handles_url_passwords():
@@ -186,6 +195,49 @@ def test_production_rejects_development_credentials_and_handles_url_passwords():
         REDIS_PASSWORD="c" * 24, RABBITMQ_PASSWORD="d" * 24, MINIO_SECRET_KEY="e" * 24)
     secure.validate_production()
     assert "pass%40word%3A%2F%2B%3F123456789" in secure.database_url
+
+
+def test_model_capabilities_protect_embedding_route():
+    from app.api.model_config import _validate_capabilities
+    from app.modules.ai.model_config import ModelConfig, ModelProvider, ModelRoutingConfig
+    from app.modules.ai.model_router import ModelNotConfiguredError, ModelRouter
+
+    assert _validate_capabilities(["chat", "chat"], m.ModelProvider.OPENAI) == ["chat"]
+    with pytest.raises(HTTPException):
+        _validate_capabilities(["embedding"], m.ModelProvider.ANTHROPIC)
+    router = ModelRouter()
+    router.register_config(ModelConfig(
+        config_id="chat-only", name="chat", provider=ModelProvider.OPENAI,
+        model_name="chat", capabilities=["chat"],
+    ))
+    router.set_routing(ModelRoutingConfig(embedding_model_id="chat-only"))
+    with pytest.raises(ModelNotConfiguredError):
+        router.get_client("embedding")
+
+
+def test_project_kind_exposes_clear_capabilities():
+    from app.api.project import _project_to_dict
+    user_id = uuid4()
+    api_project = m.Project(id=uuid4(), name="api", owner_id=user_id,
+                            source_type=m.SourceType.UPLOAD, project_kind="api_testing")
+    source_project = m.Project(id=uuid4(), name="source", owner_id=user_id,
+                               source_type=m.SourceType.GITHUB, project_kind="source_analysis")
+    assert "test_execution" in _project_to_dict(api_project)["capabilities"]
+    assert "code_versions" not in _project_to_dict(api_project)["capabilities"]
+    assert "coverage" in _project_to_dict(source_project)["capabilities"]
+    assert "test_execution" not in _project_to_dict(source_project)["capabilities"]
+
+
+def test_admin_can_only_manage_standard_roles():
+    from app.api.auth import _validate_managed_role, _validate_managed_target
+    admin = SimpleNamespace(role=m.UserRole.ADMIN)
+    _validate_managed_role(admin, m.UserRole.TEST_MANAGER)
+    with pytest.raises(HTTPException):
+        _validate_managed_role(admin, m.UserRole.ADMIN)
+    with pytest.raises(HTTPException):
+        _validate_managed_role(admin, m.UserRole.AUDITOR)
+    with pytest.raises(HTTPException):
+        _validate_managed_target(admin, SimpleNamespace(role=m.UserRole.SUPER_ADMIN))
 
 
 @pytest.mark.asyncio

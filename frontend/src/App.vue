@@ -21,4 +21,12 @@ body,
 #app {
   height: 100%;
 }
+
+@media (max-width: 768px) {
+  .el-dialog { --el-dialog-width: calc(100vw - 24px); margin-top: 5vh; }
+  .el-drawer { max-width: 94vw; }
+  .main-content .el-card__body { overflow-x: auto; }
+  .main-content .el-card__body > .el-table { min-width: 680px; }
+  .el-form-item { align-items: flex-start; }
+}
 </style>

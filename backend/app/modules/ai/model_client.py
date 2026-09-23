@@ -19,7 +19,7 @@ class UnifiedModelClient:
         self.config = config
         self._client = None
 
-        if config.provider == ModelProvider.OPENAI:
+        if config.provider in {ModelProvider.OPENAI, ModelProvider.LOCAL}:
             try:
                 from openai import AsyncOpenAI
                 self._client = AsyncOpenAI(
@@ -42,7 +42,7 @@ class UnifiedModelClient:
         temp = temperature if temperature is not None else self.config.temperature
         max_tok = max_tokens or self.config.max_tokens
 
-        if self.config.provider == ModelProvider.OPENAI:
+        if self.config.provider in {ModelProvider.OPENAI, ModelProvider.LOCAL}:
             # 容错：如果用户配置为 OPENAI 但 API URL 为 anthropic 端点（如 /anthropic），自动走 anthropic 调用
             if "/anthropic" in (self.config.api_base_url or "").lower():
                 return await self._call_anthropic(messages, temp, max_tok)
@@ -64,7 +64,7 @@ class UnifiedModelClient:
         - ANTHROPIC: 抛 NotImplementedError（Anthropic 无 embedding API）
         - 其他: 抛 ValueError
         """
-        if self.config.provider == ModelProvider.OPENAI:
+        if self.config.provider in {ModelProvider.OPENAI, ModelProvider.LOCAL}:
             return await self._embed_openai(texts)
         elif self.config.provider == ModelProvider.CUSTOM:
             return await self._embed_httpx(texts)

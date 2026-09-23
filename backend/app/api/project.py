@@ -28,6 +28,29 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 router = APIRouter()
+PROJECT_KINDS = {"full", "api_testing", "source_analysis"}
+PROJECT_KIND_LABELS = {
+    "full": "完整测试项目",
+    "api_testing": "接口测试项目",
+    "source_analysis": "源码分析项目",
+}
+
+
+def _project_capabilities(kind: str) -> list[str]:
+    shared = ["requirements", "knowledge"]
+    if kind == "api_testing":
+        return shared + ["api_docs", "test_cases", "test_plans", "test_execution", "reports", "defects"]
+    if kind == "source_analysis":
+        return shared + ["code_versions", "code_analysis", "coverage"]
+    return shared + ["code_versions", "code_analysis", "api_docs", "test_cases", "test_plans",
+                     "test_execution", "reports", "defects", "coverage"]
+
+
+def _validate_project_kind(value: str) -> str:
+    normalized = (value or "full").strip().lower()
+    if normalized not in PROJECT_KINDS:
+        raise HTTPException(400, f"无效的项目类型: {value}")
+    return normalized
 
 
 # ==================== 内部工具 ====================
@@ -49,6 +72,9 @@ def _project_to_dict(project: Project) -> dict:
         "name": project.name,
         "description": project.description,
         "owner_id": str(project.owner_id) if project.owner_id else None,
+        "project_kind": project.project_kind or "full",
+        "project_kind_label": PROJECT_KIND_LABELS.get(project.project_kind or "full", project.project_kind),
+        "capabilities": _project_capabilities(project.project_kind or "full"),
         "source_type": project.source_type.value if project.source_type else None,
         "target_service_url": cfg.get("target_service_url"),
         "coverage_config": cov_cfg,
@@ -122,6 +148,7 @@ class ProjectUpdate(BaseModel):
 
     name: str | None = None
     description: str | None = None
+    project_kind: str | None = None
     source_type: str | None = None
     # 合并语义：值为空字符串/None 的键不覆盖已有配置（token 留空 = 保持不变）
     source_config: dict | None = None
@@ -159,6 +186,8 @@ async def update_project(
             project.name = name
     if req.description is not None:
         project.description = req.description.strip() or None
+    if req.project_kind is not None:
+        project.project_kind = _validate_project_kind(req.project_kind)
     if req.source_type is not None:
         try:
             project.source_type = SourceType(req.source_type)
@@ -201,6 +230,7 @@ class ProjectCreate(BaseModel):
 
     name: str
     description: str | None = None
+    project_kind: str = "full"
     source_type: str = "upload"
     source_config: dict = {}
     quality_gate_config: dict = {}
@@ -230,12 +260,14 @@ async def create_project(
         st = SourceType(req.source_type)
     except ValueError:
         raise HTTPException(400, f"Invalid source_type: {req.source_type}")
+    project_kind = _validate_project_kind(req.project_kind)
 
     project = Project(
         id=uuid.uuid4(),
         name=name,
         description=(req.description or "").strip() or None,
         owner_id=current_user.id,
+        project_kind=project_kind,
         source_type=st,
         source_config=req.source_config or {},
         quality_gate_config=req.quality_gate_config or {},

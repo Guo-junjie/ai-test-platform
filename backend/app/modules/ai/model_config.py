@@ -2,7 +2,7 @@
 AI 模型配置数据结构
 """
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from enum import Enum
 from typing import Optional
 
@@ -32,7 +32,8 @@ class ModelConfig(BaseModel):
     timeout: int = 120
     max_retries: int = 3
 
-    use_cases: list[str] = []
+    use_cases: list[str] = Field(default_factory=list)
+    capabilities: list[str] = Field(default_factory=lambda: ["chat"])
     is_active: bool = True
     is_default: bool = False
     is_fallback: bool = False

@@ -38,7 +38,7 @@ from app.utils.database import get_db_session
 
 router = APIRouter()
 case_editor = require_role(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.TEST_MANAGER, UserRole.TESTER)
-case_reviewer = require_role(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.TEST_MANAGER, UserRole.AUDITOR)
+case_reviewer = require_role(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.TEST_MANAGER)
 
 
 class ReviewDecisionRequest(BaseModel):

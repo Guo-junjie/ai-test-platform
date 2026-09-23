@@ -3,10 +3,13 @@
     <aside class="session-panel">
       <div class="session-panel-header">
         <div><div class="panel-title">知识问答</div><div class="panel-subtitle">历史会话自动保存</div></div>
-        <el-button type="primary" :icon="Plus" circle title="新建会话" @click="startNewSession" />
+        <el-button type="primary" :icon="Plus" circle title="新建会话" aria-label="新建会话" @click="startNewSession" />
       </div>
-      <el-input v-model="sessionKeyword" :prefix-icon="Search" clearable placeholder="搜索历史会话"
+      <el-input v-model="sessionKeyword" :prefix-icon="Search" clearable placeholder="搜索历史会话" aria-label="搜索历史会话"
         @keyup.enter="loadConversations" @clear="loadConversations" />
+      <el-alert v-if="sessionError" :title="sessionError" type="error" show-icon :closable="false">
+        <template #default><el-button link type="primary" @click="loadConversations">重试</el-button></template>
+      </el-alert>
       <div class="session-list" v-loading="sessionLoading">
         <el-empty v-if="!sessionLoading && !conversations.length" :image-size="70" description="暂无历史会话" />
         <div v-for="conversation in conversations" :key="conversation.id"
@@ -17,18 +20,19 @@
             <div class="session-meta"><span>{{ conversation.project_name || '全部项目' }}</span><span>{{ relativeTime(conversation.last_message_at) }}</span></div>
           </div>
           <div class="session-actions" @click.stop>
-            <el-button text :icon="EditPen" title="重命名" @click="renameConversation(conversation)" />
-            <el-button text type="danger" :icon="Delete" title="删除" @click="removeConversation(conversation)" />
+            <el-button text :icon="EditPen" title="重命名" aria-label="重命名会话" @click="renameConversation(conversation)" />
+            <el-button text type="danger" :icon="Delete" title="删除" aria-label="删除会话" @click="removeConversation(conversation)" />
           </div>
         </div>
       </div>
     </aside>
+    <button v-if="mobileHistoryOpen" class="session-mask" type="button" aria-label="关闭历史会话" @click="mobileHistoryOpen = false"></button>
 
     <main class="chat-panel">
       <header class="chat-header">
-        <div><div class="chat-title">{{ activeConversation?.title || '新对话' }}</div><div class="chat-subtitle">基于企业知识库回答，并保留引用来源</div></div>
+        <div class="chat-heading"><el-button class="mobile-history-button" text :icon="Tickets" aria-label="打开历史会话" @click="mobileHistoryOpen = true" /><div><div class="chat-title">{{ activeConversation?.title || '新对话' }}</div><div class="chat-subtitle">基于企业知识库回答，并保留引用来源</div></div></div>
         <div class="chat-actions">
-          <el-select v-model="projectFilter" placeholder="全部项目知识" clearable
+          <el-select v-model="projectFilter" placeholder="全部项目知识" clearable aria-label="知识问答项目范围"
             :disabled="messages.length > 0 || asking" style="width: 210px">
             <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
           </el-select>
@@ -37,6 +41,9 @@
       </header>
 
       <div ref="msgListRef" class="msg-list">
+        <el-alert v-if="messageError" :title="messageError" type="error" show-icon :closable="false" style="margin-bottom: 14px">
+          <template #default><el-button link type="primary" @click="selectConversation(activeConversationId, true)">重试</el-button></template>
+        </el-alert>
         <div v-if="messageLoading" class="center-state"><el-icon class="is-loading"><Loading /></el-icon><span>正在读取会话…</span></div>
         <div v-else-if="!messages.length" class="welcome-state">
           <div class="welcome-icon">AI</div><h2>想了解哪些测试知识？</h2>
@@ -85,7 +92,7 @@
 
       <div class="qa-input-wrap">
         <div class="qa-input">
-          <el-input v-model="input" type="textarea" :autosize="{ minRows: 2, maxRows: 6 }" resize="none"
+          <el-input v-model="input" type="textarea" :autosize="{ minRows: 2, maxRows: 6 }" resize="none" aria-label="知识问答输入框"
             placeholder="输入问题，Enter 发送，Shift+Enter 换行" :disabled="asking" @keydown.enter.exact.prevent="handleAsk" />
           <el-button type="primary" :loading="asking" :disabled="!input.trim()" @click="handleAsk">发送</el-button>
         </div>
@@ -94,7 +101,7 @@
     </main>
 
     <el-dialog v-model="feedbackDialogVisible" title="告诉我们哪里没帮助" width="480px">
-      <el-input v-model="feedbackComment" type="textarea" :rows="3" placeholder="可选：答案与问题无关、引用不准确或内容已经过时…" />
+      <el-input v-model="feedbackComment" type="textarea" :rows="3" aria-label="反馈说明" placeholder="可选：答案与问题无关、引用不准确或内容已经过时…" />
       <template #footer><el-button @click="feedbackDialogVisible = false">取消</el-button><el-button type="primary" @click="confirmFeedbackDown">提交反馈</el-button></template>
     </el-dialog>
   </div>
@@ -103,7 +110,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, EditPen, Loading, Plus, Search } from '@element-plus/icons-vue'
+import { Delete, EditPen, Loading, Plus, Search, Tickets } from '@element-plus/icons-vue'
 import { knowledgeApi, projectApi } from '@/api'
 
 interface QaSource { index: number; kb_type: string; source_ref: string; source: string; score: number; content: string }
@@ -116,7 +123,10 @@ const activeConversationId = ref('')
 const projectFilter = ref('')
 const sessionKeyword = ref('')
 const sessionLoading = ref(false)
+const sessionError = ref('')
+const mobileHistoryOpen = ref(false)
 const messageLoading = ref(false)
+const messageError = ref('')
 const messages = ref<ChatMsg[]>([])
 const input = ref('')
 const asking = ref(false)
@@ -156,24 +166,31 @@ function scrollToBottom(): void { void nextTick(() => { if (msgListRef.value) ms
 
 async function loadConversations(selectFirst = false): Promise<void> {
   sessionLoading.value = true
+  sessionError.value = ''
   try {
     const res: any = await knowledgeApi.listConversations({ q: sessionKeyword.value.trim() || undefined, page: 1, page_size: 100 })
     conversations.value = res?.data?.list || []
     if (selectFirst && !activeConversationId.value && conversations.value.length) await selectConversation(conversations.value[0].id)
-  } catch { conversations.value = [] } finally { sessionLoading.value = false }
+  } catch (error: any) {
+    sessionError.value = error?.message || '历史会话加载失败'
+  } finally { sessionLoading.value = false }
 }
-async function selectConversation(id: string): Promise<void> {
-  if (asking.value || id === activeConversationId.value) return
-  activeConversationId.value = id; messageLoading.value = true
+async function selectConversation(id: string, force = false): Promise<void> {
+  if (asking.value || (!force && id === activeConversationId.value)) return
+  activeConversationId.value = id; messageLoading.value = true; mobileHistoryOpen.value = false
+  messageError.value = ''
   try {
     const res: any = await knowledgeApi.getConversation(id); const data = res?.data || {}
     messages.value = (data.messages || []).map(mapMessage); projectFilter.value = data.conversation?.project_id || ''
     const index = conversations.value.findIndex((item) => item.id === id)
     if (index >= 0 && data.conversation) conversations.value[index] = { ...conversations.value[index], ...data.conversation }
     scrollToBottom()
-  } catch { startNewSession() } finally { messageLoading.value = false }
+  } catch (error: any) {
+    messages.value = []
+    messageError.value = error?.message || '会话内容加载失败'
+  } finally { messageLoading.value = false }
 }
-function startNewSession(): void { if (asking.value) return; activeConversationId.value = ''; projectFilter.value = ''; messages.value = []; input.value = '' }
+function startNewSession(): void { if (asking.value) return; activeConversationId.value = ''; projectFilter.value = ''; messages.value = []; input.value = ''; messageError.value = '' }
 async function ensureConversation(): Promise<string> {
   if (activeConversationId.value) return activeConversationId.value
   const res: any = await knowledgeApi.createConversation({ project_id: projectFilter.value || undefined }); const conversation = res?.data as Conversation
@@ -249,5 +266,23 @@ onMounted(async () => {
 .msg-sources { margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--el-border-color); }.sources-toggle { padding: 0; font-size: 12px; }.sources-list { margin-top: 8px; }.source-item { margin-bottom: 7px; padding: 9px 11px; border: 1px solid var(--el-border-color-lighter); border-radius: 7px; background: var(--app-bg-card); font-size: 12px; }.source-head { justify-content: flex-start; }.source-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }.source-score { margin-left: auto; color: var(--el-text-color-secondary); }.source-content { margin-top: 6px; color: var(--el-text-color-regular); line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
 .msg-feedback { display: flex; align-items: center; gap: 2px; margin-top: 8px; }.feedback-done { margin-left: 6px; color: var(--el-color-success); font-size: 12px; }.elapsed { margin-left: auto; color: var(--el-text-color-secondary); font-size: 11px; }
 .qa-input-wrap { flex-shrink: 0; padding: 14px clamp(20px, 5vw, 72px) 16px; border-top: 1px solid var(--el-border-color-lighter); }.qa-input { display: flex; align-items: flex-end; gap: 10px; }.qa-input :deep(.el-textarea__inner) { min-height: 58px !important; border-radius: 10px; }.qa-input .el-button { height: 42px; min-width: 76px; }.input-tip { margin-top: 7px; text-align: center; color: var(--el-text-color-secondary); font-size: 11px; }
+.mobile-history-button,.session-mask { display: none; }
+.chat-heading { display: flex; align-items: center; min-width: 0; }
 @media (max-width: 900px) { .qa-workspace { grid-template-columns: 230px minmax(0, 1fr); }.chat-header { align-items: flex-start; }.chat-actions { flex-direction: column; align-items: flex-end; }.msg-bubble { max-width: 88%; } }
+@media (max-width: 720px) {
+  .qa-workspace { position: relative; display: block; height: calc(100dvh - 88px); min-height: 520px; }
+  .session-panel { position: absolute; inset: 0 auto 0 0; z-index: 12; width: min(86vw, 320px); transform: translateX(-105%); transition: transform .2s ease; box-shadow: var(--el-box-shadow-dark); }
+  .session-panel:has(+ .session-mask) { transform: translateX(0); }
+  .session-mask { display: block; position: absolute; inset: 0; z-index: 11; width: 100%; border: 0; background: rgba(15,23,42,.38); }
+  .mobile-history-button { display: inline-flex; margin-right: 4px; }
+  .chat-panel { height: 100%; }
+  .chat-header { padding: 12px; gap: 8px; }
+  .chat-actions { align-items: stretch; }
+  .chat-actions :deep(.el-select) { width: 160px !important; }
+  .msg-list { padding: 18px 12px; }
+  .msg-avatar { flex-basis: 30px; height: 30px; }
+  .msg-bubble { max-width: calc(100% - 42px); }
+  .qa-input-wrap { padding: 10px 12px 12px; }
+  .input-tip { display: none; }
+}
 </style>

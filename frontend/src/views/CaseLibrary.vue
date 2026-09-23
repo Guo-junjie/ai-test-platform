@@ -56,7 +56,7 @@
           @clear="onFilterChange"
         >
           <template #append>
-            <el-button icon="Search" @click="onFilterChange" />
+            <el-button icon="Search" aria-label="搜索测试用例" title="搜索" @click="onFilterChange" />
           </template>
         </el-input>
         <span class="filter-label" style="margin-left: 8px">来源：</span>

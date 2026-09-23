@@ -3,11 +3,14 @@
     <!-- 侧边栏 -->
     <el-aside
       :width="
-        isCollapse
+        isMobile
+          ? 'var(--app-sidebar-width)'
+          : isCollapse
           ? 'var(--app-sidebar-collapsed-width)'
           : 'var(--app-sidebar-width)'
       "
       class="sidebar"
+      :class="{ 'mobile-sidebar': isMobile, 'mobile-open': mobileMenuOpen }"
     >
       <div class="logo">
         <el-icon size="24" color="var(--app-accent)"><Monitor /></el-icon>
@@ -15,7 +18,8 @@
       </div>
       <!-- 菜单颜色统一由 theme.css 的 --el-menu-* / --app-sidebar-* 令牌驱动，
            不再使用内联颜色 prop，以便三个视觉变体自由切换 -->
-      <el-menu :default-active="activeMenu" :collapse="isCollapse" router>
+      <el-menu :default-active="activeMenu" :collapse="!isMobile && isCollapse" router @select="onMenuSelect">
+        <template v-if="!authStore.isAuditor">
         <!-- 工作台 -->
         <el-menu-item index="/dashboard">
           <el-icon><DataLine /></el-icon>
@@ -76,6 +80,7 @@
           <el-menu-item index="/doc-review">接口文档评审</el-menu-item>
           <el-menu-item v-if="authStore.isAdmin" index="/sources">仓库配置</el-menu-item>
         </el-sub-menu>
+        </template>
 
         <!-- 系统 -->
         <el-sub-menu index="g-system">
@@ -86,9 +91,6 @@
           <el-menu-item v-if="authStore.isAdmin" index="/user-management"
             >用户管理</el-menu-item
           >
-          <el-menu-item v-if="canAudit" index="/approvals"
-            >审核中心</el-menu-item
-          >
           <el-menu-item index="/notifications">消息通知</el-menu-item>
           <el-menu-item v-if="authStore.isAdmin" index="/settings"
             >基础配置</el-menu-item
@@ -96,21 +98,21 @@
           <el-menu-item v-if="authStore.isAdmin" index="/settings/models"
             >AI 模型配置</el-menu-item
           >
-          <el-menu-item index="/settings/quality-gate">质量门禁</el-menu-item>
+          <el-menu-item v-if="!authStore.isAuditor" index="/settings/quality-gate">质量门禁</el-menu-item>
           <el-menu-item v-if="authStore.isAdmin || authStore.isAuditor" index="/settings/audit">审计日志</el-menu-item>
           <el-menu-item index="/profile">个人设置</el-menu-item>
         </el-sub-menu>
       </el-menu>
     </el-aside>
+    <div v-if="isMobile && mobileMenuOpen" class="mobile-mask" aria-hidden="true" @click="mobileMenuOpen = false"></div>
 
     <!-- 主内容区 -->
     <el-container>
       <el-header class="header">
         <div class="header-left">
-          <el-icon class="collapse-btn" @click="isCollapse = !isCollapse">
-            <Fold v-if="!isCollapse" />
-            <Expand v-else />
-          </el-icon>
+          <el-button text class="collapse-btn" :aria-label="isMobile ? '打开或关闭导航菜单' : '折叠或展开导航菜单'" @click="toggleNavigation">
+            <el-icon><Expand v-if="isMobile || isCollapse" /><Fold v-else /></el-icon>
+          </el-button>
           <span class="header-divider" aria-hidden="true"></span>
           <!-- 当前页面标题：作为主内容区的视觉起点（面包屑已移除，侧栏已表达位置） -->
           <span class="header-title">{{ currentTitle }}</span>
@@ -150,7 +152,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from "vue";
+import { ref, computed, onMounted, onBeforeUnmount } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import NotificationBell from "@/components/NotificationBell.vue";
@@ -164,21 +166,30 @@ import {
 const route = useRoute();
 const router = useRouter();
 const isCollapse = ref(false);
+const isMobile = ref(false);
+const mobileMenuOpen = ref(false);
 const authStore = useAuthStore();
 
 const activeMenu = computed(() => route.path);
 const currentTitle = computed(() => (route.meta?.title as string) || "");
-
-/** 审核中心可见性：审核员或超级管理员 */
-const canAudit = computed<boolean>(
-  () => authStore.isAuditor || authStore.isSuperAdmin,
-);
 
 /** 当前用户角色中文名（统一取自角色字典） */
 const roleLabel = computed<string>(() => toRoleLabel(authStore.role));
 
 /** 当前用户角色 tag 颜色（统一取自角色字典） */
 const roleTagType = computed(() => toRoleTagType(authStore.role));
+
+function updateViewport() {
+  isMobile.value = window.innerWidth <= 768;
+  if (!isMobile.value) mobileMenuOpen.value = false;
+}
+function toggleNavigation() {
+  if (isMobile.value) mobileMenuOpen.value = !mobileMenuOpen.value;
+  else isCollapse.value = !isCollapse.value;
+}
+function onMenuSelect() { if (isMobile.value) mobileMenuOpen.value = false }
+onMounted(() => { updateViewport(); window.addEventListener('resize', updateViewport) })
+onBeforeUnmount(() => window.removeEventListener('resize', updateViewport))
 
 function handleUserCommand(cmd: string) {
   if (cmd === "logout") {
@@ -245,7 +256,6 @@ function handleUserCommand(cmd: string) {
 
 .collapse-btn {
   font-size: 18px;
-  cursor: pointer;
   color: var(--app-text-secondary);
   transition: color 0.16s ease;
 }
@@ -310,5 +320,22 @@ function handleUserCommand(cmd: string) {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+}
+
+.mobile-mask { display: none; }
+@media (max-width: 768px) {
+  .mobile-sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 2100;
+    transform: translateX(-100%);
+    box-shadow: var(--el-box-shadow-dark);
+  }
+  .mobile-sidebar.mobile-open { transform: translateX(0); }
+  .mobile-mask { display: block; position: fixed; inset: 0; z-index: 2099; background: rgba(15, 23, 42, .42); }
+  .header { padding: 0 12px; }
+  .header-right { gap: 8px; }
+  .username, .role-tag, .header-divider { display: none; }
+  .main-content { min-width: 0; padding: 12px; overflow-x: hidden; }
 }
 </style>

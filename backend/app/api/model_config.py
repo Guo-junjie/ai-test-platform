@@ -60,6 +60,9 @@ REQUIRED_ROUTING_FIELDS: tuple[str, ...] = (
 OPTIONAL_ROUTING_FIELDS: tuple[str, ...] = tuple(
     field for field in ROUTING_FIELDS if field not in REQUIRED_ROUTING_FIELDS
 )
+MODEL_CAPABILITIES = {"chat", "embedding"}
+ROUTING_CAPABILITY = {field: "chat" for field in ROUTING_FIELDS}
+ROUTING_CAPABILITY["embedding_model_id"] = "embedding"
 
 
 # ==================== 请求模型 ====================
@@ -79,6 +82,7 @@ class CreateModelConfigRequest(BaseModel):
     timeout: int = 120
     max_retries: int = 3
     use_cases: list[str] = Field(default_factory=list)
+    capabilities: list[str] = Field(default_factory=lambda: ["chat"])
     is_default: bool = False
     is_fallback: bool = False
     is_active: bool = True
@@ -98,6 +102,7 @@ class UpdateModelConfigRequest(BaseModel):
     timeout: int | None = None
     max_retries: int | None = None
     use_cases: list[str] | None = None
+    capabilities: list[str] | None = None
     is_default: bool | None = None
     is_fallback: bool | None = None
     is_active: bool | None = None
@@ -137,6 +142,18 @@ def _parse_provider(provider: str) -> ModelProvider:
         raise HTTPException(400, f"无效的 provider: {provider}。可选: {valid}")
 
 
+def _validate_capabilities(capabilities: list[str], provider: ModelProvider) -> list[str]:
+    normalized = list(dict.fromkeys(str(item).strip().lower() for item in capabilities if str(item).strip()))
+    invalid = set(normalized) - MODEL_CAPABILITIES
+    if invalid:
+        raise HTTPException(400, f"未知模型能力: {', '.join(sorted(invalid))}")
+    if not normalized:
+        raise HTTPException(400, "至少声明一项模型能力")
+    if provider == ModelProvider.ANTHROPIC and "embedding" in normalized:
+        raise HTTPException(400, "Anthropic 协议不提供 Embeddings 接口，不能声明 embedding 能力")
+    return normalized
+
+
 def _masked_api_key(config: AIModelConfig) -> str:
     """解密后脱敏展示 API Key；解密失败返回固定掩码。"""
     if not config.api_key_encrypted:
@@ -163,6 +180,7 @@ def _config_to_dict(config: AIModelConfig) -> dict[str, Any]:
         "timeout": config.timeout,
         "max_retries": config.max_retries,
         "use_cases": config.use_cases or [],
+        "capabilities": config.capabilities or ["chat"],
         "is_active": bool(config.is_active),
         "is_default": bool(config.is_default),
         "is_fallback": bool(config.is_fallback),
@@ -251,6 +269,7 @@ async def create_model_config(
 ):
     """创建模型配置（API Key 加密存储，仅管理员）。"""
     provider = _parse_provider(req.provider)
+    capabilities = _validate_capabilities(req.capabilities, provider)
 
     if not req.api_key:
         raise HTTPException(400, "api_key 不能为空")
@@ -269,6 +288,7 @@ async def create_model_config(
         timeout=req.timeout,
         max_retries=req.max_retries,
         use_cases=req.use_cases,
+        capabilities=capabilities,
         is_active=req.is_active,
         is_default=req.is_default,
         is_fallback=req.is_fallback,
@@ -332,6 +352,13 @@ async def update_model_config(
         value = getattr(req, field)
         if value is not None:
             setattr(config, field, value)
+
+    if req.capabilities is not None or req.provider is not None:
+        provider = config.provider if req.provider is None else _parse_provider(req.provider)
+        config.capabilities = _validate_capabilities(
+            req.capabilities if req.capabilities is not None else list(config.capabilities or ["chat"]),
+            provider,
+        )
 
     if req.is_default is not None:
         config.is_default = req.is_default
@@ -418,6 +445,35 @@ async def test_model_connection(
         raise HTTPException(400, "api_base_url 未配置")
 
     provider = config.provider.value if config.provider else "custom"
+    capabilities = list(config.capabilities or ["chat"])
+    if "embedding" in capabilities:
+        from app.modules.ai.model_client import UnifiedModelClient
+        from app.modules.ai.model_config import ModelConfig as RuntimeModelConfig
+
+        try:
+            client = UnifiedModelClient(RuntimeModelConfig(
+                config_id=config.id, name=config.name, provider=provider,
+                api_base_url=base_url, api_key=api_key, model_name=config.model_name,
+                timeout=min(config.timeout or 30, 30), max_retries=0,
+                capabilities=capabilities,
+            ))
+            vectors = await client.embed(["企业自动化测试平台嵌入能力验证"])
+            dimension = len(vectors[0]) if vectors and vectors[0] else 0
+            if dimension <= 0:
+                raise ValueError("嵌入接口未返回有效向量")
+            return {
+                "code": 0,
+                "data": {"reachable": True, "capability": "embedding", "dimension": dimension,
+                         "model_name": config.model_name},
+                "message": f"嵌入能力验证成功，向量维度 {dimension}",
+            }
+        except Exception as exc:
+            logger.warning(f"Embedding capability test failed: {config_id}: {exc.__class__.__name__}")
+            return {
+                "code": 1,
+                "data": {"reachable": False, "capability": "embedding", "model_name": config.model_name},
+                "message": f"嵌入能力验证失败: {exc}",
+            }
     if provider == "anthropic" or "/anthropic" in base_url.lower():
         probe_url = f"{base_url}/v1/models" if not base_url.endswith("/v1") else f"{base_url}/models"
         headers = {
@@ -521,11 +577,19 @@ async def update_model_routing(
     for field, cfg_id in provided.items():
         if cfg_id is None:
             continue
-        exists = await db.execute(
-            select(AIModelConfig.id).where(AIModelConfig.id == cfg_id)
-        )
-        if exists.scalar_one_or_none() is None:
+        config = (await db.execute(
+            select(AIModelConfig).where(AIModelConfig.id == cfg_id)
+        )).scalar_one_or_none()
+        if config is None:
             raise HTTPException(400, f"{field} 指向的模型配置不存在: {cfg_id}")
+        if not config.is_active:
+            raise HTTPException(400, f"{field} 不能使用已禁用模型: {config.name}")
+        required_capability = ROUTING_CAPABILITY[field]
+        if required_capability not in (config.capabilities or ["chat"]):
+            raise HTTPException(
+                400,
+                f"{field} 需要 {required_capability} 能力，模型「{config.name}」未声明该能力",
+            )
 
     routing = await _load_routing(db)
 

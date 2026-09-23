@@ -3,11 +3,11 @@
 
 提供：
 - POST /login — 用户登录（返回 JWT token）
-- POST /register、POST /users — 新建用户（super_admin 立即生效 / admin 走审批）
+- POST /register、POST /users — 新建用户（管理员直接创建普通业务账号）
 - GET /me — 获取当前用户信息
 - GET /users — 用户列表（管理员）
-- PUT /users/{user_id}/role — 更新用户角色（super_admin 立即 / admin 走审批）
-- DELETE /users/{user_id} — 删除用户（super_admin 立即 / admin 走审批）
+- PUT /users/{user_id}/role — 更新用户角色（特权角色仅超级管理员可授予）
+- DELETE /users/{user_id} — 删除用户（有关联运行时自动软删除）
 """
 
 import uuid
@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.database import ChangeRequest, TestRun, User, UserRole
+from app.models.database import TestRun, User, UserRole
 from app.modules.auth.auth_service import AuthService
 from app.modules.auth.dependencies import get_current_user, require_manager
 from app.modules.audit.audit_service import AuditService
@@ -44,13 +44,13 @@ class RegisterRequest(BaseModel):
     username: str
     email: str
     password: str
-    # super_admin / admin / test_manager / tester / developer / auditor / viewer
+    # super_admin / admin / test_manager / tester / developer / viewer
     role: str = "viewer"
 
 
 class UpdateRoleRequest(BaseModel):
     """更新角色请求"""
-    # super_admin / admin / test_manager / tester / developer / auditor / viewer
+    # super_admin / admin / test_manager / tester / developer / viewer
     role: str
 
 
@@ -74,8 +74,29 @@ class UpdateStatusRequest(BaseModel):
 # ==================== 共享助手 ====================
 
 VALID_ROLE_HINT = (
-    "super_admin/admin/test_manager/tester/developer/auditor/viewer"
+    "super_admin/admin/test_manager/tester/developer/viewer"
 )
+STANDARD_ROLES = {
+    UserRole.TEST_MANAGER,
+    UserRole.TESTER,
+    UserRole.DEVELOPER,
+    UserRole.VIEWER,
+}
+PRIVILEGED_ROLES = {UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.AUDITOR}
+
+
+def _validate_managed_role(actor: User, role: UserRole) -> None:
+    """管理员只能授予普通业务角色；审核员仅作为历史兼容角色保留。"""
+    if role == UserRole.AUDITOR:
+        raise HTTPException(400, "审核员已退出默认角色体系，不能再新建或授予")
+    if actor.role == UserRole.ADMIN and role not in STANDARD_ROLES:
+        raise HTTPException(403, "管理员只能授予测试经理、测试人员、开发人员或只读用户角色")
+
+
+def _validate_managed_target(actor: User, target: User) -> None:
+    """普通管理员不能管理管理员、超级管理员或历史合规审计账号。"""
+    if actor.role == UserRole.ADMIN and target.role in PRIVILEGED_ROLES:
+        raise HTTPException(403, "管理员不能管理特权账号")
 
 
 async def apply_delete_user(session: AsyncSession, uid: uuid.UUID) -> dict[str, Any]:
@@ -185,8 +206,7 @@ async def register(
     """
     新建用户。
 
-    - SUPER_ADMIN 发起：立即创建生效。
-    - ADMIN 发起：生成 pending 的 ChangeRequest，待审核员审批后生效。
+    管理员创建普通业务账号立即生效；特权角色只能由超级管理员授予。
 
     Args:
         req: 注册请求（用户名、邮箱、密码、角色）。
@@ -196,76 +216,37 @@ async def register(
         role = UserRole(req.role)
     except ValueError:
         raise HTTPException(400, f"无效的角色: {req.role}。可选: {VALID_ROLE_HINT}")
+    _validate_managed_role(current_user, role)
 
     if len(req.password.encode("utf-8")) > 72:
         raise HTTPException(400, "密码过长，bcrypt 限制明文不超过 72 字节")
 
     ip = request.client.host if request.client else None
 
-    # 超级管理员：立即生效
-    if current_user.role == UserRole.SUPER_ADMIN:
-        try:
-            user = await AuthService.create_user(
-                username=req.username,
-                email=req.email,
-                password=req.password,
-                role=role,
-                db=db,
-            )
-        except ValueError as e:
-            raise HTTPException(400, str(e))
-
-        await AuditService.log_action(
-            user_id=str(current_user.id),
-            action="register_user",
-            resource_type="user",
-            resource_id=str(user.id),
-            details={"username": req.username, "role": req.role},
-            ip_address=ip,
+    try:
+        user = await AuthService.create_user(
+            username=req.username, email=req.email, password=req.password, role=role, db=db,
         )
-
-        logger.info(f"User registered: {req.username} by {current_user.username}")
-
-        return {
-            "code": 0,
-            "data": AuthService.user_to_dict(user),
-            "message": "用户创建成功",
-        }
-
-    # 管理员：提交审批（密码此时即哈希，审批通过后直接落库，不再二次哈希）
-    hashed = AuthService.hash_password(req.password)
-    cr = ChangeRequest(
-        id=uuid.uuid4(),
-        type="create_user",
-        payload={
-            "username": req.username,
-            "email": req.email,
-            "hashed_password": hashed,
-            "role": req.role.value if isinstance(req.role, UserRole) else req.role,
-        },
-        requested_by=current_user.id,
-        status="pending",
-    )
-    db.add(cr)
-    await db.flush()
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
     await AuditService.log_action(
         user_id=str(current_user.id),
-        action="request_create_user",
-        resource_type="change_request",
-        resource_id=str(cr.id),
+        action="register_user",
+        resource_type="user",
+        resource_id=str(user.id),
         details={"username": req.username, "role": req.role},
         ip_address=ip,
     )
 
     logger.info(
-        f"Create-user request submitted: {req.username} by {current_user.username}"
+        f"User registered: {req.username} by {current_user.username}"
     )
 
     return {
         "code": 0,
-        "data": {"id": str(cr.id), "status": "pending"},
-        "message": "已提交审核，待审核员审批",
+        "data": AuthService.user_to_dict(user),
+        "message": "用户创建成功",
     }
 
 
@@ -417,8 +398,7 @@ async def delete_user(
     """
     删除用户。
 
-    - SUPER_ADMIN 发起：立即删除（有关联测试任务时降级为软删）。
-    - ADMIN 发起：生成 pending 的 ChangeRequest，待审核员审批后生效。
+    管理员可直接删除普通业务账号；有关联测试任务时自动软删除。
 
     禁止删除自己，禁止删除超级管理员。
     """
@@ -433,61 +413,31 @@ async def delete_user(
     target = await AuthService.get_user_by_id(user_id, db)
     if target is None:
         raise HTTPException(404, f"用户不存在: {user_id}")
+    _validate_managed_target(current_user, target)
     if target.role == UserRole.SUPER_ADMIN:
         raise HTTPException(400, "不能删除超级管理员")
 
     ip = request.client.host if request.client else None
 
-    # 超级管理员：立即生效
-    if current_user.role == UserRole.SUPER_ADMIN:
-        result = await apply_delete_user(db, uid)
-
-        await AuditService.log_action(
-            user_id=str(current_user.id),
-            action="delete_user",
-            resource_type="user",
-            resource_id=user_id,
-            details=result,
-            ip_address=ip,
-        )
-
-        logger.info(f"User deleted: {result['username']} by {current_user.username}")
-
-        return {
-            "code": 0,
-            "data": result,
-            "message": "用户已删除",
-        }
-
-    # 管理员：提交审批
-    cr = ChangeRequest(
-        id=uuid.uuid4(),
-        type="delete_user",
-        payload={"username": target.username},
-        requested_by=current_user.id,
-        target_user_id=uid,
-        status="pending",
-    )
-    db.add(cr)
-    await db.flush()
+    result = await apply_delete_user(db, uid)
 
     await AuditService.log_action(
         user_id=str(current_user.id),
-        action="request_delete_user",
-        resource_type="change_request",
-        resource_id=str(cr.id),
-        details={"target_user_id": user_id, "username": target.username},
+        action="delete_user",
+        resource_type="user",
+        resource_id=user_id,
+        details=result,
         ip_address=ip,
     )
 
     logger.info(
-        f"Delete-user request submitted: {target.username} by {current_user.username}"
+        f"User deleted: {result['username']} by {current_user.username}"
     )
 
     return {
         "code": 0,
-        "data": {"id": str(cr.id), "status": "pending"},
-        "message": "已提交审核，待审核员审批",
+        "data": result,
+        "message": "用户已删除",
     }
 
 
@@ -502,13 +452,13 @@ async def update_user_role(
     """
     更新用户角色。
 
-    - SUPER_ADMIN 发起：立即生效。
-    - ADMIN 发起：生成 pending 的 ChangeRequest，待审核员审批后生效。
+    角色变更立即生效；普通管理员不能管理或授予特权角色。
     """
     try:
         role = UserRole(req.role)
     except ValueError:
         raise HTTPException(400, f"无效的角色: {req.role}。可选: {VALID_ROLE_HINT}")
+    _validate_managed_role(current_user, role)
 
     try:
         uid = uuid.UUID(user_id)
@@ -517,65 +467,32 @@ async def update_user_role(
 
     ip = request.client.host if request.client else None
 
-    # 超级管理员：立即生效
-    if current_user.role == UserRole.SUPER_ADMIN:
-        user = await AuthService.update_user_role(user_id, role, db)
-        if user is None:
-            raise HTTPException(404, f"用户不存在: {user_id}")
-
-        await AuditService.log_action(
-            user_id=str(current_user.id),
-            action="update_user_role",
-            resource_type="user",
-            resource_id=user_id,
-            details={"username": user.username, "new_role": req.role},
-            ip_address=ip,
-        )
-
-        logger.info(
-            f"User role updated: {user.username} -> {req.role} by {current_user.username}"
-        )
-
-        return {
-            "code": 0,
-            "data": AuthService.user_to_dict(user),
-            "message": "角色更新成功",
-        }
-
-    # 管理员：提交审批
     target = await AuthService.get_user_by_id(user_id, db)
     if target is None:
         raise HTTPException(404, f"用户不存在: {user_id}")
-
-    cr = ChangeRequest(
-        id=uuid.uuid4(),
-        type="change_role",
-        payload={"role": req.role, "username": target.username},
-        requested_by=current_user.id,
-        target_user_id=uid,
-        status="pending",
-    )
-    db.add(cr)
-    await db.flush()
+    if uid == current_user.id:
+        raise HTTPException(400, "不能修改自己的角色")
+    _validate_managed_target(current_user, target)
+    user = await AuthService.update_user_role(user_id, role, db)
 
     await AuditService.log_action(
         user_id=str(current_user.id),
-        action="request_change_role",
-        resource_type="change_request",
-        resource_id=str(cr.id),
+        action="update_user_role",
+        resource_type="user",
+        resource_id=user_id,
         details={"target_user_id": user_id, "new_role": req.role},
         ip_address=ip,
     )
 
     logger.info(
-        f"Change-role request submitted: {target.username} -> {req.role} "
+        f"User role updated: {target.username} -> {req.role} "
         f"by {current_user.username}"
     )
 
     return {
         "code": 0,
-        "data": {"id": str(cr.id), "status": "pending"},
-        "message": "已提交审核，待审核员审批",
+        "data": AuthService.user_to_dict(user),
+        "message": "角色更新成功",
     }
 
 
@@ -601,6 +518,9 @@ async def update_user_status(
     user = await AuthService.get_user_by_id(user_id, db)
     if user is None:
         raise HTTPException(404, f"用户不存在: {user_id}")
+    if uid == current_user.id:
+        raise HTTPException(400, "不能启用或禁用自己")
+    _validate_managed_target(current_user, user)
 
     user.is_active = req.is_active
     await db.flush()

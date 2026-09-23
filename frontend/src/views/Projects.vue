@@ -16,6 +16,9 @@
         <el-table-column prop="description" label="描述" min-width="220" show-overflow-tooltip>
           <template #default="{ row }">{{ row.description || '—' }}</template>
         </el-table-column>
+        <el-table-column label="项目类型" width="130">
+          <template #default="{ row }"><el-tag size="small" :type="projectKindTag(row.project_kind)">{{ projectKindLabel(row.project_kind) }}</el-tag></template>
+        </el-table-column>
         <el-table-column label="代码来源" width="110" align="center">
           <template #default="{ row }">
             <el-tag size="small" effect="plain">{{ sourceLabel(row.source_type) }}</el-tag>
@@ -48,20 +51,28 @@
       :close-on-click-modal="false"
     >
       <el-form label-width="112px" class="create-project-form">
+        <el-form-item label="项目类型" required>
+          <el-radio-group v-model="createForm.project_kind" class="project-kind-group">
+            <el-radio-button value="full">完整测试</el-radio-button>
+            <el-radio-button value="api_testing">接口测试</el-radio-button>
+            <el-radio-button value="source_analysis">源码分析</el-radio-button>
+          </el-radio-group>
+          <div class="field-hint">{{ projectKindDescription(createForm.project_kind) }}</div>
+        </el-form-item>
         <el-form-item label="名称" required>
           <el-input v-model="createForm.name" placeholder="例如：订单中心" maxlength="200" show-word-limit />
         </el-form-item>
         <el-form-item label="描述">
           <el-input v-model="createForm.description" type="textarea" :rows="2" placeholder="项目说明（可选）" />
         </el-form-item>
-        <el-form-item label="代码来源">
+        <el-form-item v-if="hasSourceCapability(createForm.project_kind)" label="代码来源">
           <el-radio-group v-model="createForm.source_type">
             <el-radio-button value="github">GitHub</el-radio-button>
             <el-radio-button value="svn">SVN</el-radio-button>
             <el-radio-button value="upload">本地上传</el-radio-button>
           </el-radio-group>
         </el-form-item>
-        <template v-if="createForm.source_type === 'github'">
+        <template v-if="hasSourceCapability(createForm.project_kind) && createForm.source_type === 'github'">
           <el-form-item label="仓库 URL">
             <el-input v-model="createForm.repo_url" placeholder="https://github.com/owner/repo（可留空，之后配置）" />
           </el-form-item>
@@ -72,7 +83,7 @@
             <el-input v-model="createForm.branch" placeholder="main" />
           </el-form-item>
         </template>
-        <template v-if="createForm.source_type === 'svn'">
+        <template v-if="hasSourceCapability(createForm.project_kind) && createForm.source_type === 'svn'">
           <el-form-item label="SVN URL">
             <el-input v-model="createForm.svn_url" placeholder="https://svn.example.com/svn/project" />
           </el-form-item>
@@ -83,7 +94,7 @@
             <el-input v-model="createForm.svn_password" type="password" show-password />
           </el-form-item>
         </template>
-        <template v-if="createForm.source_type === 'upload'">
+        <template v-if="hasSourceCapability(createForm.project_kind) && createForm.source_type === 'upload'">
           <el-form-item label="代码包">
             <el-upload
               drag
@@ -103,7 +114,7 @@
             </el-upload>
           </el-form-item>
         </template>
-        <el-form-item label="被测服务 URL">
+        <el-form-item v-if="hasTestingCapability(createForm.project_kind)" label="被测服务 URL">
           <el-input
             v-model="createForm.target_service_url"
             placeholder="http://192.168.1.100:8080（真实被测服务地址，选填）"
@@ -112,7 +123,7 @@
               <el-button :loading="probing" @click="handleProbeUrl(createForm.target_service_url)">连通测试</el-button>
             </template>
           </el-input>
-          <div class="field-hint">用于接口测试和连通性检查，可暂不填写，之后在项目环境中维护。</div>
+          <div class="field-hint">被测服务是项目的运行环境，不是项目类型。可暂不填写，创建后在“测试环境”中维护多套地址。</div>
         </el-form-item>
         <el-alert
           class="create-next-step-tip"
@@ -120,7 +131,7 @@
           :closable="false"
           show-icon
           title="创建后的下一步"
-          description="进入项目详情后，可继续上传代码或从仓库拉取并形成代码版本；测试任务将引用已登记的版本执行。"
+          :description="createNextStepDescription"
         />
       </el-form>
       <template #footer>
@@ -137,14 +148,18 @@
             <span class="mono-text">{{ current.id }}</span>
           </el-descriptions-item>
           <el-descriptions-item label="描述">{{ current.description || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="代码来源">
+          <el-descriptions-item label="项目类型">{{ projectKindLabel(current.project_kind) }}</el-descriptions-item>
+          <el-descriptions-item label="可用能力">
+            <el-tag v-for="capability in current.capabilities" :key="capability" size="small" effect="plain" style="margin-right: 6px">{{ capabilityLabel(capability) }}</el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item v-if="hasSourceCapability(current.project_kind)" label="代码来源">
             <span>{{ sourceLabel(current.source_type) }}</span>
             <el-button size="small" text type="primary" style="margin-left: 8px" @click="openEditSource">修改</el-button>
           </el-descriptions-item>
-          <el-descriptions-item label="仓库配置">
+          <el-descriptions-item v-if="hasSourceCapability(current.project_kind)" label="仓库配置">
             <el-link type="primary" :underline="false" @click="$router.push('/sources')">在仓库配置中维护</el-link>
           </el-descriptions-item>
-          <el-descriptions-item label="被测服务 URL">
+          <el-descriptions-item v-if="hasTestingCapability(current.project_kind)" label="被测服务 URL">
             <div style="display: flex; align-items: center; justify-content: space-between">
               <span class="mono-text" style="color: var(--el-color-primary)">
                 {{ current.target_service_url || (current.source_config && current.source_config.target_service_url) || (current.coverage_config?.services?.length ? '由覆盖率 Agent 提供测试入口' : '未配置（将尝试本地 Docker 构建）') }}
@@ -154,7 +169,7 @@
               </div>
             </div>
           </el-descriptions-item>
-          <el-descriptions-item label="覆盖率探针">
+          <el-descriptions-item v-if="hasSourceCapability(current.project_kind)" label="覆盖率探针">
             <div style="display: flex; align-items: center; justify-content: space-between">
               <span class="mono-text">
                 {{ formatCoverageInfo(current) }}
@@ -166,6 +181,7 @@
           </el-descriptions-item>
         </el-descriptions>
 
+        <template v-if="hasSourceCapability(current.project_kind)">
         <div class="section-header">
           <span>代码版本</span>
           <div>
@@ -228,8 +244,10 @@
           description="还没有代码版本 —— 上传压缩包或从仓库拉取"
           :image-size="80"
         />
+        </template>
 
         <!-- M1：测试环境档案 -->
+        <template v-if="hasTestingCapability(current.project_kind)">
         <div class="section-header">
           <span>测试环境</span>
           <el-button size="small" type="primary" plain @click="openEnvDialog()">新建环境</el-button>
@@ -271,6 +289,7 @@
         <div class="env-tip">
           执行测试计划时必须选择「已发布」环境；发布时固化配置为不可变修订版（含健康检查结果），保证历史运行可复现。
         </div>
+        </template>
       </div>
     </el-drawer>
 
@@ -347,7 +366,7 @@
             title="本地上传模式无需仓库配置，代码通过详情页「上传代码」按钮进入项目"
           />
         </template>
-        <el-form-item label="被测服务 URL">
+        <el-form-item v-if="hasTestingCapability(current?.project_kind)" label="被测服务 URL">
           <el-input
             v-model="editForm.target_service_url"
             placeholder="http://192.168.1.100:8080（真实环境地址）"
@@ -422,6 +441,15 @@ const SOURCE_LABELS: Record<string, string> = {
   upload: '本地上传',
 }
 
+const PROJECT_KIND_LABELS: Record<string, string> = {
+  full: '完整测试项目', api_testing: '接口测试项目', source_analysis: '源码分析项目',
+}
+const CAPABILITY_LABELS: Record<string, string> = {
+  requirements: '需求分析', knowledge: '知识库', code_versions: '代码版本', code_analysis: '代码解析',
+  api_docs: '接口文档', test_cases: '测试用例', test_plans: '测试计划', test_execution: '测试执行',
+  reports: '测试报告', defects: '缺陷管理', coverage: '代码覆盖率',
+}
+
 export default defineComponent({
   name: 'ProjectsView',
   components: { Plus, UploadFilled, Refresh, VideoPlay },
@@ -435,6 +463,7 @@ export default defineComponent({
       createForm: {
         name: '',
         description: '',
+        project_kind: 'full',
         source_type: 'github',
         target_service_url: '',
         repo_url: '',
@@ -496,10 +525,27 @@ export default defineComponent({
       },
     }
   },
+  computed: {
+    createNextStepDescription(): string {
+      if (this.createForm.project_kind === 'api_testing') return '创建后先导入接口文档或需求，生成测试用例，再配置测试环境并创建执行计划。'
+      if (this.createForm.project_kind === 'source_analysis') return '创建后上传代码或拉取仓库版本，用于代码解析与覆盖率分析；此类型不要求配置被测服务。'
+      return '创建后接入代码版本、导入接口或需求，并在测试环境中登记被测服务地址，再创建测试计划。'
+    },
+  },
   methods: {
     sourceLabel(t?: string): string {
       return SOURCE_LABELS[t || ''] || t || '—'
     },
+    projectKindLabel(kind?: string): string { return PROJECT_KIND_LABELS[kind || 'full'] || kind || '完整测试项目' },
+    projectKindTag(kind?: string): 'success' | 'warning' | 'info' { return kind === 'api_testing' ? 'success' : kind === 'source_analysis' ? 'warning' : 'info' },
+    projectKindDescription(kind?: string): string {
+      if (kind === 'api_testing') return '面向已部署服务：接口文档、用例、计划与执行；不要求上传源码。'
+      if (kind === 'source_analysis') return '面向代码仓库：代码解析与覆盖率；不配置被测服务。'
+      return '同时管理源码、接口资产、被测环境和自动化测试全流程。'
+    },
+    capabilityLabel(capability: string): string { return CAPABILITY_LABELS[capability] || capability },
+    hasSourceCapability(kind?: string): boolean { return kind !== 'api_testing' },
+    hasTestingCapability(kind?: string): boolean { return kind !== 'source_analysis' },
     formatTime(time?: string): string {
       if (!time) return '—'
       try {
@@ -512,6 +558,7 @@ export default defineComponent({
       this.createForm = {
         name: '',
         description: '',
+        project_kind: 'full',
         source_type: 'github',
         target_service_url: '',
         repo_url: '',
@@ -586,21 +633,22 @@ export default defineComponent({
         const payload: any = {
           name,
           description: this.createForm.description.trim() || undefined,
-          source_type: this.createForm.source_type,
+          project_kind: this.createForm.project_kind,
+          source_type: this.hasSourceCapability(this.createForm.project_kind) ? this.createForm.source_type : 'upload',
           source_config: {},
         }
-        if (this.createForm.target_service_url?.trim()) {
+        if (this.hasTestingCapability(this.createForm.project_kind) && this.createForm.target_service_url?.trim()) {
           payload.source_config.target_service_url = this.createForm.target_service_url.trim()
         }
         // 仓库配置随项目一起写入 source_config（后续「从仓库拉取」直接用）
-        if (this.createForm.source_type === 'github' && this.createForm.repo_url) {
+        if (this.hasSourceCapability(this.createForm.project_kind) && this.createForm.source_type === 'github' && this.createForm.repo_url) {
           payload.source_config = {
             ...payload.source_config,
             repo_url: this.createForm.repo_url,
             github_token: this.createForm.github_token || '',
             branch: this.createForm.branch || 'main',
           }
-        } else if (this.createForm.source_type === 'svn' && this.createForm.svn_url) {
+        } else if (this.hasSourceCapability(this.createForm.project_kind) && this.createForm.source_type === 'svn' && this.createForm.svn_url) {
           payload.source_config = {
             ...payload.source_config,
             svn_url: this.createForm.svn_url,
@@ -613,7 +661,7 @@ export default defineComponent({
         ElMessage.success(`项目「${name}」创建成功`)
 
         // 「本地上传」模式且选择了代码包：立即登记为第一个代码版本
-        if (newId && this.createForm.source_type === 'upload' && this.createUploadFile) {
+        if (newId && this.hasSourceCapability(this.createForm.project_kind) && this.createForm.source_type === 'upload' && this.createUploadFile) {
           try {
             await projectCodeApi.upload(newId, this.createUploadFile)
             ElMessage.success('代码包已上传为项目的第一个代码版本')
@@ -635,8 +683,8 @@ export default defineComponent({
     async openDetail(row: any): Promise<void> {
       this.current = row
       this.detailVisible = true
-      this.loadVersions()
-      this.loadEnvironments()
+      if (this.hasSourceCapability(row.project_kind)) this.loadVersions(); else this.versions = []
+      if (this.hasTestingCapability(row.project_kind)) this.loadEnvironments(); else this.environments = []
     },
     // ============ M1：测试环境档案 ============
     async loadEnvironments(): Promise<void> {

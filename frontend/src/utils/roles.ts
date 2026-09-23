@@ -15,7 +15,7 @@ export const ROLE_LABELS: Record<string, string> = {
   test_manager: '测试经理',
   tester: '测试工程师',
   developer: '开发工程师',
-  auditor: '审核员',
+  auditor: '合规审计员（兼容）',
   viewer: '访客',
 }
 
@@ -31,9 +31,9 @@ export const ROLE_COLORS: Record<string, RoleTagType> = {
 }
 
 /** 下拉选择用的角色选项列表（顺序即权限从高到低） */
-export const ROLE_OPTIONS: Array<{ value: string; label: string }> = Object.keys(ROLE_LABELS).map(
-  (value) => ({ value, label: ROLE_LABELS[value] })
-)
+export const ROLE_OPTIONS: Array<{ value: string; label: string }> = Object.keys(ROLE_LABELS)
+  .filter((value) => value !== 'auditor')
+  .map((value) => ({ value, label: ROLE_LABELS[value] }))
 
 /**
  * 获取角色中文名，未知角色回退为原始值。

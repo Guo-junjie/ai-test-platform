@@ -1,0 +1,28 @@
+services:
+  embedding-service:
+    build:
+      context: ./embedding-service
+    container_name: aitp-embedding
+    environment:
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-small-zh-v1.5}
+      EMBEDDING_CACHE_DIR: /models
+      HF_HOME: /models/huggingface
+      XDG_CACHE_HOME: /models/.cache
+    volumes:
+      - ./data/embedding-cache:/models
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1g
+    cpus: 2.0
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json,urllib.request; assert json.load(urllib.request.urlopen('http://127.0.0.1:8080/health'))['status']=='healthy'"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 180s

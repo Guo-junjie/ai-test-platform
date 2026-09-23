@@ -12,7 +12,7 @@
       </template>
       <el-alert
         title="企业级可配置 AI 模型管理"
-        description="支持 OpenAI / Azure OpenAI / 私有部署 vLLM / Ollama / 国产模型（通义千问/文心一言/DeepSeek）等任意 OpenAI 兼容 API。按使用场景（代码解析/用例生成/缺陷分析/修复建议）分配不同模型。"
+        description="每个模型必须声明真实能力。对话模型只能进入生成类路由，支持 Embeddings 接口的模型才能进入语义检索路由。"
         type="info"
         :closable="false"
         style="margin-bottom: 16px;"
@@ -21,6 +21,13 @@
         <el-table-column prop="name" label="名称" />
         <el-table-column prop="provider" label="提供商" width="120" />
         <el-table-column prop="model_name" label="模型" width="200" />
+        <el-table-column label="能力" width="150">
+          <template #default="{ row }">
+            <el-tag v-for="capability in row.capabilities" :key="capability" size="small" effect="plain" style="margin-right: 4px">
+              {{ capabilityLabels[capability] || capability }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="api_base_url" label="API 地址" show-overflow-tooltip />
         <el-table-column label="使用场景" width="200">
           <template #default="{ row }">
@@ -72,9 +79,9 @@
             style="width: 100%"
           >
             <el-option
-              v-for="cfg in modelConfigs"
+              v-for="cfg in modelsForRoute(item.key)"
               :key="cfg.id"
-              :label="cfg.name"
+              :label="`${cfg.name} · ${cfg.model_name}`"
               :value="cfg.id"
             />
           </el-select>
@@ -137,6 +144,13 @@
         <el-form-item label="最大重试次数">
           <el-input-number v-model="form.max_retries" :min="0" :max="10" />
         </el-form-item>
+        <el-form-item label="模型能力" prop="capabilities">
+          <el-checkbox-group v-model="form.capabilities">
+            <el-checkbox value="chat">对话 / 生成</el-checkbox>
+            <el-checkbox value="embedding" :disabled="form.provider === 'anthropic'">文本向量 Embeddings</el-checkbox>
+          </el-checkbox-group>
+          <div class="field-hint">能力会在保存路由和运行时双重校验，避免把聊天模型误当作嵌入模型。</div>
+        </el-form-item>
         <el-form-item label="使用场景">
           <el-select
             v-model="form.use_cases"
@@ -188,13 +202,14 @@ const useCaseLabels: Record<string, string> = {
   sql_generation: 'SQL生成',
   report_analysis: '报告分析',
 }
+const capabilityLabels: Record<string, string> = { chat: '对话生成', embedding: '文本向量' }
 
 /** 提供商下拉选项 */
 const providerOptions = [
-  { value: 'OPENAI', label: 'OpenAI / 兼容 API' },
-  { value: 'ANTHROPIC', label: 'Anthropic' },
-  { value: 'CUSTOM', label: '自定义（Azure/国产模型）' },
-  { value: 'LOCAL', label: '本地部署（vLLM/Ollama）' },
+  { value: 'openai', label: 'OpenAI / 兼容 API' },
+  { value: 'anthropic', label: 'Anthropic' },
+  { value: 'custom', label: '自定义（Azure/国产模型）' },
+  { value: 'local', label: '本地部署（vLLM/Ollama）' },
 ]
 
 /** 模型路由字段定义 */
@@ -212,6 +227,11 @@ const routingFields = [
   { key: 'embedding_model_id', label: '嵌入模型（语义检索）', required: false },
   { key: 'fallback_model_id', label: '备用模型', required: true },
 ] as const
+
+function modelsForRoute(key: string): any[] {
+  const capability = key === 'embedding_model_id' ? 'embedding' : 'chat'
+  return modelConfigs.value.filter((item) => item.is_active && (item.capabilities || ['chat']).includes(capability))
+}
 
 const modelConfigs = ref<any[]>([])
 const listLoading = ref(false)
@@ -245,7 +265,7 @@ const routingForm = reactive<Record<string, string>>({
 function defaultForm() {
   return {
     name: '',
-    provider: 'OPENAI',
+    provider: 'openai',
     model_name: '',
     api_base_url: '',
     api_key: '',
@@ -255,6 +275,7 @@ function defaultForm() {
     timeout: 60,
     max_retries: 3,
     use_cases: [] as string[],
+    capabilities: ['chat'] as string[],
     is_default: false,
     is_fallback: false,
     is_active: true,
@@ -268,6 +289,7 @@ const formRules: FormRules = {
   provider: [{ required: true, message: '请选择提供商', trigger: 'change' }],
   model_name: [{ required: true, message: '请输入模型名称', trigger: 'blur' }],
   api_base_url: [{ required: true, message: '请输入 API 地址', trigger: 'blur' }],
+  capabilities: [{ type: 'array', required: true, min: 1, message: '至少声明一项模型能力', trigger: 'change' }],
 }
 
 /** 兼容后端返回 {code,data} 或裸数组 / {configs:[]} 的多种形态 */
@@ -338,7 +360,7 @@ function openEditDialog(row: any): void {
   currentId.value = row.id
   Object.assign(form, defaultForm(), {
     name: row.name || '',
-    provider: row.provider || 'OPENAI',
+    provider: row.provider || 'openai',
     model_name: row.model_name || '',
     api_base_url: row.api_base_url || '',
     api_key: '', // 出于安全考虑不回填密钥，留空表示不修改
@@ -348,6 +370,7 @@ function openEditDialog(row: any): void {
     timeout: row.timeout ?? 60,
     max_retries: row.max_retries ?? 3,
     use_cases: Array.isArray(row.use_cases) ? [...row.use_cases] : [],
+    capabilities: Array.isArray(row.capabilities) ? [...row.capabilities] : ['chat'],
     is_default: !!row.is_default,
     is_fallback: !!row.is_fallback,
     is_active: row.is_active !== false,
