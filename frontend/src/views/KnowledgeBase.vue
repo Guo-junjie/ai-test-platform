@@ -77,7 +77,7 @@
           <div class="stat-item">
             <div class="stat-label">嵌入模型</div>
             <div class="stat-value text-ellipsis" :title="status.embedding_model_id || '未配置'">
-              {{ status.embedding_model_id || '未配置' }}
+              {{ status.embedding_model_name || '未配置' }}
             </div>
           </div>
         </el-col>
@@ -88,7 +88,15 @@
               <el-tag :type="status.retrieval_mode === 'semantic' ? 'success' : 'info'" effect="plain">
                 {{ status.retrieval_mode === 'semantic' ? '语义检索' : '关键词模式' }}
               </el-tag>
-              <span v-if="status.embedding_ready" class="ready-badge">✓ 语义就绪</span>
+              <span v-if="status.embedding_ready" class="ready-badge">
+                ✓ 语义就绪（{{ status.embedded_chunk_count }}/{{ status.chunk_count }}）
+              </span>
+              <span
+                v-else-if="status.embedding_configured && status.chunk_count > 0"
+                class="pending-badge"
+              >
+                向量待重建（{{ status.embedded_chunk_count }}/{{ status.chunk_count }}）
+              </span>
             </div>
           </div>
         </el-col>
@@ -521,7 +529,11 @@ interface KbStatus {
   chunk_count: number
   term_count: number
   embedding_model_id: string | null
+  embedding_model_name: string | null
+  embedding_configured: boolean
   embedding_ready: boolean
+  embedded_chunk_count: number
+  embedding_coverage: number
   retrieval_mode: string
   state: 'idle' | 'running' | 'failed'
   last_rebuild: string | null
@@ -575,7 +587,11 @@ const status = ref<KbStatus>({
   chunk_count: 0,
   term_count: 0,
   embedding_model_id: null,
+  embedding_model_name: null,
+  embedding_configured: false,
   embedding_ready: false,
+  embedded_chunk_count: 0,
+  embedding_coverage: 0,
   retrieval_mode: 'keyword',
   state: 'idle',
   last_rebuild: null,
@@ -751,7 +767,11 @@ async function loadStatus(): Promise<void> {
         chunk_count: newChunkCount,
         term_count: d.term_count ?? 0,
         embedding_model_id: d.embedding_model_id ?? null,
+        embedding_model_name: d.embedding_model_name ?? null,
+        embedding_configured: !!d.embedding_configured,
         embedding_ready: d.embedding_ready ?? false,
+        embedded_chunk_count: d.embedded_chunk_count ?? 0,
+        embedding_coverage: d.embedding_coverage ?? 0,
         retrieval_mode: d.retrieval_mode ?? 'keyword',
         state: newState,
         last_rebuild: d.last_rebuild ?? null,
@@ -1210,6 +1230,12 @@ onMounted(() => {
   font-size: 12px;
   font-weight: 600;
   color: var(--el-color-success);
+}
+.pending-badge {
+  margin-left: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--el-color-warning);
 }
 .chunk-box {
   background: var(--el-fill-color-light);

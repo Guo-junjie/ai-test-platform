@@ -317,6 +317,20 @@ async def get_kb_status(
         logger.warning(f"KB status count failed: {exc}")
     total = sum(chunk_counts.values())
 
+    # JSONB 会把 Python None 保存为 JSON ``null``，单用 ``IS NOT NULL`` 会把它
+    # 误判成有效向量。只统计 JSON 数组，避免“已配置模型”被展示成“语义已就绪”。
+    embedded_chunk_count = 0
+    try:
+        embedded_chunk_count = (
+            await db.execute(
+                select(func.count())
+                .select_from(KnowledgeChunk)
+                .where(func.jsonb_typeof(KnowledgeChunk.embedding) == "array")
+            )
+        ).scalar() or 0
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"KB embedding count failed: {exc}")
+
     term_count = 0
     try:
         term_count = (
@@ -346,9 +360,23 @@ async def get_kb_status(
     except Exception:
         kb_enabled = bool(settings.KB_RAG_ENABLED)
 
-    # 语义就绪信号：开关开 且 已配置嵌入模型；不做实时 probe（避免烧嵌入配额/延迟/崩溃）
-    embedding_ready = bool(kb_enabled) and bool(embedding_model_id)
-    retrieval_mode = "semantic" if embedding_ready else "keyword"
+    # 配置存在、向量真正落库且没有缺片，才声明“语义就绪”。不做实时 probe，避免
+    # 状态接口消耗推理资源；服务故障会由重建任务和向量完整度明确暴露。
+    embedding_configured = bool(embedding_model_id)
+    embedding_ready = (
+        bool(kb_enabled)
+        and embedding_configured
+        and total > 0
+        and embedded_chunk_count == total
+    )
+    retrieval_mode = (
+        "semantic"
+        if bool(kb_enabled) and embedding_configured and embedded_chunk_count > 0
+        else "keyword"
+    )
+    embedding_coverage = (
+        round(embedded_chunk_count / total * 100, 1) if total else 0.0
+    )
 
     state_info = {"state": "idle", "last_rebuild": None, "updated_at": None}
     try:
@@ -379,7 +407,10 @@ async def get_kb_status(
             "term_count": term_count,
             "embedding_model_id": embedding_model_id,
             "embedding_model_name": embedding_model_name,
+            "embedding_configured": embedding_configured,
             "embedding_ready": embedding_ready,
+            "embedded_chunk_count": embedded_chunk_count,
+            "embedding_coverage": embedding_coverage,
             "retrieval_mode": retrieval_mode,
             "state": state_info.get("state", "idle"),
             "last_rebuild": state_info.get("last_rebuild"),
