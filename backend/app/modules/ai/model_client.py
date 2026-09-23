@@ -18,18 +18,28 @@ class UnifiedModelClient:
     def __init__(self, config: ModelConfig):
         self.config = config
         self._client = None
+        self._openai_client_class = None
 
         if config.provider in {ModelProvider.OPENAI, ModelProvider.LOCAL}:
             try:
                 from openai import AsyncOpenAI
-                self._client = AsyncOpenAI(
-                    api_key=config.api_key,
-                    base_url=config.api_base_url,
-                    timeout=config.timeout,
-                    max_retries=config.max_retries,
-                )
+
+                # 只缓存客户端类型，不缓存 AsyncOpenAI 实例。Celery 任务大量使用
+                # asyncio.run()，每次都会创建并关闭 event loop；跨 loop 复用实例会
+                # 在连接回收时触发 ``RuntimeError: Event loop is closed``。
+                self._openai_client_class = AsyncOpenAI
             except ImportError:
                 logger.warning("openai package not installed, using httpx fallback")
+
+    def _create_openai_client(self):
+        if self._openai_client_class is None:
+            return None
+        return self._openai_client_class(
+            api_key=self.config.api_key,
+            base_url=self.config.api_base_url,
+            timeout=self.config.timeout,
+            max_retries=self.config.max_retries,
+        )
 
     async def chat(
         self,
@@ -76,13 +86,15 @@ class UnifiedModelClient:
             raise ValueError(f"Unsupported provider for embedding: {self.config.provider}")
 
     async def _embed_openai(self, texts: list[str]) -> list[list[float]]:
-        """OpenAI 兼容嵌入；有 openai SDK 客户端走 SDK，否则走 httpx。"""
-        if self._client:
-            response = await self._client.embeddings.create(
-                model=self.config.model_name,
-                input=texts,
-            )
-            return [d.embedding for d in response.data]
+        """OpenAI 兼容嵌入；SDK 客户端限定在当前 event loop 内使用并关闭。"""
+        client = self._create_openai_client()
+        if client:
+            async with client:
+                response = await client.embeddings.create(
+                    model=self.config.model_name,
+                    input=texts,
+                )
+                return [d.embedding for d in response.data]
         return await self._embed_openai_httpx(texts)
 
     async def _embed_openai_httpx(self, texts: list[str]) -> list[list[float]]:
@@ -107,7 +119,8 @@ class UnifiedModelClient:
         self, messages: list[dict], temp: float, max_tok: int, json_mode: bool
     ) -> str:
         """调用 OpenAI 兼容 API"""
-        if self._client:
+        client = self._create_openai_client()
+        if client:
             kwargs = {
                 "model": self.config.model_name,
                 "messages": messages,
@@ -117,8 +130,9 @@ class UnifiedModelClient:
             if json_mode:
                 kwargs["response_format"] = {"type": "json_object"}
 
-            response = await self._client.chat.completions.create(**kwargs)
-            return response.choices[0].message.content
+            async with client:
+                response = await client.chat.completions.create(**kwargs)
+                return response.choices[0].message.content
         else:
             # httpx fallback
             return await self._call_openai_httpx(messages, temp, max_tok, json_mode)
