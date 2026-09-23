@@ -36,8 +36,13 @@ def process_knowledge_document(self, doc_id: str) -> dict:
 
 async def _process_document(doc_id) -> dict:
     from app.modules.knowledge.document_indexer import index_document
+    from app.modules.ai.model_router import refresh_model_router_for_worker
 
     async with AsyncSessionLocal() as db:
+        # Celery 子进程拥有独立内存，API 进程内的模型配置更新不会同步过来；
+        # 同时每个 asyncio.run() 都会创建新事件循环，不能复用上次任务的异步客户端。
+        # 因此文档索引必须在每次任务开始时从数据库刷新路由并重建客户端。
+        await refresh_model_router_for_worker(db)
         return await index_document(db, doc_id)
 
 
@@ -95,6 +100,11 @@ async def _rebuild(kb_type: str | None, force_full: bool = False) -> dict:
 
     try:
         async with AsyncSessionLocal() as db:
+            # 模型配置和路由由 API 进程写入数据库，Celery Worker 的全局路由并不会
+            # 自动更新。逐任务刷新也能避免异步 HTTP 客户端跨 event loop 复用。
+            from app.modules.ai.model_router import refresh_model_router_for_worker
+
+            await refresh_model_router_for_worker(db)
             for t in types:
                 n = await rebuild_kb_type(db, t, force_full=force_full)
                 total += n
