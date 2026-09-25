@@ -1,58 +1,56 @@
-# AI 自动化测试平台 — 集成测试数据包 V1.0
+# 企业测试平台被测产品数据包
 
-一套自洽的测试数据：所有材料围绕同一个「电商订单中心」被测服务，
-接口文档与代码严格一致，需求/规范/术语可交叉验证。
-用于平台功能演示、培训与回归验证。
+`testdata` 只保留两套长期复用的开源被测产品。每套产品的数据相互独立，可用于验证平台的项目接入、需求解析、接口文档解析、AI 用例生成、用例评审、接口测试、缺陷与报告等基础流程。
 
-## 材料清单与对应平台功能
+## 产品清单
 
-| 材料 | 路径 | 平台功能 | 用法 |
-|------|------|---------|------|
-| 被测项目代码 | `project/order-service/` | 数据源上传 → 完整流水线 | 打包为 zip，测试任务页「上传代码」→ 启动测试 |
-| 接口文档 | `api/order-center-openapi.json` | 接口文档解析（OpenAPI） | 接口文档页上传 → 解析 → 导入接口资产 |
-| 需求文档 | `requirements/order-center-requirements.txt` | 需求文档解析 | 需求解析页上传（txt 格式） |
-| 覆盖率报告 | `coverage/coverage-python.xml` | 覆盖率手动上传（Cobertura） | 覆盖率页上传；或跑流水线自动采集（推荐） |
-| 测试规范 | `knowledge/order-test-spec.md` | 知识库文档 | 知识库页上传，AI 用例生成/缺陷分析/问答会引用 |
-| 业务术语表 | `knowledge/order-glossary.md` | 知识库术语 | 参考「术语表维护」人工录入（SKU/VIP 折扣/超卖等） |
-| PetClinic 接口文档 | `api/petclinic-openapi.json` | 接口文档解析（OpenAPI） | 对应虚拟机 `8301` 上运行的 Java 被测产品，含 43 个接口操作 |
-| E-Commerce 接口文档 | `api/ecommerce-openapi.json` | 接口文档解析（OpenAPI） | 对应虚拟机 `8302` 上运行的 Node.js 被测产品，含 10 个接口操作 |
+| 产品 | 技术栈 | 被测服务 URL | Swagger UI | 数据包 |
+|---|---|---|---|---|
+| Spring PetClinic REST | Java / Spring Boot | `http://192.168.125.128:8301/petclinic` | `http://192.168.125.128:8301/petclinic/swagger-ui.html` | [`spring-petclinic-rest/`](spring-petclinic-rest/README.md) |
+| RESTful E-Commerce | Node.js / Express | `http://192.168.125.128:8302` | `http://192.168.125.128:8302/api-docs` | [`restful-ecommerce/`](restful-ecommerce/README.md) |
 
-## 被测服务速览
+当前虚拟机部署目录为 `/opt/aitp-test-products`，容器使用 `restart: unless-stopped`，虚拟机重启后会自动恢复。若容器没有运行，可执行：
 
-- 技术栈：Python Flask + SQLite（平台自动识别 python_flask）
-- 接口：认证（注册/登录 JWT）、商品（列表/详情/上架）、订单（下单/查询/取消）
-- 业务规则：VIP 8 折、满 100 减 10（可叠加）、库存原子扣减、取消回滚、越权防护
-- 种子账号：`admin / admin123`（VIP）；种子商品：SKU-001/002/003（003 无库存）
+```bash
+cd /opt/ai-test-platform
+sudo docker compose -p aitp-test-products -f testdata/compose.yml up -d
+python3 testdata/smoke-test.py
+```
 
-## 推荐演示顺序（真实用户旅程）
+`-p aitp-test-products` 与虚拟机现有部署的 Compose 项目名一致，可继续管理已经创建的容器。首次部署到其他机器时也建议固定使用这个项目名。
 
-1. **接入代码**：打包 `project/order-service/` 为 zip → 测试任务页上传 → 启动完整流水线
-   （自动：技术栈识别 → AI 解析 → AI 用例生成 → 执行 → 缺陷分析 → 报告 → 覆盖率采集）
-2. **接口文档**：上传 `api/order-center-openapi.json` → 解析 → 导入接口资产
-3. **用例库**：从导入的接口 AI 生成用例 → 审核 → 采纳
-4. **知识库**：上传 `knowledge/order-test-spec.md`；术语表内容人工录入术语维护页
-5. **知识问答**：问「VIP 用户的折扣规则是什么」→ AI 应引用规范回答"8 折可与满减叠加"
-6. **定时任务**：关联用例集合，被测服务地址填运行中的 order-service
-7. **质量门禁/徽章**：数据源管理页配置 CI Token 与回调，README 引用徽章
+## 平台完整体验顺序
 
-## 验证基准（用于快速判断平台行为是否正确）
+对每个产品分别执行以下流程，避免把两个产品的数据导入同一个平台项目：
 
-| 场景 | 预期 |
-|------|------|
-| VIP 购 SKU-001 ×1 | 原价 399，最终价 **309.2**（399×0.8−10） |
-| 非 VIP 购 SKU-002 ×1 | 最终价 **119**（129 满 100 减 10） |
-| SKU-003 下单任意数量 | **409** 库存不足（库存 0） |
-| 无 token 访问 /api/v1/orders | **401** |
-| 重复取消同一订单 | 第二次 **409** |
-| stack 识别 | **python_flask**（requirements.txt 含 flask，置信度 ≥1.0） |
+1. 在平台创建项目，名称和被测服务 URL 参考上表。
+2. 在“测试资产”中选择“接口文档解析”，上传项目目录下的 `openapi.json`，解析后导入接口资产。
+3. 选择“需求文档解析”，上传 `requirements.md`，生成候选用例并完成人工评审、采纳和落库。
+4. 将 `test-spec.md` 上传知识库，将 `glossary.md` 中的术语录入项目术语表。
+5. 参考 `requests/` 中的请求体配置接口用例；需要鉴权时先执行登录接口并提取令牌。
+6. 建立测试计划并执行，检查运行明细、断言、失败原因、缺陷关联和测试报告。
 
-## 常驻的开源被测产品
+每个项目的 README 给出了具体接口、推荐用例和预期结果。
 
-虚拟机 `/opt/aitp-test-products` 还部署了两套独立开源产品，可直接作为平台项目的被测服务：
+## 数据维护
 
-| 产品 | 被测服务地址 | Swagger UI | 测试特点 |
-|------|-------------|------------|----------|
-| Spring PetClinic REST | `http://192.168.125.128:8301/petclinic` | `http://192.168.125.128:8301/petclinic/swagger-ui.html` | Java/Spring Boot，主人、宠物、兽医、就诊等关联 CRUD |
-| RESTful E-Commerce | `http://192.168.125.128:8302` | `http://192.168.125.128:8302/api-docs` | Node.js/Express，JWT 认证、订单 CRUD、文件上传 |
+OpenAPI 文档来自运行中的服务，并把 `servers` 地址统一改为当前虚拟机地址。服务升级后执行：
 
-电商测试账号为 `admin / secretPass123`。可直接上传 `api/` 下对应的 OpenAPI JSON；示例请求体位于 `api/examples/`。虚拟机中可运行 `/opt/aitp-test-products/smoke-test.py` 复验服务，或运行 `refresh-interface-docs.py` 重新导出文档。
+```bash
+python3 testdata/refresh-interface-docs.py
+python3 testdata/smoke-test.py
+```
+
+刷新脚本会覆盖两套 `openapi.json`，并检查 PetClinic 至少包含 40 个操作、E-Commerce 至少包含 10 个操作。若虚拟机地址变化，可传入 `--host`：
+
+```bash
+python3 testdata/refresh-interface-docs.py --host 192.168.125.200
+python3 testdata/smoke-test.py --host 192.168.125.200
+```
+
+## 上游项目
+
+- Spring PetClinic REST：<https://github.com/spring-petclinic/spring-petclinic-rest>
+- RESTful E-Commerce：<https://github.com/mfaisalkhatri/Restful-Ecommerce>
+
+数据包中的需求、测试规范和术语表用于平台功能验收，不是上游项目的正式产品文档。

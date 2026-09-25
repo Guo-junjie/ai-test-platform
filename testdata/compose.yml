@@ -1,0 +1,18 @@
+services:
+  petclinic:
+    image: springcommunity/spring-petclinic-rest@sha256:d092779e874fd680357763a6f219d97afb419dca13f6a750ccfb8ac63c610986
+    container_name: aitp-sut-petclinic
+    ports:
+      - "8301:9966"
+    restart: unless-stopped
+
+  ecommerce:
+    image: mfaisalkhatri/restful-ecommerce-app@sha256:0ccb8bd33c0f0653c08a476b463aaec38d38686af7bb3a1bdbad2ced56979cca
+    container_name: aitp-sut-ecommerce
+    environment:
+      AUTH_USERNAME: admin
+      AUTH_PASSWORD: secretPass123
+      SECRET_KEY: Secret999$
+    ports:
+      - "8302:3004"
+    restart: unless-stopped
