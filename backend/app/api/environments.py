@@ -12,6 +12,7 @@
 发布语义：发布时把当前配置固化为 revision N（不可变），健康检查结果一并记录；
 后续修改产生 revision N+1，历史 revision 供运行复现与审计。
 """
+import re
 import uuid
 from datetime import datetime
 from typing import Any
@@ -96,6 +97,38 @@ def _normalize_base_url(url: str) -> str:
     return url.rstrip("/")
 
 
+_HEALTHCHECK_METHOD_RE = re.compile(r"^([A-Za-z]+)\s+(.+)$")
+
+
+def _normalize_healthcheck_path(value: str) -> str:
+    """规范化健康检查路径，并兼容用户从接口文档复制的 ``GET /health``。"""
+    path = (value or "").strip()
+    if not path:
+        return ""
+
+    method_match = _HEALTHCHECK_METHOD_RE.match(path)
+    if method_match:
+        method, path = method_match.groups()
+        if method.upper() != "GET":
+            raise HTTPException(400, "健康检查仅支持 GET，请填写 /health 或 GET /health")
+        path = path.strip()
+
+    parsed = urlparse(path)
+    if parsed.scheme or parsed.netloc:
+        raise HTTPException(400, "健康检查请只填写路径，例如 /health；服务地址请填写在被测地址中")
+    if not path.startswith("/"):
+        path = "/" + path
+    if any(char.isspace() for char in path):
+        raise HTTPException(400, "健康检查路径不能包含空格，请填写 /health 或 GET /health")
+    return path
+
+
+def _healthcheck_url(base_url: str, healthcheck_path: str) -> str | None:
+    base = _normalize_base_url(base_url)
+    path = _normalize_healthcheck_path(healthcheck_path)
+    return base + path if path else None
+
+
 def _profile_to_dict(p: EnvironmentProfile, revision: EnvironmentProfileRevision | None = None) -> dict[str, Any]:
     cfg = {}
     if p.auth_config:
@@ -163,23 +196,23 @@ async def _current_revision(profile: EnvironmentProfile, db: AsyncSession) -> En
     ).scalar_one_or_none()
 
 
-async def _do_healthcheck(profile: EnvironmentProfile) -> tuple[str, str]:
-    """对 base_url + healthcheck_path 发 GET，返回 (health_status, detail)。"""
-    base = _normalize_base_url(profile.base_url)
-    path = (profile.healthcheck_path or "").strip()
-    if not path:
-        return "skipped", "未配置健康检查路径"
-    url = base + ("/" + path.lstrip("/") if path else "")
+async def _do_healthcheck(profile: EnvironmentProfile) -> tuple[str, str, str | None]:
+    """对健康检查地址发 GET，返回 (health_status, detail, health_url)。"""
+    url = _healthcheck_url(profile.base_url, profile.healthcheck_path or "")
+    if not url:
+        return "skipped", "未配置健康检查路径", None
     try:
         async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
             resp = await client.get(url)
         if 200 <= resp.status_code < 400:
-            return "healthy", f"HTTP {resp.status_code}"
-        return "unreachable", f"HTTP {resp.status_code}"
+            return "healthy", f"HTTP {resp.status_code}（{url}）", url
+        if resp.status_code == 404:
+            return "unhealthy", f"HTTP 404：健康检查路径不存在（{url}）", url
+        return "unhealthy", f"HTTP {resp.status_code}（{url}）", url
     except httpx.HTTPError as e:
-        return "unreachable", f"连接失败: {type(e).__name__}"
+        return "unreachable", f"连接失败: {type(e).__name__}（{url}）", url
     except Exception as e:  # noqa: BLE001
-        return "error", str(e)[:300]
+        return "error", str(e)[:300], url
 
 
 # ==================== 路由 ====================
@@ -211,7 +244,7 @@ async def create_environment(
         name=req.name.strip(),
         description=(req.description or "").strip() or None,
         base_url=_normalize_base_url(req.base_url),
-        healthcheck_path=(req.healthcheck_path or "").strip(),
+        healthcheck_path=_normalize_healthcheck_path(req.healthcheck_path),
         auth_strategy=req.auth_strategy,
         auth_config=_encrypt_auth(req.auth_config),
         status="draft",
@@ -292,7 +325,7 @@ async def update_environment(
     profile.name = req.name.strip() or profile.name
     profile.description = (req.description or "").strip() or None
     profile.base_url = _normalize_base_url(req.base_url)
-    profile.healthcheck_path = (req.healthcheck_path or "").strip()
+    profile.healthcheck_path = _normalize_healthcheck_path(req.healthcheck_path)
     profile.auth_strategy = req.auth_strategy
 
     # auth_config 合并语义：明文留空的敏感键保持原值（不覆盖加密内容）
@@ -318,10 +351,15 @@ async def run_healthcheck(
 ):
     """按需健康检查（不发布、不改状态，仅返回结果）。"""
     profile = await _require_profile(env_id, db)
-    status, detail = await _do_healthcheck(profile)
+    status, detail, health_url = await _do_healthcheck(profile)
     return {
-        "code": 0,
-        "data": {"health_status": status, "health_detail": detail, "checked_at": datetime.utcnow().isoformat()},
+        "code": 0 if status == "healthy" else 1,
+        "data": {
+            "health_status": status,
+            "health_detail": detail,
+            "health_url": health_url,
+            "checked_at": datetime.utcnow().isoformat(),
+        },
         "message": "success",
     }
 
@@ -340,7 +378,9 @@ async def publish_environment(
     profile = await _require_profile(env_id, db)
 
     # 健康检查
-    health_status, health_detail = await _do_healthcheck(profile)
+    # 发布时将历史录入的 "GET /health" 一并规范为 "/health"，保证修订快照可复现。
+    profile.healthcheck_path = _normalize_healthcheck_path(profile.healthcheck_path or "")
+    health_status, health_detail, health_url = await _do_healthcheck(profile)
 
     # 新 revision 编号
     max_rev = (
@@ -396,7 +436,7 @@ async def publish_environment(
         "code": 0,
         "data": {
             **_profile_to_dict(profile, revision),
-            "health": {"status": health_status, "detail": health_detail},
+            "health": {"status": health_status, "detail": health_detail, "url": health_url},
         },
         "message": "published",
     }

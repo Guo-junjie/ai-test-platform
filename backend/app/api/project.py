@@ -428,25 +428,42 @@ async def probe_url(
             async with httpx.AsyncClient(timeout=httpx.Timeout(5.0, connect=3.0), verify=False, follow_redirects=True) as client:
                 resp = await client.get(cand)
                 elapsed_ms = round((time.time() - start_t) * 1000, 2)
+                available = 200 <= resp.status_code < 400
+                if available:
+                    message = f"连接成功 (HTTP {resp.status_code}, 耗时 {elapsed_ms}ms)"
+                elif resp.status_code == 404:
+                    message = (
+                        f"服务网络可达，但当前 URL 返回 HTTP 404（路径不存在，耗时 {elapsed_ms}ms）。"
+                        "请检查 URL 路径；服务根地址没有首页时，请在测试环境中配置正确的健康检查路径。"
+                    )
+                else:
+                    message = (
+                        f"服务网络可达，但当前 URL 返回异常状态 HTTP {resp.status_code}"
+                        f"（耗时 {elapsed_ms}ms）"
+                    )
                 return {
-                    "code": 0,
+                    "code": 0 if available else 1,
                     "data": {
-                        "reachable": True,
+                        # reachable 表示当前 URL 可作为有效入口；network_reachable
+                        # 单独表达已经建立连接并收到 HTTP 响应，避免把 404 误报为成功。
+                        "reachable": available,
+                        "network_reachable": True,
                         "target_url": cand,
                         "status_code": resp.status_code,
                         "response_time_ms": elapsed_ms,
-                        "message": f"连接成功 (HTTP {resp.status_code}, 耗时 {elapsed_ms}ms)",
+                        "message": message,
                     },
-                    "message": "success",
+                    "message": "success" if available else "target returned an error status",
                 }
         except Exception as e:
             last_err = str(e)
 
     elapsed_ms = round((time.time() - start_t) * 1000, 2)
     return {
-        "code": 0,
+        "code": 1,
         "data": {
             "reachable": False,
+            "network_reachable": False,
             "target_url": target,
             "status_code": None,
             "response_time_ms": elapsed_ms,

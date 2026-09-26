@@ -123,7 +123,7 @@
               <el-button :loading="probing" @click="handleProbeUrl(createForm.target_service_url)">连通测试</el-button>
             </template>
           </el-input>
-          <div class="field-hint">被测服务是项目的运行环境，不是项目类型。可暂不填写，创建后在“测试环境”中维护多套地址。</div>
+          <div class="field-hint">被测服务是项目的运行环境，不是项目类型。连通测试会请求此 URL 本身；根路径没有路由时会提示“网络可达但 404”，业务健康状态以测试环境中的健康检查路径为准。</div>
         </el-form-item>
         <el-alert
           class="create-next-step-tip"
@@ -306,7 +306,8 @@
           <el-input v-model="envForm.base_url" placeholder="http://host:port" />
         </el-form-item>
         <el-form-item label="健康检查路径">
-          <el-input v-model="envForm.healthcheck_path" placeholder="/health（可选，发布时自动检查）" />
+          <el-input v-model="envForm.healthcheck_path" placeholder="/health 或 GET /health（可选）" />
+          <div class="field-hint">平台使用 GET 请求检查该路径；可直接粘贴接口文档中的“GET /health”。</div>
         </el-form-item>
         <el-form-item label="认证方式">
           <el-radio-group v-model="envForm.auth_strategy">
@@ -375,6 +376,7 @@
               <el-button :loading="probing" @click="handleProbeUrl(editForm.target_service_url)">连通测试</el-button>
             </template>
           </el-input>
+          <div class="field-hint">根路径返回 404 只代表该路径不存在；请在“测试环境”中配置 `/health` 等真实健康检查路径。</div>
         </el-form-item>
         <el-alert
           type="info"
@@ -581,8 +583,10 @@ export default defineComponent({
       try {
         const res: any = await projectApi.probeUrl(target)
         const d = res?.data || {}
-        if (d.reachable) {
+        if (d.reachable && Number(d.status_code) >= 200 && Number(d.status_code) < 400) {
           ElMessage.success(d.message || `连接成功: HTTP ${d.status_code} (${d.response_time_ms}ms)`)
+        } else if (d.network_reachable) {
+          ElMessage.warning(d.message || `服务可达，但当前 URL 返回 HTTP ${d.status_code}`)
         } else {
           ElMessage.error(d.message || `连接失败: ${d.error || '无法访问'}`)
         }

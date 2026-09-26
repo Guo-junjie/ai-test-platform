@@ -233,7 +233,7 @@ class EnvironmentProfileRevision(Base):
     revision = Column(Integer, nullable=False, default=1)
     # 发布时点的完整配置快照：base_url / healthcheck_path / auth_strategy / auth_config
     config_json = Column(JSONB, nullable=False, default={})
-    # 发布时的健康检查结果：healthy / unreachable / error / skipped
+    # 发布时的健康检查结果：healthy / unhealthy / unreachable / error / skipped
     health_status = Column(String(20))
     health_detail = Column(Text)
     # draft / published / superseded（被更新版本取代）
