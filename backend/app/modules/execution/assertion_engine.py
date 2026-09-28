@@ -155,13 +155,36 @@ class AssertionEngine:
                 return True, ""
             return False, f"Path '{path}' does not exist"
 
+        if operator == "not_exists":
+            if value is None:
+                return True, ""
+            return False, f"Path '{path}' unexpectedly exists"
+
         if "expected" not in assertion:
             return False, f"Path '{path}' lacks expected value"
 
         expected_value = assertion.get("expected")
-        if value == expected_value:
+        if operator in {"", "eq"}:
+            passed = value == expected_value
+        elif operator == "neq":
+            passed = value != expected_value
+        elif operator == "contains":
+            passed = expected_value in value if isinstance(value, (str, list, dict)) else False
+        elif operator == "regex":
+            try:
+                passed = re.search(str(expected_value), str(value)) is not None
+            except re.error:
+                return False, f"Path '{path}' uses an invalid regular expression"
+        elif operator in {"gt", "lt"}:
+            try:
+                passed = float(value) > float(expected_value) if operator == "gt" else float(value) < float(expected_value)
+            except (TypeError, ValueError):
+                return False, f"Path '{path}' cannot compare non-numeric values"
+        else:
+            return False, f"Path '{path}' uses unsupported operator '{operator}'"
+        if passed:
             return True, ""
-        return False, f"Path '{path}': expected {expected_value}, got {value}"
+        return False, f"Path '{path}': condition {operator or 'eq'} {expected_value} failed, got {value}"
 
     def _assert_contains(
         self, assertion: dict[str, Any], body: Any

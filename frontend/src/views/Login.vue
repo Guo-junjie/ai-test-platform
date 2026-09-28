@@ -91,7 +91,6 @@
           </el-form-item>
         </el-form>
 
-        <p class="form-hint">默认管理员账户：admin · Admin123</p>
       </div>
     </section>
   </div>
@@ -123,8 +122,8 @@ const errorMsg = ref<string>('')
 let animation: AnimationItem | null = null
 
 const form = reactive({
-  username: 'admin',
-  password: 'Admin123',
+  username: '',
+  password: '',
 })
 
 const rules: FormRules = {

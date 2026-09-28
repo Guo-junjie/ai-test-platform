@@ -109,6 +109,8 @@ class SchedulerService:
         description: str | None = None,
         cron_expression: str | None = None,
         nl_schedule: str | None = None,
+        target_type: str | None = None,
+        target_id: str | None = None,
         target_config: dict[str, Any] | None = None,
         env_config: dict[str, Any] | None = None,
         status: str | None = None,
@@ -133,6 +135,13 @@ class SchedulerService:
                 task.cron_expression = cron_expression
             if nl_schedule is not None:
                 task.nl_schedule = nl_schedule
+            if target_type is not None:
+                try:
+                    task.target_type = ScheduledTaskTargetType(target_type)
+                except ValueError:
+                    raise ValueError(f"Invalid target_type: {target_type}")
+            if target_id is not None:
+                task.target_id = uuid.UUID(target_id) if target_id else None
             if target_config is not None:
                 task.target_config = target_config
             if env_config is not None:

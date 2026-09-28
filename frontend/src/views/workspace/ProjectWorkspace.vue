@@ -8,7 +8,11 @@
             <el-icon><ArrowLeft /></el-icon>
           </el-button>
           <div>
-            <div class="ws-name">{{ project?.name || '...' }}</div>
+            <div class="context-line">
+              <el-select v-model="projectId" filterable class="project-switcher" aria-label="切换项目" @change="onProjectSwitch"><el-option v-for="item in projects" :key="item.id" :label="item.name" :value="item.id" /></el-select>
+              <span class="context-separator">/</span>
+              <el-select v-model="environmentId" clearable class="environment-switcher" placeholder="选择执行环境" aria-label="切换执行环境" @change="onEnvironmentSwitch"><el-option v-for="item in environments" :key="item.id" :label="item.name" :value="item.id"><span>{{item.name}}</span><el-tag class="env-status" size="small" :type="item.status==='published'?'success':'info'">{{item.status==='published'?'已发布':'草稿'}}</el-tag></el-option></el-select>
+            </div>
             <div class="ws-sub">
               <el-tag size="small" :type="projectKindTag(project?.project_kind)">{{ projectKindLabel(project?.project_kind) }}</el-tag>
               <el-tag size="small" effect="plain">{{ sourceLabel(project?.source_type) }}</el-tag>
@@ -17,6 +21,7 @@
           </div>
         </div>
         <div class="ws-actions">
+          <el-tag v-if="selectedEnvironment" :type="selectedEnvironment.status === 'published' ? 'success' : 'warning'" effect="plain">{{ selectedEnvironment.status === 'published' ? '环境可执行' : '环境未发布' }}</el-tag>
           <el-button v-if="hasCapability('test_execution')" type="primary" @click="$router.push(`/projects/${projectId}/plans`)">执行测试计划</el-button>
         </div>
       </div>
@@ -48,7 +53,7 @@
  */
 import { defineComponent } from 'vue'
 import { ArrowLeft } from '@element-plus/icons-vue'
-import { projectApi } from '@/api'
+import { environmentApi, projectApi } from '@/api'
 
 const SOURCE_LABELS: Record<string, string> = { github: 'GitHub', svn: 'SVN', upload: '本地上传' }
 const PROJECT_KIND_LABELS: Record<string, string> = {
@@ -62,6 +67,9 @@ export default defineComponent({
     return {
       projectId: (this.$route.params.id as string) || '',
       project: null as any,
+      projects: [] as any[],
+      environments: [] as any[],
+      environmentId: String(this.$route.query.env_id || ''),
     }
   },
   computed: {
@@ -75,6 +83,9 @@ export default defineComponent({
         : name === 'ws-members' ? 'members'
         : name === 'ws-settings' ? 'settings'
         : 'overview'
+    },
+    selectedEnvironment(): any {
+      return this.environments.find((item: any) => item.id === this.environmentId) || null
     },
   },
   methods: {
@@ -91,7 +102,26 @@ export default defineComponent({
       return (this.project?.capabilities || []).includes(capability)
     },
     onTab(tab: string): void {
-      this.$router.push(`/projects/${this.projectId}/${tab}`)
+      this.$router.push({ path: `/projects/${this.projectId}/${tab}`, query: this.environmentId ? { env_id: this.environmentId } : {} })
+    },
+    onProjectSwitch(id: string): void {
+      this.environmentId = ''
+      this.$router.push(`/projects/${id}/${this.activeTab}`)
+    },
+    onEnvironmentSwitch(id: string): void {
+      this.$router.replace({ path: this.$route.path, query: id ? { ...this.$route.query, env_id: id } : {} })
+    },
+    async loadProjects(): Promise<void> {
+      const res: any = await projectApi.getList()
+      const data = res?.data ?? res
+      this.projects = Array.isArray(data) ? data : data?.items || data?.list || []
+    },
+    async loadEnvironments(): Promise<void> {
+      try {
+        const res: any = await environmentApi.list(this.projectId)
+        this.environments = res?.data?.items || res?.data?.list || (Array.isArray(res?.data) ? res.data : [])
+        if (!this.environmentId) this.environmentId = this.environments.find((item: any) => item.status === 'published')?.id || ''
+      } catch { this.environments = [] }
     },
     async loadProject(): Promise<void> {
       try {
@@ -103,7 +133,16 @@ export default defineComponent({
     },
   },
   mounted() {
-    this.loadProject()
+    Promise.all([this.loadProjects(), this.loadProject(), this.loadEnvironments()])
+  },
+  watch: {
+    '$route.params.id'(value: string) {
+      if (!value || value === this.projectId) return
+      this.projectId = value
+      this.project = null
+      this.environments = []
+      Promise.all([this.loadProject(), this.loadEnvironments()])
+    },
   },
 })
 </script>
@@ -120,11 +159,8 @@ export default defineComponent({
   align-items: center;
   gap: 8px;
 }
-.ws-name {
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--el-text-color-primary);
-}
+.context-line { display: flex; align-items: center; gap: 8px; }
+.project-switcher { width: 250px; }.environment-switcher { width: 220px; }.context-separator { color: var(--el-text-color-placeholder); }.env-status { float: right; margin-top: 6px; }
 .ws-sub {
   display: flex;
   align-items: center;
@@ -141,4 +177,5 @@ export default defineComponent({
 .ws-body {
   margin-top: 16px;
 }
+@media (max-width: 760px) { .ws-header-inner { flex-direction: column; gap: 12px; }.context-line { flex-wrap: wrap; }.project-switcher,.environment-switcher { width: min(300px, 72vw); }.ws-actions { width: 100%; display: flex; justify-content: flex-end; } }
 </style>

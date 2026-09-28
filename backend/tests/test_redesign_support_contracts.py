@@ -3,8 +3,11 @@
 import pytest
 
 from app.api.case_library import _normalize_import_row
+from app.api.scenario import _scenario_assertion_to_expected
 from app.api.scheduled_tasks import SchedulePreviewRequest, preview_schedule
+from app.modules.execution.assertion_engine import AssertionEngine
 from app.modules.quality_gate import QualityGateEvaluator
+from app.modules.script_gen.script_generator import ScriptGenerator
 
 
 def test_case_import_preview_normalizes_structured_fields():
@@ -48,3 +51,64 @@ def test_disabled_quality_rule_is_not_evaluated():
         test_summary={},
     )
     assert result["passed"] is True
+
+
+def test_quality_rule_operator_and_plan_scope_are_effective():
+    config = QualityGateEvaluator.get_default_config()
+    config["rule_meta"] = {
+        key: {"enabled": False} for key in config["rules"]
+    }
+    config["rule_meta"]["min_quality_score"] = {
+        "enabled": True, "operator": ">", "plan_ids": ["plan-a"],
+    }
+    evaluator = QualityGateEvaluator(config)
+    scoped = evaluator.evaluate(quality_score=70, defects={}, test_summary={}, plan_id="plan-a")
+    outside_scope = evaluator.evaluate(quality_score=70, defects={}, test_summary={}, plan_id="plan-b")
+    assert scoped["passed"] is False
+    assert scoped["violations"][0]["expected"] == "> 70"
+    assert outside_scope["passed"] is True
+
+
+def test_scenario_assertion_is_preserved_when_adopted_as_case():
+    assert _scenario_assertion_to_expected({
+        "field": "$.data.status", "operator": "contains", "expected": "paid",
+    }) == {"assertions": [{
+        "type": "json_path", "path": "$.data.status",
+        "operator": "contains", "expected": "paid",
+    }]}
+    assert _scenario_assertion_to_expected({
+        "field": "$status", "operator": "eq", "expected": "201",
+    }) == {"status_code": 201}
+
+
+def test_structured_assertion_operators_execute_against_real_body():
+    result = AssertionEngine().assert_response(
+        response_status=200,
+        response_body={"data": {"name": "enterprise-order", "amount": 1200}},
+        response_headers={},
+        response_time_ms=30,
+        expected={"assertions": [
+            {"type": "json_path", "path": "$.data.name", "operator": "contains", "expected": "order"},
+            {"type": "json_path", "path": "$.data.amount", "operator": "gt", "expected": 1000},
+            {"type": "json_path", "path": "$.data.missing", "operator": "not_exists"},
+        ]},
+    )
+    assert result["passed"] is True
+    assert result["details"]["passed_assertions"] == 3
+
+
+@pytest.mark.asyncio
+async def test_script_generation_returns_the_exact_persisted_record_id(monkeypatch):
+    generator = ScriptGenerator()
+
+    class Router:
+        async def call(self, **_kwargs):
+            return "```python\ndef main():\n    return {}\n```"
+
+    async def fake_log_record(**_kwargs):
+        return "record-123"
+
+    generator.router = Router()
+    monkeypatch.setattr(generator, "_log_record", fake_log_record)
+    result = await generator.generate("pre_script", {"nl_input": "准备数据"})
+    assert result["id"] == "record-123"

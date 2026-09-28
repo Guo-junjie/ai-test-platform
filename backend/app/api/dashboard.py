@@ -24,13 +24,60 @@ from app.models.database import (
     TestStatus,
     Defect,
     DefectSeverity,
+    EnvironmentProfile,
+    TestCaseAsset,
+    User,
 )
+from app.modules.auth.dependencies import get_current_user
 from app.utils.database import get_db_session
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 router = APIRouter()
+
+
+@router.get("/todos")
+async def get_dashboard_todos(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """返回由真实业务状态聚合的个人待办。"""
+    items: list[dict[str, Any]] = []
+    project_count = (await db.execute(select(func.count(Project.id)))).scalar_one()
+    if project_count == 0:
+        items.append({"id": "create-project", "title": "创建第一个测试项目", "description": "建立项目后才能导入文档、设计用例和执行测试", "path": "/projects", "priority": "high"})
+    pending_reviews = (await db.execute(select(func.count(TestCaseAsset.id)).where(TestCaseAsset.review_state == "pending"))).scalar_one()
+    if pending_reviews:
+        items.append({"id": "case-reviews", "title": f"评审 {pending_reviews} 条待审用例", "description": "用例批准后才能加入自动化测试计划", "path": "/case-library?tab=review", "priority": "high"})
+    unconfigured = (await db.execute(
+        select(Project).where(~Project.id.in_(select(EnvironmentProfile.project_id).where(EnvironmentProfile.status == "published"))).limit(5)
+    )).scalars().all()
+    for project in unconfigured:
+        items.append({"id": f"environment-{project.id}", "title": f"为「{project.name}」发布测试环境", "description": "执行计划与定时任务需要已发布环境", "path": f"/projects/{project.id}/environments", "project_id": str(project.id), "priority": "medium"})
+    failed_runs = (await db.execute(select(func.count(TestRun.id)).where(TestRun.status == TestStatus.FAILED))).scalar_one()
+    if failed_runs:
+        items.append({"id": "failed-runs", "title": f"查看 {failed_runs} 次失败运行", "description": "定位失败断言并决定是否登记缺陷", "path": "/runs?status=failed", "priority": "medium"})
+    return {"code": 0, "data": {"items": items[:10]}, "message": "success"}
+
+
+@router.get("/projects-summary")
+async def get_dashboard_projects(
+    limit: int = Query(6, ge=1, le=20),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    projects = (await db.execute(select(Project).order_by(desc(Project.updated_at)).limit(limit))).scalars().all()
+    items = []
+    for project in projects:
+        case_count = (await db.execute(select(func.count(TestCaseAsset.id)).where(TestCaseAsset.project_id == project.id))).scalar_one()
+        latest = (await db.execute(select(TestRun, TestReport).outerjoin(TestReport, TestReport.test_run_id == TestRun.id).where(TestRun.project_id == project.id).order_by(desc(TestRun.created_at)).limit(1))).first()
+        env_ready = (await db.execute(select(func.count(EnvironmentProfile.id)).where(EnvironmentProfile.project_id == project.id, EnvironmentProfile.status == "published"))).scalar_one() > 0
+        items.append({"id": str(project.id), "name": project.name, "case_count": case_count, "ready": env_ready,
+                      "recent_run_at": latest[0].created_at.isoformat() if latest and latest[0].created_at else None,
+                      "recent_run_status": latest[0].status.value if latest and latest[0].status else None,
+                      "quality_score": latest[1].quality_score if latest and latest[1] else None})
+    return {"code": 0, "data": {"items": items}, "message": "success"}
 
 
 def _parse_days(time_range: str) -> int:
@@ -291,18 +338,22 @@ async def get_defect_trend(
 @router.get("/recent-runs")
 async def get_recent_runs(
     limit: int = Query(10, ge=1, le=50, description="返回数量"),
+    page: int = Query(1, ge=1),
+    page_size: int | None = Query(None, ge=1, le=50),
     db: AsyncSession = Depends(get_db_session),
 ):
     """
     获取最近测试任务列表（含质量评分和门禁结果）。
     """
     # outerjoin Project 让项目名为空时也能保留 run（project_id 缺失/项目被删的兜底）
+    size = page_size or limit
+    total = (await db.execute(select(func.count(TestRun.id)))).scalar_one()
     result = await db.execute(
         select(TestRun, Project, TestReport)
         .outerjoin(Project, Project.id == TestRun.project_id)
         .outerjoin(TestReport, TestReport.test_run_id == TestRun.id)
         .order_by(desc(TestRun.created_at))
-        .limit(limit)
+        .offset((page - 1) * size).limit(size)
     )
 
     rows = result.fetchall()
@@ -327,7 +378,7 @@ async def get_recent_runs(
                     "created_at": run.created_at.isoformat() if run.created_at else None,
                 }
                 for run, project, report in rows
-            ],
+            ], "total": total, "page": page, "page_size": size,
         },
         "message": "success",
     }

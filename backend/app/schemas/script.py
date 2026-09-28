@@ -26,6 +26,8 @@ class GenerateScriptRequest(BaseModel):
     project_id: Optional[UUID] = Field(
         default=None, description="项目 ID（用于 SQL 白名单校验）"
     )
+    nl_input: str = Field(default="", description="自然语言脚本需求")
+    case_id: Optional[UUID] = Field(default=None, description="可选的关联用例")
 
 
 class GenerateScriptResponse(BaseModel):

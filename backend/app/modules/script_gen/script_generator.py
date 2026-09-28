@@ -249,7 +249,7 @@ API 信息:
                 error = f"Python syntax error: {e}"
 
         # 记录到 script_generation_records
-        await self._log_record(
+        record_id = await self._log_record(
             script_type=script_type,
             code=code,
             context=context,
@@ -259,6 +259,7 @@ API 信息:
         )
 
         return {
+            "id": record_id,
             "code": code,
             "language": language,
             "script_type": script_type,
@@ -274,13 +275,13 @@ API 信息:
         nl_input: str,
         project_id: str | uuid.UUID | None = None,
         db_session: Any = None,
-    ) -> None:
+    ) -> str | None:
         """记录生成记录到数据库。"""
         try:
             if db_session is not None:
                 # project_id 为 NOT NULL 列；预览或未指定项目时不记录数据库。
                 if not project_id:
-                    return
+                    return None
 
                 from app.models.database import ScriptGenerationRecord, ScriptType
                 record = ScriptGenerationRecord(
@@ -293,8 +294,10 @@ API 信息:
                 )
                 db_session.add(record)
                 await db_session.flush()
+                return str(record.id)
         except Exception as e:
             logger.warning(f"Failed to log script generation record: {e}")
+        return None
 
     # ==================== 规则降级 ====================
 

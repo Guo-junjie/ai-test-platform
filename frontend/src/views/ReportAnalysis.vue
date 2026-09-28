@@ -45,16 +45,10 @@
           </el-radio-group>
         </el-form-item>
 
-        <el-form-item label="输入方式">
-          <el-switch v-model="manualEntry" active-text="手动输入 ID" inactive-text="下拉选择" />
-          <span class="hint">默认下拉选择已有数据；找不到时再切换手动输入</span>
-        </el-form-item>
-
         <!-- 报告摘要：选择已有报告 -->
         <template v-if="analysisType === 'summary'">
           <el-form-item label="测试报告">
             <el-select
-              v-if="!manualEntry"
               v-model="reportId"
               filterable
               clearable
@@ -69,10 +63,9 @@
                 :value="r.id"
               />
             </el-select>
-            <el-input v-else v-model="reportId" placeholder="输入测试报告 ID" />
           </el-form-item>
           <el-alert
-            v-if="!manualEntry && !loadingOpts && reportOptions.length === 0"
+            v-if="!loadingOpts && reportOptions.length === 0"
             type="warning"
             :closable="false"
             title="该项目暂无测试报告"
@@ -85,7 +78,6 @@
         <template v-else>
           <el-form-item :label="analysisType === 'compare' ? '当前结果' : '测试结果'">
             <el-select
-              v-if="!manualEntry"
               v-model="resultId"
               filterable
               clearable
@@ -100,10 +92,9 @@
                 :value="r.id"
               />
             </el-select>
-            <el-input v-else v-model="resultId" placeholder="输入测试结果 ID" />
           </el-form-item>
           <el-alert
-            v-if="!manualEntry && !loadingOpts && resultOptions.length === 0"
+            v-if="!loadingOpts && resultOptions.length === 0"
             type="warning"
             :closable="false"
             title="该项目暂无测试结果"
@@ -115,7 +106,6 @@
         <!-- 执行对比：选择对比 Run -->
         <el-form-item v-if="analysisType === 'compare'" label="对比 Run">
           <el-select
-            v-if="!manualEntry"
             v-model="compareRunId"
             filterable
             clearable
@@ -130,7 +120,6 @@
               :value="r.id"
             />
           </el-select>
-          <el-input v-else v-model="compareRunId" placeholder="输入对比的测试运行 ID" />
         </el-form-item>
 
         <el-form-item>
@@ -188,7 +177,6 @@ import { reportAnalysisApi, projectApi, reportApi, testRunApi } from '@/api'
 const projectId = ref('')
 const projects = ref<any[]>([])
 const analysisType = ref('summary')
-const manualEntry = ref(false)
 const reportId = ref('')
 const resultId = ref('')
 const compareRunId = ref('')
@@ -310,15 +298,15 @@ async function handleAnalyze(): Promise<void> {
   }
 
   if (analysisType.value === 'summary' && !reportId.value.trim()) {
-    ElMessage.warning(manualEntry.value ? '请输入报告 ID' : '请选择测试报告')
+    ElMessage.warning('请选择测试报告')
     return
   }
   if (analysisType.value !== 'summary' && !resultId.value.trim()) {
-    ElMessage.warning(manualEntry.value ? '请输入结果 ID' : '请选择测试结果')
+    ElMessage.warning('请选择测试结果')
     return
   }
   if (analysisType.value === 'compare' && !compareRunId.value.trim()) {
-    ElMessage.warning(manualEntry.value ? '请输入对比 Run ID' : '请选择对比的测试任务')
+    ElMessage.warning('请选择对比的测试任务')
     return
   }
 

@@ -15,10 +15,11 @@ import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.database import Notification, User
+from app.models.database import Notification, User, UserPreference
 from app.modules.auth.dependencies import get_current_user
 from app.utils.database import get_db_session
 from app.utils.logger import get_logger
@@ -26,6 +27,14 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 router = APIRouter()
+
+
+class NotificationPreferenceRequest(BaseModel):
+    enabled: bool = True
+    channels: list[str] = Field(default_factory=lambda: ["in_app"])
+    quiet_enabled: bool = False
+    quiet_start: str = "22:00"
+    quiet_end: str = "08:00"
 
 
 # ==================== 内部工具 ====================
@@ -132,6 +141,9 @@ async def create_notification(
 async def list_notifications(
     unread_only: bool = Query(False, description="仅返回未读通知"),
     limit: int = Query(100, ge=1, le=500),
+    is_read: bool | None = None,
+    page: int = Query(1, ge=1),
+    page_size: int | None = Query(None, ge=1, le=100),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ):
@@ -142,9 +154,13 @@ async def list_notifications(
         {"items": [...], "total": int, "unread_count": int}
     """
     stmt = select(Notification).where(Notification.user_id == current_user.id)
-    if unread_only:
+    if unread_only or is_read is False:
         stmt = stmt.where(Notification.is_read.is_(False))
-    stmt = stmt.order_by(Notification.created_at.desc()).limit(limit)
+    elif is_read is True:
+        stmt = stmt.where(Notification.is_read.is_(True))
+    total = (await db.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
+    size = page_size or limit
+    stmt = stmt.order_by(Notification.created_at.desc()).offset((page - 1) * size).limit(size)
 
     result = await db.execute(stmt)
     items = [_notification_to_dict(n) for n in result.scalars().all()]
@@ -165,11 +181,43 @@ async def list_notifications(
         "data": {
             "items": items,
             "list": items,
-            "total": len(items),
+            "total": total, "page": page, "page_size": size,
             "unread_count": unread_count,
         },
         "message": "success",
     }
+
+
+@router.get("/preferences")
+async def get_notification_preferences(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    row = (await db.execute(select(UserPreference).where(UserPreference.user_id == current_user.id))).scalar_one_or_none()
+    data = row.notification_config if row else {
+        "enabled": True, "channels": ["in_app"], "quiet_enabled": False,
+        "quiet_start": "22:00", "quiet_end": "08:00",
+    }
+    return {"code": 0, "data": data, "message": "success"}
+
+
+@router.put("/preferences")
+async def update_notification_preferences(
+    req: NotificationPreferenceRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    allowed = {"in_app", "email", "webhook", "dingtalk"}
+    if any(channel not in allowed for channel in req.channels):
+        raise HTTPException(422, "通知渠道不受支持")
+    row = (await db.execute(select(UserPreference).where(UserPreference.user_id == current_user.id))).scalar_one_or_none()
+    if row is None:
+        row = UserPreference(user_id=current_user.id)
+        db.add(row)
+    row.notification_config = req.model_dump()
+    row.updated_at = datetime.utcnow()
+    await db.flush()
+    return {"code": 0, "data": row.notification_config, "message": "通知偏好已保存"}
 
 
 @router.post("/read-all")

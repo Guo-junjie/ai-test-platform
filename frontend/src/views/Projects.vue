@@ -1,17 +1,12 @@
 <template>
   <div class="projects-page">
-    <el-card shadow="hover">
-      <template #header>
-        <div class="card-header">
-          <span>项目管理</span>
-          <el-button type="primary" @click="openCreate">
-            <el-icon><Plus /></el-icon>
-            新建项目
-          </el-button>
-        </div>
-      </template>
+    <div class="projects-head"><div><h1>项目</h1><p>管理产品测试空间、环境就绪状态与最近执行。</p></div><el-button type="primary" @click="openCreate"><el-icon><Plus /></el-icon>新建项目</el-button></div>
+    <el-card shadow="never">
+      <div class="project-filters"><el-input v-model="keyword" clearable placeholder="搜索项目" @keyup.enter="loadProjects"/><el-select v-model="statusFilter" placeholder="全部状态" clearable @change="loadProjects"><el-option label="进行中" value="active"/><el-option label="已停用" value="inactive"/></el-select><el-select v-model="ownerFilter" placeholder="全部负责人" clearable @change="loadProjects"><el-option v-for="owner in ownerOptions" :key="owner.id" :label="owner.name" :value="owner.id"/></el-select><el-radio-group v-model="viewMode"><el-radio-button value="card">卡片</el-radio-button><el-radio-button value="list">列表</el-radio-button></el-radio-group><el-button @click="loadProjects">查询</el-button></div>
 
-      <el-table :data="projects" v-loading="loading" stripe @row-click="openDetail">
+      <div v-if="viewMode==='card'" v-loading="loading" class="project-cards"><article v-for="row in projects" :key="row.id" class="project-card"><div class="project-card-head"><el-tag :type="row.environment_ready?'success':'warning'">{{row.environment_ready?'已就绪':'待配置环境'}}</el-tag><el-dropdown><el-button text aria-label="项目更多操作">•••</el-button><template #dropdown><el-dropdown-menu><el-dropdown-item @click="openDetail(row)">查看详情</el-dropdown-item></el-dropdown-menu></template></el-dropdown></div><h3>{{row.name}}</h3><p>{{row.description||'暂无项目说明'}}</p><div class="project-meta"><span><b>{{row.case_count||0}}</b> 用例</span><span><b>{{row.recent_run_at?formatRelative(row.recent_run_at):'—'}}</b> 最近执行</span><span><b>{{row.owner_name||'—'}}</b> 负责人</span></div><div class="project-card-foot"><el-tag size="small" effect="plain">{{projectKindLabel(row.project_kind)}}</el-tag><el-button type="primary" plain @click="$router.push(`/projects/${row.id}/overview`)">进入项目</el-button></div></article></div>
+
+      <el-table v-else :data="projects" v-loading="loading" stripe @row-click="openDetail">
         <el-table-column prop="name" label="项目名称" min-width="180" show-overflow-tooltip />
         <el-table-column prop="description" label="描述" min-width="220" show-overflow-tooltip>
           <template #default="{ row }">{{ row.description || '—' }}</template>
@@ -29,6 +24,8 @@
             <span class="time-text">{{ formatTime(row.created_at) }}</span>
           </template>
         </el-table-column>
+        <el-table-column prop="case_count" label="用例数" width="90" />
+        <el-table-column label="负责人" width="110"><template #default="{row}">{{row.owner_name||'—'}}</template></el-table-column>
         <el-table-column label="操作" width="210" fixed="right">
           <template #default="{ row }">
             <el-button size="small" type="primary" @click.stop="$router.push(`/projects/${row.id}/overview`)">工作区</el-button>
@@ -40,6 +37,7 @@
       <el-empty v-if="!loading && projects.length === 0" description="还没有项目 —— 点击右上角「新建项目」开始">
         <el-button type="primary" @click="openCreate">新建第一个项目</el-button>
       </el-empty>
+      <el-pagination v-if="totalProjects>pageSize" v-model:current-page="page" :total="totalProjects" :page-size="pageSize" layout="prev,pager,next,total" @current-change="loadProjects"/>
     </el-card>
 
     <!-- 新建项目 -->
@@ -459,6 +457,13 @@ export default defineComponent({
     return {
       loading: false,
       projects: [] as any[],
+      totalProjects: 0,
+      page: 1,
+      pageSize: 12,
+      keyword: '',
+      statusFilter: '',
+      ownerFilter: '',
+      viewMode: 'card',
 
       createVisible: false,
       creating: false,
@@ -528,6 +533,11 @@ export default defineComponent({
     }
   },
   computed: {
+    ownerOptions(): Array<{ id: string; name: string }> {
+      const values = new Map<string, string>()
+      this.projects.forEach((item: any) => { if (item.owner_id) values.set(item.owner_id, item.owner_name || item.owner_id.slice(0, 8)) })
+      return Array.from(values, ([id, name]) => ({ id, name }))
+    },
     createNextStepDescription(): string {
       if (this.createForm.project_kind === 'api_testing') return '创建后先导入接口文档或需求，生成测试用例，再配置测试环境并创建执行计划。'
       if (this.createForm.project_kind === 'source_analysis') return '创建后上传代码或拉取仓库版本，用于代码解析与覆盖率分析；此类型不要求配置被测服务。'
@@ -555,6 +565,13 @@ export default defineComponent({
       } catch {
         return time
       }
+    },
+    formatRelative(time?: string): string {
+      if (!time) return '—'
+      const diff = Date.now() - new Date(time).getTime()
+      if (diff < 3600000) return `${Math.max(1, Math.floor(diff / 60000))} 分钟前`
+      if (diff < 86400000) return `${Math.floor(diff / 3600000)} 小时前`
+      return `${Math.floor(diff / 86400000)} 天前`
     },
     resetCreateForm(): void {
       this.createForm = {
@@ -613,9 +630,10 @@ export default defineComponent({
     async loadProjects(): Promise<void> {
       this.loading = true
       try {
-        const res: any = await projectApi.getList()
+        const res: any = await projectApi.getList({ page: this.page, page_size: this.pageSize, keyword: this.keyword || undefined, status: this.statusFilter || undefined, owner_id: this.ownerFilter || undefined, include_inactive: !this.statusFilter })
         const d = res?.data ?? res
         this.projects = Array.isArray(d) ? d : d?.list || d?.items || []
+        this.totalProjects = Array.isArray(d) ? d.length : d?.total || 0
       } catch {
         this.projects = []
       } finally {
@@ -951,6 +969,7 @@ export default defineComponent({
 </script>
 
 <style scoped>
+.projects-page{display:grid;gap:16px}.projects-head{display:flex;justify-content:space-between;align-items:flex-start}.projects-head h1{margin:0;font-size:24px}.projects-head p{margin:6px 0 0;color:var(--app-text-secondary)}.project-filters{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px}.project-filters .el-input{width:260px}.project-filters .el-select{width:150px}.project-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.project-card{display:grid;gap:12px;padding:18px;border:1px solid var(--el-border-color-light);border-radius:10px;transition:.15s}.project-card:hover{border-color:var(--el-color-primary-light-5);box-shadow:0 8px 24px rgba(15,23,42,.08)}.project-card-head,.project-card-foot{display:flex;justify-content:space-between;align-items:center}.project-card h3{margin:0;font-size:17px}.project-card>p{min-height:40px;margin:0;color:var(--app-text-secondary);font-size:13px;line-height:1.55}.project-meta{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:12px 0;border-block:1px solid var(--el-border-color-lighter)}.project-meta span{display:grid;gap:4px;color:var(--app-text-secondary);font-size:11px}.project-meta b{color:var(--el-text-color-primary);font-size:13px}.el-pagination{justify-content:flex-end;margin-top:16px}
 .card-header {
   display: flex;
   justify-content: space-between;
@@ -1015,6 +1034,7 @@ export default defineComponent({
   overflow-y: auto;
 }
 @media (max-width: 640px) {
+  .projects-head{align-items:flex-start}.project-cards{grid-template-columns:1fr}.project-filters .el-input,.project-filters .el-select{width:100%}
   .create-project-form {
     --el-form-label-font-size: 13px;
   }
@@ -1036,4 +1056,5 @@ export default defineComponent({
     margin-left: 0 !important;
   }
 }
+@media (min-width:641px) and (max-width:1050px){.project-cards{grid-template-columns:1fr 1fr}}
 </style>

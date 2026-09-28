@@ -32,7 +32,7 @@
         </el-form-item>
         <el-form-item>
           <el-button type="primary" :loading="orchestrating" :disabled="!canOrchestrate" @click="orchestrate">AI 编排</el-button>
-          <el-button :loading="dryRunning" :disabled="!canOrchestrate" @click="dryRun">预览（dry-run）</el-button>
+          <el-button :loading="dryRunning" :disabled="!canOrchestrate" @click="dryRun">生成预览</el-button>
         </el-form-item>
       </el-form>
     </el-card>
@@ -100,7 +100,11 @@
       <div style="margin-top: 16px">
         <el-button type="primary" :loading="saving" @click="save">保存步骤</el-button>
         <el-button type="success" :loading="adopting" :disabled="scenario.status === 'adopted'" @click="adopt">采纳</el-button>
-        <el-button @click="editSteps">编辑步骤 JSON</el-button>
+        <el-button @click="editSteps">可视化编辑</el-button>
+        <el-select v-model="trialEnvironmentId" placeholder="选择已发布环境" style="width: 210px; margin-left: 8px">
+          <el-option v-for="env in publishedEnvironments" :key="env.id" :label="env.name" :value="env.id" />
+        </el-select>
+        <el-button :loading="trialRunning" :disabled="!trialEnvironmentId" @click="trialRun">真实试运行</el-button>
       </div>
     </el-card>
 
@@ -125,14 +129,32 @@
       <el-empty v-if="!(previewData.preview_requests || []).length" description="未生成任何请求步骤" />
     </el-dialog>
 
-    <!-- 编辑步骤 JSON 对话框 -->
-    <el-dialog v-model="editVisible" title="编辑步骤 JSON" width="720px" destroy-on-close>
-      <el-input v-model="editStepsJson" type="textarea" :rows="16" placeholder="JSON 数组" />
+    <el-dialog v-model="trialVisible" title="场景试运行结果" width="760px">
+      <el-alert
+        :title="trialData?.result?.passed ? '场景试运行通过' : '场景试运行未通过'"
+        :type="trialData?.result?.passed ? 'success' : 'error'"
+        :description="`${trialData?.environment?.name || '-'} · 已执行 ${trialData?.result?.executed_steps || 0}/${trialData?.result?.total_steps || 0} 步`"
+        :closable="false"
+        show-icon
+      />
+      <el-table :data="trialData?.result?.step_results || []" style="margin-top: 14px">
+        <el-table-column prop="step" label="步骤" width="70" />
+        <el-table-column label="请求" min-width="250"><template #default="{row}"><span class="method-tag">{{row.method}}</span> {{row.url}}</template></el-table-column>
+        <el-table-column label="结果" width="100"><template #default="{row}"><el-tag :type="row.passed?'success':'danger'">{{row.passed?'通过':'失败'}}</el-tag></template></el-table-column>
+        <el-table-column prop="status_code" label="状态码" width="90" />
+        <el-table-column prop="response_time_ms" label="耗时(ms)" width="100" />
+        <el-table-column prop="error_message" label="失败原因" min-width="180" show-overflow-tooltip />
+      </el-table>
+    </el-dialog>
+
+    <el-drawer v-model="editVisible" title="场景节点属性" size="min(880px, 96vw)" destroy-on-close>
+      <div class="flow-canvas"><div class="flow-node start">开始</div><template v-for="(step,index) in editableSteps" :key="index"><span class="flow-line">↓</span><div class="flow-node api"><b>接口调用 {{index+1}}</b><span>{{step.method}} {{step.url}}</span></div><template v-if="step.condition_field"><span class="flow-line">↓</span><div class="flow-node condition"><b>条件判断</b><span>{{step.condition_field}} {{step.condition_operator}} {{step.condition_value}}</span></div></template><span class="flow-line">↓</span><div class="flow-node assertion"><b>断言</b><span>{{step.assertion?.field||'HTTP 状态码'}} {{step.assertion?.operator||'等于'}} {{step.assertion?.expected??200}}</span></div></template><span class="flow-line">↓</span><div class="flow-node end">结束</div></div>
+      <el-collapse accordion class="node-editor"><el-collapse-item v-for="(step,index) in editableSteps" :key="index" :name="index" :title="`步骤 ${index+1} · ${step.method} ${step.url}`"><div class="node-grid"><el-form-item label="接口"><el-select v-model="step.endpoint_id" filterable @change="syncEndpoint(step)"><el-option v-for="ep in endpoints" :key="ep.id" :label="`${ep.method} ${ep.path}`" :value="ep.id"/></el-select></el-form-item><el-form-item label="依赖步骤"><el-select v-model="step.depend_on_step" clearable><el-option v-for="n in index" :key="n" :label="`步骤 ${n}`" :value="n"/></el-select></el-form-item><el-form-item label="条件字段"><el-select v-model="step.condition_field" clearable filterable placeholder="无条件判断"><el-option v-for="field in responseFields(step)" :key="field" :label="field" :value="field"/></el-select></el-form-item><el-form-item label="条件"><el-select v-model="step.condition_operator" :disabled="!step.condition_field"><el-option label="等于" value="eq"/><el-option label="不等于" value="neq"/><el-option label="存在" value="exists"/></el-select></el-form-item><el-form-item label="条件值"><el-input v-model="step.condition_value" :disabled="!step.condition_field"/></el-form-item><el-form-item label="断言字段"><el-select v-model="step.assertion.field" filterable @change="assertionFieldChanged(step)"><el-option label="HTTP 状态码" value="$status"/><el-option v-for="field in responseFields(step)" :key="field" :label="field" :value="field"/></el-select></el-form-item><el-form-item label="断言条件"><el-select v-model="step.assertion.operator"><el-option label="等于" value="eq"/><el-option label="包含" value="contains" :disabled="step.assertion.field==='$status'"/><el-option label="存在" value="exists" :disabled="step.assertion.field==='$status'"/></el-select></el-form-item><el-form-item label="期望值"><el-input v-model="step.assertion.expected" :disabled="step.assertion.operator==='exists'"/></el-form-item></div></el-collapse-item></el-collapse>
       <template #footer>
         <el-button @click="editVisible = false">取消</el-button>
         <el-button type="primary" :loading="saving" @click="saveEditedSteps">保存</el-button>
       </template>
-    </el-dialog>
+    </el-drawer>
 
     <!-- 历史场景 -->
     <el-card shadow="hover" style="margin-top: 16px" v-loading="historyLoading">
@@ -165,7 +187,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { scenarioApi, docApi, projectApi } from '@/api'
+import { scenarioApi, docApi, projectApi, environmentApi } from '@/api'
 
 const projects = ref<any[]>([])
 const projectId = ref<string>('')
@@ -187,7 +209,13 @@ const previewVisible = ref(false)
 const previewData = ref<any>({})
 
 const editVisible = ref(false)
-const editStepsJson = ref<string>('')
+const editableSteps = ref<any[]>([])
+const environments = ref<any[]>([])
+const trialEnvironmentId = ref('')
+const trialRunning = ref(false)
+const trialVisible = ref(false)
+const trialData = ref<any>({})
+const publishedEnvironments = computed(() => environments.value.filter(item => item.status === 'published'))
 
 const STATUS_LABELS: Record<string, string> = {
   draft: '草稿',
@@ -223,8 +251,15 @@ async function onProjectChange() {
   selectedEndpointIds.value = []
   endpoints.value = []
   scenario.value = null
-  await loadEndpoints()
-  await loadHistory()
+  trialEnvironmentId.value = ''
+  await Promise.all([loadEndpoints(), loadHistory(), loadEnvironments()])
+}
+
+async function loadEnvironments() {
+  if (!projectId.value) return
+  const res: any = await environmentApi.list(projectId.value)
+  environments.value = res?.data?.items || res?.data?.list || (Array.isArray(res?.data) ? res.data : [])
+  trialEnvironmentId.value = publishedEnvironments.value[0]?.id || ''
 }
 
 async function onEndpointVisible(visible: boolean) {
@@ -313,7 +348,7 @@ async function adopt() {
   adopting.value = true
   try {
     const res: any = await scenarioApi.adopt(scenario.value.id)
-    scenario.value = res?.data || scenario.value
+    scenario.value = res?.data?.scenario || scenario.value
     ElMessage.success('场景已采纳')
     await loadHistory()
   } catch {
@@ -335,21 +370,39 @@ async function adoptById(row: any) {
 
 function editSteps() {
   if (!scenario.value?.steps) return
-  editStepsJson.value = JSON.stringify(scenario.value.steps, null, 2)
+  editableSteps.value = scenario.value.steps.map((step:any)=>({ ...step, condition_field:step.condition?.field||'', condition_operator:step.condition?.operator||'eq', condition_value:step.condition?.value||'', assertion:{ field:step.assertion?.field||'$status', operator:step.assertion?.operator||'eq', expected:step.assertion?.expected??200 } }))
   editVisible.value = true
 }
 
-function saveEditedSteps() {
+async function trialRun() {
+  if (!scenario.value?.id || !trialEnvironmentId.value) return
+  trialRunning.value = true
   try {
-    const parsed = JSON.parse(editStepsJson.value)
-    if (!Array.isArray(parsed)) throw new Error('steps 必须为数组')
-    scenario.value.steps = parsed
-    editVisible.value = false
-    ElMessage.success('步骤已更新，请点「保存步骤」落库')
-  } catch (e: any) {
-    ElMessage.error('JSON 解析失败：' + (e?.message || '格式错误'))
+    const res: any = await scenarioApi.run(scenario.value.id, trialEnvironmentId.value)
+    trialData.value = res?.data || {}
+    trialVisible.value = true
+  } finally {
+    trialRunning.value = false
   }
 }
+
+function saveEditedSteps() {
+  scenario.value.steps = editableSteps.value.map((step:any) => {
+    const { condition_field, condition_operator, condition_value, ...persisted } = step
+    return {
+      ...persisted,
+      condition: condition_field
+        ? { field: condition_field, operator: condition_operator, value: condition_value }
+        : undefined,
+    }
+  })
+  editVisible.value = false
+  void save()
+}
+
+function syncEndpoint(step:any){const ep=endpoints.value.find(x=>x.id===step.endpoint_id);if(ep){step.method=ep.method;step.url=ep.path}}
+function assertionFieldChanged(step:any){if(step.assertion.field==='$status'){step.assertion.operator='eq';if(!step.assertion.expected)step.assertion.expected=200}}
+function responseFields(step:any):string[]{const ep=endpoints.value.find(x=>x.id===step.endpoint_id);const schema=ep?.responses?.[0]?.schema||{};const fields=Object.keys(schema.properties||{}).map(k=>`$.${k}`);return fields.length?fields:['$.data','$.message','$.code']}
 
 async function loadHistory() {
   if (!projectId.value) {
@@ -425,4 +478,5 @@ onMounted(async () => {
   white-space: pre-wrap;
   word-break: break-all;
 }
+.flow-canvas{display:flex;flex-direction:column;align-items:center;padding:20px;margin-bottom:18px;border-radius:10px;background:var(--el-fill-color-lighter)}.flow-node{min-width:230px;padding:10px 14px;border:2px solid var(--el-border-color);border-radius:8px;background:white;text-align:center}.flow-node span{display:block;margin-top:4px;font-size:12px;color:var(--el-text-color-secondary)}.flow-node.start,.flow-node.end{min-width:100px;border-color:var(--el-color-success)}.flow-node.api{border-color:var(--el-color-primary)}.flow-node.condition{border-color:var(--el-color-warning)}.flow-node.assertion{border-color:var(--el-color-success)}.flow-line{height:24px;color:var(--el-text-color-placeholder)}.node-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}.node-grid .el-select{width:100%}@media(max-width:650px){.node-grid{grid-template-columns:1fr}}
 </style>

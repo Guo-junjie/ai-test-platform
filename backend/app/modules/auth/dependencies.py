@@ -6,12 +6,15 @@ FastAPI 依赖注入 — 认证与权限校验
 - require_role: 角色权限校验依赖工厂
 """
 
+from datetime import datetime
+import hashlib
 from typing import Callable
 
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
-from app.models.database import User, UserRole
+from app.models.database import PersonalAccessToken, User, UserRole
 from app.modules.auth.auth_service import AuthService
 from app.utils.database import get_db_session
 
@@ -55,11 +58,22 @@ async def get_current_user(
 
     payload = AuthService.verify_token(token)
     if payload is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        personal_token = (await db.execute(select(PersonalAccessToken).where(
+            PersonalAccessToken.token_hash == token_hash,
+            PersonalAccessToken.revoked_at.is_(None),
+        ))).scalar_one_or_none()
+        if personal_token is None or (personal_token.expires_at and personal_token.expires_at <= datetime.utcnow()):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired token",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        personal_token.last_used_at = datetime.utcnow()
+        user = await AuthService.get_user_by_id(str(personal_token.user_id), db)
+        if user is None or not user.is_active:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
+        return user
 
     user_id = payload.get("sub")
     if not user_id:

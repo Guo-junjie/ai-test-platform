@@ -19,6 +19,11 @@
     </el-card>
 
     <el-card shadow="hover" class="library-card" v-loading="listLoading">
+      <el-tabs v-model="libraryTab" class="library-tabs" @tab-change="onLibraryTabChange">
+        <el-tab-pane label="全部用例" name="all" />
+        <el-tab-pane label="待我评审" name="review" />
+        <el-tab-pane label="已归档" name="archived" />
+      </el-tabs>
       <div class="filter-row">
         <el-input
           v-model="searchKeyword"
@@ -100,10 +105,16 @@
         <el-table-column label="状态" width="100" align="center">
           <template #default="{ row }"><el-tag size="small" :type="reviewTagType(row)">{{ reviewLabel(row) }}</el-tag></template>
         </el-table-column>
-        <el-table-column label="操作" width="210" fixed="right" align="center">
+        <el-table-column label="操作" width="250" fixed="right" align="center">
           <template #default="{ row }">
             <el-button size="small" text type="primary" @click="openDetail(row)">查看</el-button>
+            <template v-if="libraryTab === 'review'">
+              <el-button size="small" text type="success" @click="adopt(row)">通过</el-button>
+              <el-button size="small" text type="warning" @click="requestChanges(row)">退回</el-button>
+            </template>
+            <el-button v-else-if="libraryTab === 'archived'" size="small" text type="success" @click="restoreCase(row)">恢复</el-button>
             <el-button
+              v-else
               size="small"
               text
               type="success"
@@ -131,7 +142,9 @@
         </el-table-column>
       </el-table>
 
-      <el-empty v-if="projectId && !listLoading && cases.length === 0" description="当前筛选条件下没有用例" />
+      <el-empty v-if="projectId && !listLoading && cases.length === 0" :description="libraryTab === 'review' ? '没有待评审用例' : libraryTab === 'archived' ? '归档区暂无用例' : '当前筛选条件下没有用例'">
+        <el-button v-if="libraryTab !== 'all'" type="primary" plain @click="libraryTab='all';onLibraryTabChange()">查看全部用例</el-button>
+      </el-empty>
       <el-empty v-if="!projectId" description="请先选择项目" />
       <el-pagination
         v-if="totalCases > pageSize"
@@ -358,6 +371,7 @@ const pageSize = 50
 const listLoading = ref(false)
 const activeType = ref('all')
 const activeSource = ref('')
+const libraryTab = ref<'all' | 'review' | 'archived'>('all')
 const searchKeyword = ref('')
 const selectedRows = ref<any[]>([])
 const batchAdopting = ref(false)
@@ -447,7 +461,8 @@ async function onProjectChange() { page.value = 1; selectedRows.value = []; plan
 async function loadCredentials() { if (!projectId.value) { credentials.value = []; return } try { const res: any = await secretApi.list(projectId.value); credentials.value = res?.data?.items || [] } catch { credentials.value = [] } }
 function applyCredential(name: string) { if (!name) return; const refValue = `{{credential:${name}}}`; if (editor.value.auth.type === 'bearer') editor.value.auth.token = refValue; else if (editor.value.auth.type === 'basic') editor.value.auth.password = refValue; else editor.value.auth.value = refValue }
 function onFilterChange() { page.value = 1; loadCases() }
-async function loadCases() { if (!projectId.value) { cases.value = []; totalCases.value = 0; return } listLoading.value = true; try { const res: any = await caseApi.list({ project_id: projectId.value, page: page.value, page_size: pageSize, case_type: activeType.value === 'all' ? undefined : activeType.value, source: activeSource.value || undefined, keyword: searchKeyword.value || undefined }); cases.value = res?.data?.items || []; totalCases.value = res?.data?.total || 0 } catch { cases.value = []; totalCases.value = 0 } finally { listLoading.value = false } }
+function onLibraryTabChange() { page.value = 1; selectedRows.value = []; loadCases() }
+async function loadCases() { if (!projectId.value) { cases.value = []; totalCases.value = 0; return } listLoading.value = true; try { const res: any = await caseApi.list({ project_id: projectId.value, page: page.value, page_size: pageSize, case_type: activeType.value === 'all' ? undefined : activeType.value, source: activeSource.value || undefined, keyword: searchKeyword.value || undefined, review_state: libraryTab.value === 'review' ? 'pending' : undefined, status: libraryTab.value === 'archived' ? 'deprecated' : undefined }); cases.value = res?.data?.items || []; totalCases.value = res?.data?.total || 0 } catch { cases.value = []; totalCases.value = 0 } finally { listLoading.value = false } }
 function onSelectionChange(rows: any[]) { selectedRows.value = rows }
 
 function hydrateEditor(item: any) {
@@ -520,6 +535,7 @@ async function adopt(row: any) { await caseApi.review(row.id, 'approve'); ElMess
 async function requestChanges(row: any) { try { const result = await ElMessageBox.prompt('填写需要修改的内容', '退回用例', { inputValidator: (value: string) => !!value.trim() || '请填写修改意见' }); await caseApi.review(row.id, 'changes_requested', result.value); ElMessage.success('已退回'); await loadCases() } catch { /* 取消 */ } }
 async function showReviewEvents(row: any) { const res: any = await caseApi.reviewEvents(row.id); reviewEvents.value = res?.data || []; reviewEventsVisible.value = true }
 async function deprecate(row: any) { try { await ElMessageBox.confirm(`确认废弃用例“${row.title}”？`, '废弃确认', { type: 'warning' }); await caseApi.deprecate(row.id); ElMessage.success('已废弃'); await loadCases() } catch { /* 取消 */ } }
+async function restoreCase(row: any) { await caseApi.restore(row.id); ElMessage.success('已恢复为草稿，需要重新提交评审'); await loadCases() }
 async function deleteCase(row: any) { try { await ElMessageBox.confirm(`确认删除草稿“${row.title}”？`, '删除确认', { type: 'warning' }); await caseApi.remove(row.id); ElMessage.success('已删除'); await loadCases() } catch { /* 取消 */ } }
 
 async function batchAdopt() { if (selectedRows.value.some((row) => row.review_state !== 'pending')) { ElMessage.warning('批量批准仅适用于待评审用例'); return } batchAdopting.value = true; try { await caseApi.adoptBatch(selectedRows.value.map((row) => row.id)); ElMessage.success('批量批准完成'); await loadCases() } finally { batchAdopting.value = false } }

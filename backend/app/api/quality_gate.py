@@ -13,11 +13,11 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
-from pydantic import BaseModel
-from sqlalchemy import select, desc, and_
+from pydantic import BaseModel, Field
+from sqlalchemy import select, desc, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.database import Project, TestRun, TestReport, Defect, User
+from app.models.database import Project, TestRun, TestReport, Defect, TestPlan, User
 from app.modules.auth.dependencies import get_current_user, require_tester
 from app.modules.quality_gate import QualityGateEvaluator
 from app.modules.audit.audit_service import AuditService
@@ -50,6 +50,8 @@ class QualityGateRuleRequest(BaseModel):
     metric: str
     name: str | None = None
     threshold: float
+    operator: str | None = None
+    plan_ids: list[str] = Field(default_factory=list)
     enabled: bool = True
 
 
@@ -79,9 +81,10 @@ def _rule_items(config: dict[str, Any]) -> list[dict[str, Any]]:
     return [{
         "id": key, "metric": key,
         "name": meta.get(key, {}).get("name") or RULE_LABELS[key],
-        "operator": "<=" if key.startswith("max_") else ">=",
+        "operator": meta.get(key, {}).get("operator") or ("<=" if key.startswith("max_") else ">="),
         "threshold": value,
         "enabled": meta.get(key, {}).get("enabled", True),
+        "plan_ids": meta.get(key, {}).get("plan_ids", []),
     } for key, value in config.get("rules", {}).items() if key in RULE_LABELS]
 
 
@@ -99,6 +102,51 @@ async def list_quality_gate_rules(
     return {"code": 0, "data": {"items": _rule_items(config)}, "message": "success"}
 
 
+@router.get("/preview/{project_id}")
+async def preview_quality_gate_rules(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    """用最近一次报告计算规则预览，供编辑页即时展示，预览不改写报告。"""
+    project = await _get_project(project_id, db)
+    row = (await db.execute(
+        select(TestReport, TestRun)
+        .join(TestRun, TestReport.test_run_id == TestRun.id)
+        .where(TestRun.project_id == project.id)
+        .order_by(desc(TestReport.created_at)).limit(1)
+    )).first()
+    rules = _rule_items(QualityGateEvaluator.validate_config(project.quality_gate_config or {}))
+    if not row:
+        return {"code": 0, "data": {"run_id": None, "items": [dict(item, actual=None, passed=None) for item in rules]}, "message": "暂无可预览的运行报告"}
+    report, run = row
+    report_data = report.report_data or {}
+    summary = report_data.get("test_summary") or report_data
+    defect_rows = (await db.execute(select(Defect.severity, func.count(Defect.id)).where(
+        Defect.test_run_id == run.id,
+    ).group_by(Defect.severity))).all()
+    severity = {getattr(key, "value", key): count for key, count in defect_rows}
+    def rate(name: str) -> float | None:
+        value = summary.get(name, {})
+        total = value.get("total", 0) if isinstance(value, dict) else 0
+        return round(value.get("passed", 0) / total * 100, 1) if total else None
+    actuals = {
+        "max_p0_defects": severity.get("P0", 0), "max_p1_defects": severity.get("P1", 0),
+        "min_api_pass_rate": rate("api_summary"),
+        "min_performance_pass_rate": rate("performance_summary"),
+        "min_integration_pass_rate": rate("integration_summary"),
+        "min_quality_score": report.quality_score,
+    }
+    def passed(item: dict[str, Any], actual: float | None) -> bool | None:
+        if actual is None:
+            return None
+        threshold, op = item["threshold"], item["operator"]
+        return {"<=": actual <= threshold, ">=": actual >= threshold, "<": actual < threshold,
+                ">": actual > threshold, "==": actual == threshold, "!=": actual != threshold}.get(op)
+    items = [dict(item, actual=actuals.get(item["metric"]), passed=passed(item, actuals.get(item["metric"]))) for item in rules]
+    return {"code": 0, "data": {"run_id": str(run.id), "created_at": report.created_at.isoformat() if report.created_at else None, "items": items}, "message": "success"}
+
+
 @router.post("/rules")
 async def create_or_replace_quality_gate_rule(
     req: QualityGateRuleRequest,
@@ -110,7 +158,23 @@ async def create_or_replace_quality_gate_rule(
     project = await _get_project(req.project_id, db)
     config = QualityGateEvaluator.validate_config(project.quality_gate_config or {})
     config["rules"][req.metric] = req.threshold
-    config.setdefault("rule_meta", {})[req.metric] = {"name": req.name or RULE_LABELS[req.metric], "enabled": req.enabled}
+    operator = req.operator or ("<=" if req.metric.startswith("max_") else ">=")
+    if operator not in {"<=", ">=", "<", ">", "==", "!="}:
+        raise HTTPException(422, "不支持的比较运算符")
+    plan_ids: list[str] = []
+    for value in req.plan_ids:
+        try:
+            plan_id = uuid.UUID(value)
+        except ValueError as exc:
+            raise HTTPException(422, "测试计划 ID 格式错误") from exc
+        plan = (await db.execute(select(TestPlan.id).where(TestPlan.id == plan_id, TestPlan.project_id == project.id))).scalar_one_or_none()
+        if not plan:
+            raise HTTPException(422, "测试计划不存在或不属于当前项目")
+        plan_ids.append(str(plan_id))
+    config.setdefault("rule_meta", {})[req.metric] = {
+        "name": req.name or RULE_LABELS[req.metric], "enabled": req.enabled,
+        "operator": operator, "plan_ids": plan_ids,
+    }
     validated = QualityGateEvaluator.validate_config(config)
     project.quality_gate_config = validated
     await db.commit()
@@ -327,6 +391,7 @@ async def evaluate_quality_gate(
         quality_score=quality_score,
         defects=defects_summary,
         test_summary=test_summary,
+        plan_id=str(run.plan_id) if run.plan_id else None,
     )
 
     # 更新报告中的门禁结果

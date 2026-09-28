@@ -155,6 +155,31 @@ class User(Base):
     audit_logs = relationship("AuditLog", back_populates="user")
 
 
+class UserPreference(Base):
+    """用户级界面与通知偏好。"""
+    __tablename__ = "user_preferences"
+
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    notification_config = Column(JSONB, nullable=False, default=dict)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class PersonalAccessToken(Base):
+    """个人 API Token；数据库只保存 SHA-256 摘要，明文仅创建时返回。"""
+    __tablename__ = "personal_access_tokens"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    token_hash = Column(String(64), nullable=False, unique=True, index=True)
+    prefix = Column(String(16), nullable=False)
+    scopes = Column(JSONB, nullable=False, default=list)
+    expires_at = Column(DateTime, nullable=True)
+    last_used_at = Column(DateTime, nullable=True)
+    revoked_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class Project(Base):
     """项目表 — 多租户隔离"""
     __tablename__ = "projects"

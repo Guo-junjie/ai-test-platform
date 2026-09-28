@@ -13,10 +13,10 @@ import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.database import Project, SourceType, User
+from app.models.database import EnvironmentProfile, Project, SourceType, TestCaseAsset, TestRun, User
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.dependencies import require_admin, require_role
 from app.models.database import UserRole
@@ -93,6 +93,11 @@ async def list_projects(
         False, description="是否包含已停用项目，默认只返回 is_active=True 的项目"
     ),
     limit: int = Query(200, ge=1, le=1000),
+    page: int = Query(1, ge=1),
+    page_size: int | None = Query(None, ge=1, le=200),
+    keyword: str | None = None,
+    status: str | None = None,
+    owner_id: str | None = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ):
@@ -103,18 +108,38 @@ async def list_projects(
     可返回全量（含已停用）项目。
     """
     stmt = select(Project)
-    if not include_inactive:
+    if status == "inactive":
+        stmt = stmt.where(Project.is_active.is_(False))
+    elif status == "active" or not include_inactive:
         stmt = stmt.where(Project.is_active.is_(True))
-    stmt = stmt.order_by(Project.created_at.desc()).limit(limit)
+    if keyword:
+        stmt = stmt.where(Project.name.ilike(f"%{keyword.strip()}%"))
+    if owner_id:
+        try:
+            stmt = stmt.where(Project.owner_id == uuid.UUID(owner_id))
+        except ValueError as exc:
+            raise HTTPException(422, "负责人 ID 格式错误") from exc
+    total = (await db.execute(select(func.count()).select_from(stmt.order_by(None).subquery()))).scalar_one()
+    size = page_size or limit
+    stmt = stmt.order_by(Project.created_at.desc()).offset((page - 1) * size).limit(size)
 
     result = await db.execute(stmt)
     projects = result.scalars().all()
 
-    items = [_project_to_dict(p) for p in projects]
+    items = []
+    for project in projects:
+        data = _project_to_dict(project)
+        data["owner_name"] = (await db.execute(select(User.username).where(User.id == project.owner_id))).scalar_one_or_none()
+        data["case_count"] = (await db.execute(select(func.count(TestCaseAsset.id)).where(TestCaseAsset.project_id == project.id))).scalar_one()
+        latest = (await db.execute(select(TestRun).where(TestRun.project_id == project.id).order_by(desc(TestRun.created_at)).limit(1))).scalar_one_or_none()
+        data["recent_run_at"] = latest.created_at.isoformat() if latest and latest.created_at else None
+        data["recent_run_status"] = latest.status.value if latest and latest.status else None
+        data["environment_ready"] = (await db.execute(select(func.count(EnvironmentProfile.id)).where(EnvironmentProfile.project_id == project.id, EnvironmentProfile.status == "published"))).scalar_one() > 0
+        items.append(data)
 
     return {
         "code": 0,
-        "data": {"list": items, "items": items, "total": len(items)},
+        "data": {"list": items, "items": items, "total": total, "page": page, "page_size": size},
         "message": "success",
     }
 

@@ -113,6 +113,8 @@ class QualityGateEvaluator:
                 key: {
                     "name": str(value.get("name") or key)[:100],
                     "enabled": bool(value.get("enabled", True)),
+                    "operator": value.get("operator") if value.get("operator") in {"<=", ">=", "<", ">", "==", "!="} else ("<=" if key.startswith("max_") else ">="),
+                    "plan_ids": [str(item) for item in value.get("plan_ids", []) if item],
                 }
                 for key, value in config["rule_meta"].items()
                 if key in validated["rules"] and isinstance(value, dict)
@@ -125,6 +127,7 @@ class QualityGateEvaluator:
         quality_score: int,
         defects: dict[str, Any],
         test_summary: dict[str, Any],
+        plan_id: str | None = None,
     ) -> dict[str, Any]:
         """
         评估质量门禁。
@@ -154,29 +157,45 @@ class QualityGateEvaluator:
 
         rules = self.config.get("rules", {})
         rule_meta = self.config.get("rule_meta", {})
-        is_enabled = lambda key: rule_meta.get(key, {}).get("enabled", True)
+        def is_enabled(key: str) -> bool:
+            meta = rule_meta.get(key, {})
+            scope = meta.get("plan_ids", [])
+            return bool(meta.get("enabled", True)) and (not scope or plan_id in scope)
+
+        def violates(key: str, actual: float, threshold: float) -> bool:
+            operator = rule_meta.get(key, {}).get("operator") or ("<=" if key.startswith("max_") else ">=")
+            matches = {
+                "<=": actual <= threshold, ">=": actual >= threshold,
+                "<": actual < threshold, ">": actual > threshold,
+                "==": actual == threshold, "!=": actual != threshold,
+            }.get(operator, False)
+            return not matches
+
+        def expected_text(key: str, threshold: float, suffix: str = "") -> str:
+            operator = rule_meta.get(key, {}).get("operator") or ("<=" if key.startswith("max_") else ">=")
+            return f"{operator} {threshold}{suffix}"
         violations: list[dict[str, Any]] = []
 
         # 1. P0 缺陷检查
         by_severity = defects.get("summary", {}).get("by_severity", {})
         p0_count = by_severity.get("P0", 0)
         max_p0 = rules.get("max_p0_defects", 0)
-        if is_enabled("max_p0_defects") and p0_count > max_p0:
+        if is_enabled("max_p0_defects") and violates("max_p0_defects", p0_count, max_p0):
             violations.append({
                 "rule": "max_p0_defects",
                 "actual": p0_count,
-                "expected": f"<= {max_p0}",
+                "expected": expected_text("max_p0_defects", max_p0),
                 "message": f"P0 缺陷数 {p0_count} 超出门禁阈值 {max_p0}",
             })
 
         # 2. P1 缺陷检查
         p1_count = by_severity.get("P1", 0)
         max_p1 = rules.get("max_p1_defects", 5)
-        if is_enabled("max_p1_defects") and p1_count > max_p1:
+        if is_enabled("max_p1_defects") and violates("max_p1_defects", p1_count, max_p1):
             violations.append({
                 "rule": "max_p1_defects",
                 "actual": p1_count,
-                "expected": f"<= {max_p1}",
+                "expected": expected_text("max_p1_defects", max_p1),
                 "message": f"P1 缺陷数 {p1_count} 超出门禁阈值 {max_p1}",
             })
 
@@ -187,11 +206,11 @@ class QualityGateEvaluator:
         if api_total > 0:
             api_pass_rate = round(api_passed / api_total * 100, 1)
             min_api = rules.get("min_api_pass_rate", 90)
-            if is_enabled("min_api_pass_rate") and api_pass_rate < min_api:
+            if is_enabled("min_api_pass_rate") and violates("min_api_pass_rate", api_pass_rate, min_api):
                 violations.append({
                     "rule": "min_api_pass_rate",
                     "actual": f"{api_pass_rate}%",
-                    "expected": f">= {min_api}%",
+                    "expected": expected_text("min_api_pass_rate", min_api, "%"),
                     "message": f"API 测试通过率 {api_pass_rate}% 低于门禁要求 {min_api}%",
                 })
 
@@ -202,11 +221,11 @@ class QualityGateEvaluator:
         if perf_total > 0:
             perf_pass_rate = round(perf_passed / perf_total * 100, 1)
             min_perf = rules.get("min_performance_pass_rate", 80)
-            if is_enabled("min_performance_pass_rate") and perf_pass_rate < min_perf:
+            if is_enabled("min_performance_pass_rate") and violates("min_performance_pass_rate", perf_pass_rate, min_perf):
                 violations.append({
                     "rule": "min_performance_pass_rate",
                     "actual": f"{perf_pass_rate}%",
-                    "expected": f">= {min_perf}%",
+                    "expected": expected_text("min_performance_pass_rate", min_perf, "%"),
                     "message": f"性能测试通过率 {perf_pass_rate}% 低于门禁要求 {min_perf}%",
                 })
 
@@ -217,21 +236,21 @@ class QualityGateEvaluator:
         if integ_total > 0:
             integ_pass_rate = round(integ_passed / integ_total * 100, 1)
             min_integ = rules.get("min_integration_pass_rate", 85)
-            if is_enabled("min_integration_pass_rate") and integ_pass_rate < min_integ:
+            if is_enabled("min_integration_pass_rate") and violates("min_integration_pass_rate", integ_pass_rate, min_integ):
                 violations.append({
                     "rule": "min_integration_pass_rate",
                     "actual": f"{integ_pass_rate}%",
-                    "expected": f">= {min_integ}%",
+                    "expected": expected_text("min_integration_pass_rate", min_integ, "%"),
                     "message": f"集成测试通过率 {integ_pass_rate}% 低于门禁要求 {min_integ}%",
                 })
 
         # 6. 质量评分检查
         min_score = rules.get("min_quality_score", 70)
-        if is_enabled("min_quality_score") and quality_score < min_score:
+        if is_enabled("min_quality_score") and violates("min_quality_score", quality_score, min_score):
             violations.append({
                 "rule": "min_quality_score",
                 "actual": quality_score,
-                "expected": f">= {min_score}",
+                "expected": expected_text("min_quality_score", min_score),
                 "message": f"质量评分 {quality_score} 低于门禁要求 {min_score}",
             })
 

@@ -310,6 +310,7 @@ async def list_cases(
     endpoint_id: str | None = None,
     case_type: str | None = None,
     status: str | None = None,
+    review_state: str | None = None,
     source: str | None = None,  # 新增：ai_generated / requirement / manual
     keyword: str | None = None,
     page: int = Query(1, ge=1),
@@ -329,6 +330,8 @@ async def list_cases(
         query = query.where(TestCaseAsset.case_type == case_type)
     if status:
         query = query.where(TestCaseAsset.status == status)
+    if review_state:
+        query = query.where(TestCaseAsset.review_state == review_state)
     if source:
         query = query.where(TestCaseAsset.source == source)
     if keyword:
@@ -959,6 +962,28 @@ async def deprecate_case(
     await db.flush()
 
     return {"code": 0, "data": None, "message": "ok"}
+
+
+@router.post("/{case_id}/restore")
+async def restore_case(
+    case_id: str,
+    current_user: User = Depends(require_role(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.TEST_MANAGER)),
+    db: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    """将归档用例恢复为草稿，恢复后必须重新提交评审。"""
+    item = (await db.execute(
+        select(TestCaseAsset).where(TestCaseAsset.id == case_id).with_for_update()
+    )).scalar_one_or_none()
+    if item is None:
+        raise HTTPException(404, "用例不存在")
+    if item.status != CaseAssetStatus.DEPRECATED:
+        raise HTTPException(409, "只有已归档用例可以恢复")
+    item.status = CaseAssetStatus.DRAFT
+    item.review_state = "draft"
+    item.updated_at = datetime.utcnow()
+    _record_review(db, item, current_user, "restore", "从归档恢复为草稿")
+    await db.flush()
+    return {"code": 0, "data": {"review_state": "draft"}, "message": "已恢复为草稿"}
 
 
 @router.post("/adopt-batch")

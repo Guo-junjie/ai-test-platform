@@ -13,10 +13,12 @@
 """
 
 from datetime import datetime, timezone
+import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.scheduler.cron_parser import CronParser
@@ -29,8 +31,51 @@ from app.schemas.scheduled_task import (
 from app.utils.database import get_db_session
 from app.modules.auth.dependencies import get_current_user
 from app.modules.scheduler.next_run import next_run
+from app.models.database import EnvironmentProfile, Scenario, ScheduledTask, TestPlan
 
 router = APIRouter()
+
+
+async def _validated_bindings(
+    db: AsyncSession,
+    project_id: str,
+    target_type: str,
+    target_id: str | None,
+    env_config: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """校验级联选择并由服务端回填环境快照，避免提交任意 URL/跨项目 ID。"""
+    try:
+        pid = uuid.UUID(project_id)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(422, "项目 ID 格式错误") from exc
+    if target_type in {"plan", "scenario"}:
+        if not target_id:
+            raise HTTPException(422, "请选择测试目标")
+        try:
+            tid = uuid.UUID(target_id)
+        except ValueError as exc:
+            raise HTTPException(422, "测试目标 ID 格式错误") from exc
+        model = TestPlan if target_type == "plan" else Scenario
+        if not (await db.execute(select(model.id).where(model.id == tid, model.project_id == pid))).scalar_one_or_none():
+            raise HTTPException(422, "测试目标不存在或不属于当前项目")
+    env_id = (env_config or {}).get("environment_id")
+    if not env_id:
+        raise HTTPException(422, "请选择已发布的执行环境")
+    try:
+        eid = uuid.UUID(str(env_id))
+    except ValueError as exc:
+        raise HTTPException(422, "环境 ID 格式错误") from exc
+    environment = (await db.execute(select(EnvironmentProfile).where(
+        EnvironmentProfile.id == eid, EnvironmentProfile.project_id == pid,
+    ))).scalar_one_or_none()
+    if environment is None or environment.status != "published" or not environment.current_revision_id:
+        raise HTTPException(422, "执行环境不存在、未发布或不属于当前项目")
+    return {
+        "environment_id": str(environment.id),
+        "environment_revision_id": str(environment.current_revision_id),
+        "environment_name": environment.name,
+        "service_url": environment.base_url,
+    }
 
 
 class SchedulePreviewRequest(BaseModel):
@@ -51,6 +96,7 @@ async def list_tasks(
     status: str | None = None,
     page: int = 1,
     page_size: int = 20,
+    current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     """获取定时任务列表。"""
@@ -80,6 +126,9 @@ async def create_task(
         parser = CronParser()
         cron_expression = await parser.parse(req.nl_schedule)
 
+    env_config = await _validated_bindings(
+        db, req.project_id, req.target_type, req.target_id, req.env_config,
+    )
     result = await SchedulerService.create_task(
         project_id=req.project_id,
         name=req.name,
@@ -89,7 +138,7 @@ async def create_task(
         description=req.description,
         nl_schedule=req.nl_schedule,
         target_config=req.target_config,
-        env_config=req.env_config,
+        env_config=env_config,
         status=req.status,
         created_by=str(current_user.id),
         db=db,
@@ -100,6 +149,7 @@ async def create_task(
 @router.post("/parse-cron")
 async def parse_cron(
     req: ParseCronRequest,
+    current_user=Depends(get_current_user),
 ) -> dict[str, Any]:
     """NL→Cron 表达式解析。"""
     parser = CronParser()
@@ -153,6 +203,7 @@ async def preview_schedule(
 @router.get("/{task_id}")
 async def get_task(
     task_id: str,
+    current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     """获取定时任务详情。"""
@@ -166,14 +217,29 @@ async def get_task(
 async def update_task(
     task_id: str,
     req: ScheduledTaskUpdate,
+    current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     """更新定时任务。"""
     data = {k: v for k, v in req.model_dump().items() if v is not None}
+    try:
+        tid = uuid.UUID(task_id)
+    except ValueError as exc:
+        raise HTTPException(422, "定时任务 ID 格式错误") from exc
+    task = (await db.execute(select(ScheduledTask).where(ScheduledTask.id == tid))).scalar_one_or_none()
+    if task is None:
+        raise HTTPException(status_code=404, detail="Scheduled task not found")
+    target_type = req.target_type or task.target_type.value
+    target_id = req.target_id if req.target_id is not None else (str(task.target_id) if task.target_id else None)
+    if req.env_config is not None or req.target_type is not None or req.target_id is not None:
+        data["env_config"] = await _validated_bindings(
+            db, str(task.project_id), target_type, target_id,
+            req.env_config if req.env_config is not None else task.env_config,
+        )
     # service 的 update_task 仅接受可安全原地修改的字段。
     allowed = {
         "name", "description", "cron_expression", "nl_schedule",
-        "target_config", "env_config", "status",
+        "target_type", "target_id", "target_config", "env_config", "status",
     }
     filtered = {k: v for k, v in data.items() if k in allowed}
     result = await SchedulerService.update_task(task_id=task_id, db=db, **filtered)
@@ -185,6 +251,7 @@ async def update_task(
 @router.delete("/{task_id}")
 async def delete_task(
     task_id: str,
+    current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     """删除定时任务。"""
@@ -197,6 +264,7 @@ async def delete_task(
 @router.post("/{task_id}/toggle")
 async def toggle_task(
     task_id: str,
+    current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     """切换定时任务启用/禁用状态。"""
@@ -211,6 +279,7 @@ async def get_task_history(
     task_id: str,
     page: int = 1,
     page_size: int = 20,
+    current_user=Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
     """获取定时任务执行历史。"""

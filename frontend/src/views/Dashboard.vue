@@ -1,297 +1,39 @@
 <template>
-  <div class="dashboard-page">
-    <!-- 统计卡片（带跳转） -->
-    <el-row :gutter="20">
-      <el-col :xs="24" :sm="12" :md="6" v-for="card in statCards" :key="card.title" class="stat-column">
-        <el-card shadow="hover" class="stat-card-clickable" @click="goStatCard(card)">
-          <div class="stat-card">
-            <el-icon :size="32" :color="card.color">
-              <component :is="card.icon" />
-            </el-icon>
-            <div class="stat-info">
-              <div class="stat-value">{{ card.value }}</div>
-              <div class="stat-label">{{ card.title }}</div>
-            </div>
-          </div>
-        </el-card>
-      </el-col>
-    </el-row>
-
-    <!-- 趋势与分布 -->
-    <el-row :gutter="20" style="margin-top: var(--app-sp-5);">
-      <el-col :xs="24" :lg="16">
-        <el-card shadow="hover">
-          <template #header>
-            <div class="card-header">
-              <span>质量评分趋势</span>
-              <el-select v-model="days" size="small" style="width: 120px;" @change="loadData">
-                <el-option label="最近 7 天" :value="7" />
-                <el-option label="最近 30 天" :value="30" />
-                <el-option label="最近 90 天" :value="90" />
-              </el-select>
-            </div>
-          </template>
-          <el-alert v-if="trendError" :title="trendError" type="error" show-icon :closable="false" style="margin-bottom: 12px">
-            <template #default><el-button link type="primary" @click="loadTrend">重新加载</el-button></template>
-          </el-alert>
-          <TrendChart
-            v-if="!trendError && qualityTrend.dates?.length"
-            :labels="qualityTrend.dates"
-            :series="[
-              { name: '平均评分', data: qualityTrend.avg_scores, color: CHART_COLORS.primary },
-              { name: '最高评分', data: qualityTrend.max_scores, color: CHART_COLORS.success },
-              { name: '最低评分', data: qualityTrend.min_scores, color: CHART_COLORS.warning },
-            ]"
-            :height="280"
-            y-axis-name="评分"
-          />
-          <el-empty v-else-if="!trendError" description="暂无质量趋势数据" />
-        </el-card>
-      </el-col>
-      <el-col :xs="24" :lg="8" class="status-column">
-        <el-card shadow="hover">
-          <template #header>任务状态分布</template>
-          <el-alert v-if="statisticsError" :title="statisticsError" type="error" show-icon :closable="false">
-            <template #default><el-button link type="primary" @click="loadData">重新加载</el-button></template>
-          </el-alert>
-          <div v-else ref="statusChartRef" style="height: 280px;"></div>
-        </el-card>
-      </el-col>
-    </el-row>
-
-    <!-- 最近测试任务 -->
-    <el-row :gutter="20" style="margin-top: var(--app-sp-5);">
-      <el-col :span="24">
-        <el-card shadow="hover">
-          <template #header>最近测试任务</template>
-          <el-alert v-if="recentRunsError" :title="recentRunsError" type="error" show-icon :closable="false" style="margin-bottom: 12px">
-            <template #default><el-button link type="primary" @click="loadRecentRuns">重新加载</el-button></template>
-          </el-alert>
-          <el-table :data="recentRuns" v-loading="loading" style="width: 100%">
-            <el-table-column label="项目" min-width="140">
-              <template #default="{ row }">
-                <el-link v-if="row.project_id" type="primary" @click="goProject(row.project_id)">
-                  {{ row.project_name }}
-                </el-link>
-                <span v-else>{{ row.project_name || '—' }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column label="状态" width="110">
-              <template #default="{ row }">
-                <el-tag :type="statusTagType(row.status)" size="small">{{ testStatusLabel(row.status) }}</el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column prop="quality_score" label="质量分" width="100">
-              <template #default="{ row }">
-                <span>{{ row.quality_score != null ? row.quality_score : '--' }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column label="创建时间" min-width="180">
-              <template #default="{ row }">{{ formatDateTime(row.created_at) }}</template>
-            </el-table-column>
-            <el-table-column label="操作" width="160" fixed="right">
-              <template #default="{ row }">
-                <el-button size="small" link type="primary" @click="goRunReport(row.id)">查看报告</el-button>
-                <el-button size="small" link type="warning" @click="goRunDefects(row.id)">查看缺陷</el-button>
-              </template>
-            </el-table-column>
-          </el-table>
-        </el-card>
-      </el-col>
-    </el-row>
+  <div class="dashboard">
+    <PageHeader title="工作台" description="查看需要处理的测试工作、项目状态与最近质量变化。"><template #actions><el-button type="primary" @click="$router.push('/case-generation')">生成测试用例</el-button></template></PageHeader>
+    <div class="stat-grid"><el-card v-for="card in statCards" :key="card.title" shadow="never" class="stat-card" @click="goStat(card.title)"><span>{{card.title}}</span><strong>{{card.value}}</strong><small>{{card.tip}}</small></el-card></div>
+    <div class="main-grid">
+      <el-card shadow="never"><template #header><div class="card-head"><div><b>我的待办</b><p>由评审、环境和失败运行实时聚合</p></div></div></template><button v-for="item in todos" :key="item.id" type="button" class="todo" @click="$router.push(item.path)"><span class="todo-dot" :class="item.priority"/><span><b>{{item.title}}</b><small>{{item.description}}</small></span><el-icon><ArrowRight/></el-icon></button><el-empty v-if="!todos.length" description="当前没有待办，所有关键流程均已就绪" :image-size="60"/></el-card>
+      <el-card shadow="never"><template #header><div class="card-head"><div><b>通过率趋势</b><p>按已完成运行的门禁结果计算</p></div><el-select v-model="days" size="small" @change="loadTrend"><el-option label="近 7 天" :value="7"/><el-option label="近 30 天" :value="30"/><el-option label="近 90 天" :value="90"/></el-select></div></template><el-alert v-if="trendError" :title="trendError" type="error" :closable="false"><el-button link @click="loadTrend">重试</el-button></el-alert><TrendChart v-else-if="trend.dates.length" :labels="trend.dates" :series="[{name:'通过率',data:trend.pass_rates,color:CHART_COLORS.success}]" :height="245" y-axis-name="%"/><el-empty v-else description="暂无趋势，完成一次测试后自动生成" :image-size="60"/></el-card>
+    </div>
+    <el-card shadow="never"><template #header><div class="card-head"><div><b>我的项目</b><p>用例规模、最近执行与环境就绪状态</p></div><el-button text type="primary" @click="$router.push('/projects')">全部项目</el-button></div></template><el-table :data="projectRows" @row-click="openProject"><el-table-column prop="name" label="项目" min-width="180"><template #default="{row}"><b class="link">{{row.name}}</b></template></el-table-column><el-table-column prop="case_count" label="用例数" width="100"/><el-table-column label="最近执行" min-width="160"><template #default="{row}">{{row.recent_run_at?formatTime(row.recent_run_at):'尚未执行'}}</template></el-table-column><el-table-column label="质量分" width="100"><template #default="{row}">{{row.quality_score??'—'}}</template></el-table-column><el-table-column label="状态" width="130"><template #default="{row}"><el-tag :type="row.ready?'success':'warning'">{{row.ready?'已就绪':'待配置环境'}}</el-tag></template></el-table-column></el-table><el-empty v-if="!projectRows.length" description="暂无项目"><el-button type="primary" @click="$router.push('/projects')">创建项目</el-button></el-empty></el-card>
+    <el-card shadow="never"><template #header><div class="card-head"><div><b>最近执行</b><p>点击运行编号查看完整执行时间线</p></div><el-button text type="primary" @click="$router.push('/runs')">全部执行</el-button></div></template><el-alert v-if="runsError" :title="runsError" type="error" :closable="false"><el-button link @click="loadRuns">重试</el-button></el-alert><el-table v-else :data="recentRuns" v-loading="loading"><el-table-column label="运行编号" width="145"><template #default="{row}"><el-link type="primary" @click="$router.push(`/runs/${row.id}`)">RUN-{{row.id.slice(0,8)}}</el-link></template></el-table-column><el-table-column prop="project_name" label="项目" min-width="150"/><el-table-column label="状态" width="110"><template #default="{row}"><StatusPill :status="row.status" :map="RUN_STATUS"/></template></el-table-column><el-table-column label="质量分" width="90"><template #default="{row}">{{row.quality_score??'—'}}</template></el-table-column><el-table-column label="触发时间" min-width="170"><template #default="{row}">{{formatTime(row.created_at)}}</template></el-table-column></el-table><el-pagination v-if="runsTotal>pageSize" v-model:current-page="page" :total="runsTotal" :page-size="pageSize" layout="prev,pager,next,total" @current-change="loadRuns"/></el-card>
   </div>
 </template>
-
 <script setup lang="ts">
-import { CHART_COLORS } from '@/styles/chartPalette'
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import * as echarts from 'echarts'
-import TrendChart from '@/components/TrendChart.vue'
+import { ArrowRight } from '@element-plus/icons-vue'
+import dayjs from 'dayjs'
 import { dashboardApi, trendApi } from '@/api'
-import { formatDateTime, normalizeStatus, testStatusLabel } from '@/utils/format'
-
-const router = useRouter()
-
-function goStatCard(card: { title: string }) {
-  if (card.title === '发现缺陷') {
-    router.push({ path: '/defects' })
-  } else if (card.title === '测试任务总数') {
-    router.push({ path: '/test-run' })
-  } else if (card.title === '通过率' || card.title === '平均质量分') {
-    router.push({ path: '/quality-trend' })
-  }
-}
-
-function goProject(projectId: string) {
-  router.push({ path: `/projects/${projectId}` })
-}
-
-function goRunReport(runId: string) {
-  router.push({ path: `/report/${runId}` })
-}
-
-function goRunDefects(runId: string) {
-  // 跳转到缺陷中心，带上 test_run_id 过滤该任务发现的缺陷
-  router.push({ path: '/defects', query: { test_run_id: runId } })
-}
-
-const days = ref(30)
-const loading = ref(false)
-const statusChartRef = ref<HTMLElement>()
-let statusChart: echarts.ECharts | null = null
-
-const statCards = ref([
-  { title: '测试任务总数', value: 0, icon: 'VideoPlay', color: CHART_COLORS.primary },
-  { title: '通过率', value: '0%', icon: 'CircleCheck', color: CHART_COLORS.success },
-  { title: '发现缺陷', value: 0, icon: 'Warning', color: CHART_COLORS.warning },
-  { title: '平均质量分', value: '0', icon: 'Star', color: CHART_COLORS.warning },
-])
-
-const qualityTrend = ref<{ dates: string[]; avg_scores: number[]; max_scores: number[]; min_scores: number[] }>({
-  dates: [],
-  avg_scores: [],
-  max_scores: [],
-  min_scores: [],
-})
-const recentRuns = ref<any[]>([])
-const statisticsError = ref('')
-const trendError = ref('')
-const recentRunsError = ref('')
-
-function statusTagType(status: string): 'success' | 'warning' | 'info' | 'danger' | 'primary' {
-  const map: Record<string, any> = {
-    completed: 'success', running: 'warning', executing: 'warning',
-    pending: 'info', failed: 'danger', cancelled: 'info',
-  }
-  return map[normalizeStatus(status)] || 'info'
-}
-
-async function loadStatistics() {
-  statisticsError.value = ''
-  try {
-    const res: any = await dashboardApi.getStatistics(days.value)
-    const d = res.data || {}
-    statCards.value[0].value = d.total_runs ?? 0
-    statCards.value[1].value = (d.pass_rate ?? 0) + '%'
-    statCards.value[2].value = d.total_defects ?? 0
-    statCards.value[3].value = (d.avg_quality_score ?? 0).toFixed(1)
-    renderStatusChart(d.status_distribution || {})
-  } catch (error: any) {
-    statisticsError.value = error?.message || '统计数据加载失败'
-  }
-}
-
-async function loadTrend() {
-  trendError.value = ''
-  try {
-    const res: any = await trendApi.getQuality({ days: days.value })
-    qualityTrend.value = res.data || qualityTrend.value
-  } catch (error: any) {
-    qualityTrend.value = { dates: [], avg_scores: [], max_scores: [], min_scores: [] }
-    trendError.value = error?.message || '质量趋势加载失败'
-  }
-}
-
-async function loadRecentRuns() {
-  recentRunsError.value = ''
-  try {
-    const res: any = await dashboardApi.getRecentRuns(8)
-    recentRuns.value = res?.data?.list || []
-  } catch (error: any) {
-    recentRuns.value = []
-    recentRunsError.value = error?.message || '最近运行加载失败'
-  }
-}
-
-function renderStatusChart(distribution: Record<string, number>) {
-  if (!statusChartRef.value) return
-  if (!statusChart) statusChart = echarts.init(statusChartRef.value)
-  const colors: Record<string, string> = {
-    pending: CHART_COLORS.textSecondary, running: CHART_COLORS.warning,
-    executing: CHART_COLORS.warning, completed: CHART_COLORS.success,
-    failed: CHART_COLORS.danger, cancelled: CHART_COLORS.textPlaceholder,
-  }
-  statusChart.setOption({
-    tooltip: { trigger: 'item' },
-    legend: { bottom: 0 },
-    series: [
-      {
-        type: 'pie',
-        radius: ['40%', '70%'],
-        center: ['50%', '45%'],
-        itemStyle: { borderRadius: 6, borderColor: CHART_COLORS.cardBg, borderWidth: 2 },
-        label: { formatter: '{b}: {c}' },
-        data: Object.entries(distribution).map(([rawName, value]) => ({
-          name: testStatusLabel(rawName),
-          value,
-          itemStyle: { color: colors[normalizeStatus(rawName)] || CHART_COLORS.primary },
-        })),
-      },
-    ],
-  })
-}
-
-function resize() {
-  statusChart?.resize()
-}
-
-async function loadData() {
-  loading.value = true
-  await Promise.all([loadStatistics(), loadTrend(), loadRecentRuns()])
-  loading.value = false
-}
-
-onMounted(() => {
-  loadData()
-  window.addEventListener('resize', resize)
-})
-
-onBeforeUnmount(() => {
-  window.removeEventListener('resize', resize)
-  statusChart?.dispose()
-  statusChart = null
-})
+import { CHART_COLORS } from '@/styles/chartPalette'
+import { RUN_STATUS } from '@/constants/status'
+import PageHeader from '@/components/PageHeader.vue'
+import StatusPill from '@/components/StatusPill.vue'
+import TrendChart from '@/components/TrendChart.vue'
+const router=useRouter(),days=ref(30),loading=ref(false),page=ref(1),pageSize=5,runsTotal=ref(0)
+const todos=ref<any[]>([]),projectRows=ref<any[]>([]),recentRuns=ref<any[]>([]),runsError=ref(''),trendError=ref('')
+const trend=ref({dates:[] as string[],pass_rates:[] as number[]})
+const statCards=ref([{title:'测试任务总数',value:0,tip:'当前统计周期'},{title:'通过率',value:'0%',tip:'门禁通过运行'},{title:'发现缺陷',value:0,tip:'当前统计周期'},{title:'平均质量分',value:'0',tip:'最近报告均值'}])
+function formatTime(t:string){return t?dayjs(t).format('YYYY-MM-DD HH:mm'):'—'}
+function goStat(title:string){router.push(title==='发现缺陷'?'/defects':title==='测试任务总数'?'/runs':'/quality-trend')}
+function openProject(row:any){router.push(`/projects/${row.id}/overview`)}
+async function loadStats(){const r:any=await dashboardApi.getStatistics(days.value);const d=r?.data||{};statCards.value[0].value=d.total_runs||0;statCards.value[1].value=`${d.pass_rate||0}%`;statCards.value[2].value=d.total_defects||0;statCards.value[3].value=Number(d.avg_quality_score||0).toFixed(1)}
+async function loadTrend(){trendError.value='';try{const r:any=await trendApi.getPassRate({days:days.value});trend.value=r?.data||{dates:[],pass_rates:[]};await loadStats()}catch(e:any){trendError.value=e?.message||'趋势加载失败'}}
+async function loadRuns(){runsError.value='';loading.value=true;try{const r:any=await dashboardApi.getRecentRuns(pageSize,page.value);recentRuns.value=r?.data?.list||[];runsTotal.value=r?.data?.total||0}catch(e:any){runsError.value=e?.message||'最近执行加载失败'}finally{loading.value=false}}
+async function loadBase(){const [t,p]=await Promise.all([dashboardApi.getTodos(),dashboardApi.getProjectsSummary(6)]) as any[];todos.value=t?.data?.items||[];projectRows.value=p?.data?.items||[]}
+onMounted(()=>Promise.all([loadBase(),loadTrend(),loadRuns()]))
 </script>
-
 <style scoped>
-.stat-card {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-
-.stat-info {
-  display: flex;
-  flex-direction: column;
-}
-
-.stat-value {
-  font-size: 24px;
-  font-weight: 700;
-  color: var(--el-text-color-primary);
-}
-
-.stat-label {
-  font-size: 13px;
-  color: var(--el-text-color-secondary);
-  margin-top: 4px;
-}
-
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.stat-card-clickable {
-  cursor: pointer;
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
-}
-.stat-card-clickable:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 18px rgba(var(--app-accent-rgb), 0.18);
-}
-.stat-column { margin-bottom: 12px; }
-@media (max-width: 1199px) { .status-column { margin-top: 16px; } }
+.dashboard{display:grid;gap:16px}.stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.stat-card{cursor:pointer}.stat-card :deep(.el-card__body){display:grid;gap:6px}.stat-card span,.stat-card small,.card-head p{color:var(--app-text-secondary);font-size:12px}.stat-card strong{font-size:26px}.main-grid{display:grid;grid-template-columns:minmax(320px,1fr) minmax(0,1.6fr);gap:16px}.card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}.card-head p{margin:5px 0 0}.card-head .el-select{width:110px}.todo{width:100%;display:grid;grid-template-columns:10px 1fr 20px;gap:10px;align-items:center;padding:12px 4px;border:0;border-bottom:1px solid var(--el-border-color-lighter);background:none;text-align:left;cursor:pointer}.todo span:nth-child(2){display:grid;gap:4px}.todo small{color:var(--app-text-secondary)}.todo-dot{width:8px;height:8px;border-radius:50%;background:var(--el-color-info)}.todo-dot.high{background:var(--el-color-danger)}.todo-dot.medium{background:var(--el-color-warning)}.link{color:var(--el-color-primary)}.el-pagination{justify-content:flex-end;margin-top:14px}@media(max-width:960px){.stat-grid{grid-template-columns:1fr 1fr}.main-grid{grid-template-columns:1fr}}@media(max-width:560px){.stat-grid{grid-template-columns:1fr}}
 </style>

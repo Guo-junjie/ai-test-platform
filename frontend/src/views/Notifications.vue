@@ -101,6 +101,7 @@
         @current-change="loadNotifications"
       />
     </el-card>
+    <el-card shadow="never" class="preference-card"><template #header><b>通知偏好</b></template><el-form label-position="top"><div class="pref-grid"><el-form-item label="接收通知"><el-switch v-model="preferences.enabled"/></el-form-item><el-form-item label="接收渠道"><el-select v-model="preferences.channels" multiple :disabled="!preferences.enabled"><el-option label="站内消息" value="in_app"/><el-option label="邮件" value="email"/><el-option label="Webhook" value="webhook"/><el-option label="钉钉" value="dingtalk"/></el-select></el-form-item><el-form-item label="免打扰"><el-switch v-model="preferences.quiet_enabled"/></el-form-item><el-form-item label="免打扰时段"><el-time-picker v-model="quietRange" is-range format="HH:mm" value-format="HH:mm" range-separator="至" start-placeholder="开始" end-placeholder="结束" :disabled="!preferences.quiet_enabled"/></el-form-item></div><el-button type="primary" :loading="savingPreferences" @click="savePreferences">保存通知偏好</el-button></el-form></el-card>
   </div>
 </template>
 
@@ -131,6 +132,9 @@ const total = ref(0)
 const page = ref(1)
 const pageSize = ref(20)
 const filterRead = ref<string>('')
+const savingPreferences = ref(false)
+const preferences = ref({ enabled: true, channels: ['in_app'], quiet_enabled: false, quiet_start: '22:00', quiet_end: '08:00' })
+const quietRange = ref<[string, string]>(['22:00', '08:00'])
 
 /** 兼容后端可能使用 is_read 或 read 字段 */
 function isRead(row: any): boolean {
@@ -251,7 +255,10 @@ async function handleRemove(row: any): Promise<void> {
   }
 }
 
-onMounted(loadNotifications)
+async function loadPreferences(): Promise<void> { const res: any = await notificationApi.getPreferences(); preferences.value = { ...preferences.value, ...(res?.data || {}) }; quietRange.value = [preferences.value.quiet_start, preferences.value.quiet_end] }
+async function savePreferences(): Promise<void> { savingPreferences.value = true; try { preferences.value.quiet_start = quietRange.value?.[0] || '22:00'; preferences.value.quiet_end = quietRange.value?.[1] || '08:00'; await notificationApi.updatePreferences(preferences.value); ElMessage.success('通知偏好已保存') } finally { savingPreferences.value = false } }
+
+onMounted(() => Promise.all([loadNotifications(), loadPreferences()]))
 </script>
 
 <style scoped>
@@ -280,4 +287,5 @@ onMounted(loadNotifications)
   font-weight: 600;
   color: var(--el-text-color-primary);
 }
+.notifications-page{display:grid;gap:16px}.pref-grid{display:grid;grid-template-columns:160px 1.3fr 160px 1fr;gap:14px}.pref-grid .el-select{width:100%}@media(max-width:900px){.pref-grid{grid-template-columns:1fr 1fr}}@media(max-width:560px){.header-actions{flex-wrap:wrap;gap:8px}.pref-grid{grid-template-columns:1fr}}
 </style>

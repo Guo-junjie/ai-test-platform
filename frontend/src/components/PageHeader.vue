@@ -1,0 +1,3 @@
+<template><div class="page-header"><div><h1>{{ title }}</h1><p v-if="subtitle">{{ subtitle }}</p></div><div class="actions"><slot /></div></div></template>
+<script setup lang="ts">defineProps<{title:string;subtitle?:string}>()</script>
+<style scoped>.page-header{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin-bottom:18px}.page-header h1{margin:0;color:var(--app-text-primary);font-size:22px;line-height:1.35}.page-header p{margin:6px 0 0;color:var(--app-text-secondary);font-size:13px}.actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}@media(max-width:768px){.page-header{flex-direction:column}.actions{width:100%}}</style>

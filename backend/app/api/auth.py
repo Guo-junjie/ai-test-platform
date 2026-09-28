@@ -10,15 +10,18 @@
 - DELETE /users/{user_id} — 删除用户（有关联运行时自动软删除）
 """
 
+import hashlib
+import secrets
 import uuid
+from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.database import TestRun, User, UserRole
+from app.models.database import PersonalAccessToken, TestRun, User, UserRole
 from app.modules.auth.auth_service import AuthService
 from app.modules.auth.dependencies import get_current_user, require_manager
 from app.modules.audit.audit_service import AuditService
@@ -69,6 +72,12 @@ class ChangePasswordRequest(BaseModel):
 class UpdateStatusRequest(BaseModel):
     """更新用户启用/禁用状态请求"""
     is_active: bool
+
+
+class CreatePersonalTokenRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    expires_in_days: int | None = Field(default=90, ge=1, le=3650)
+    scopes: list[str] = Field(default_factory=lambda: ["api"])
 
 
 # ==================== 共享助手 ====================
@@ -369,6 +378,62 @@ async def change_my_password(
         "data": {"id": str(current_user.id)},
         "message": "密码修改成功，请重新登录",
     }
+
+
+@router.get("/me/tokens")
+async def list_personal_tokens(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    rows = (await db.execute(select(PersonalAccessToken).where(
+        PersonalAccessToken.user_id == current_user.id,
+    ).order_by(PersonalAccessToken.created_at.desc()))).scalars().all()
+    return {"code": 0, "data": {"items": [{
+        "id": str(row.id), "name": row.name, "prefix": row.prefix, "scopes": row.scopes or [],
+        "expires_at": row.expires_at.isoformat() if row.expires_at else None,
+        "last_used_at": row.last_used_at.isoformat() if row.last_used_at else None,
+        "revoked_at": row.revoked_at.isoformat() if row.revoked_at else None,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    } for row in rows]}, "message": "success"}
+
+
+@router.post("/me/tokens")
+async def create_personal_token(
+    req: CreatePersonalTokenRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    raw_token = f"atp_{secrets.token_urlsafe(32)}"
+    item = PersonalAccessToken(
+        user_id=current_user.id, name=req.name.strip(), prefix=raw_token[:12],
+        token_hash=hashlib.sha256(raw_token.encode("utf-8")).hexdigest(), scopes=req.scopes,
+        expires_at=datetime.utcnow() + timedelta(days=req.expires_in_days) if req.expires_in_days else None,
+    )
+    db.add(item)
+    await db.flush()
+    return {"code": 0, "data": {"id": str(item.id), "name": item.name, "token": raw_token,
+        "prefix": item.prefix, "expires_at": item.expires_at.isoformat() if item.expires_at else None},
+        "message": "Token 已生成，请立即复制；关闭后无法再次查看明文"}
+
+
+@router.delete("/me/tokens/{token_id}")
+async def revoke_personal_token(
+    token_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    try:
+        tid = uuid.UUID(token_id)
+    except ValueError as exc:
+        raise HTTPException(422, "Token ID 格式错误") from exc
+    item = (await db.execute(select(PersonalAccessToken).where(
+        PersonalAccessToken.id == tid, PersonalAccessToken.user_id == current_user.id,
+    ))).scalar_one_or_none()
+    if item is None:
+        raise HTTPException(404, "Token 不存在")
+    item.revoked_at = datetime.utcnow()
+    await db.flush()
+    return {"code": 0, "data": {"id": token_id}, "message": "Token 已吊销"}
 
 
 @router.get("/users")

@@ -154,6 +154,9 @@ export const authApi = {
   /** 修改当前登录用户密码 */
   changePassword: (data: { old_password: string; new_password: string }) =>
     api.put('/auth/me/password', data),
+  listTokens: () => api.get('/auth/me/tokens'),
+  createToken: (data: { name: string; expires_in_days?: number; scopes?: string[] }) => api.post('/auth/me/tokens', data),
+  revokeToken: (id: string) => api.delete(`/auth/me/tokens/${id}`),
   logout: () => api.post('/auth/logout'),
 }
 
@@ -211,6 +214,8 @@ export const notificationApi = {
   markRead: (id: string) => api.post(`/notifications/${id}/read`),
   markAllRead: () => api.post('/notifications/read-all'),
   remove: (id: string) => api.delete(`/notifications/${id}`),
+  getPreferences: () => api.get('/notifications/preferences'),
+  updatePreferences: (data: any) => api.put('/notifications/preferences', data),
 }
 
 // ============ 仪表盘与趋势 ============
@@ -219,7 +224,9 @@ export const dashboardApi = {
   getQualityTrend: (timeRange?: string) => api.get('/dashboard/quality-trend', { params: { time_range: timeRange } }),
   getTestTrend: (timeRange?: string) => api.get('/dashboard/test-trend', { params: { time_range: timeRange } }),
   getDefectTrend: (timeRange?: string) => api.get('/dashboard/defect-trend', { params: { time_range: timeRange } }),
-  getRecentRuns: (limit?: number) => api.get('/dashboard/recent-runs', { params: { limit } }),
+  getRecentRuns: (limit?: number, page = 1) => api.get('/dashboard/recent-runs', { params: { page, page_size: limit } }),
+  getTodos: () => api.get('/dashboard/todos'),
+  getProjectsSummary: (limit = 6) => api.get('/dashboard/projects-summary', { params: { limit } }),
 }
 
 // ============ 系统配置 ============
@@ -359,6 +366,7 @@ export const qualityGateApi = {
   saveRule: (data: any) => api.post('/quality-gate/rules', data),
   updateRule: (id: string, data: any) => api.put(`/quality-gate/rules/${id}`, data),
   removeRule: (id: string, projectId: string) => api.delete(`/quality-gate/rules/${id}`, { params: { project_id: projectId } }),
+  previewRules: (projectId: string) => api.get(`/quality-gate/preview/${projectId}`),
 }
 
 // ============ 质量趋势 ============
@@ -399,6 +407,7 @@ export const caseApi = {
   reviewEvents: (id: string) => api.get(`/cases/${id}/review-events`),
   /** 单条废弃 */
   deprecate: (id: string) => api.post(`/cases/${id}/deprecate`),
+  restore: (id: string) => api.post(`/cases/${id}/restore`),
   /** 批量接纳：data { ids: string[] } */
   adoptBatch: (ids: string[]) => api.post('/cases/adopt-batch', { ids }),
   importPreview: (projectId: string, file: File) => {
@@ -465,6 +474,9 @@ export const scenarioApi = {
   update: (id: string, data: any) => api.put(`/scenarios/${id}`, data),
   /** 接纳 */
   adopt: (id: string) => api.post(`/scenarios/${id}/adopt`),
+  /** 在已发布环境中真实试运行，不写入正式执行记录 */
+  run: (id: string, environmentId: string) =>
+    api.post(`/scenarios/${id}/run`, { environment_id: environmentId }, { timeout: 120000 }),
   /** 预览（不落库、不接真实 HTTP）：data { project_id, nl_input, endpoint_ids? } */
   dryRun: (data: any) =>
     api.post('/scenarios/dry-run', data, { timeout: 300000 }),
@@ -472,6 +484,7 @@ export const scenarioApi = {
 
 // ============ 脚本生成（能力5/6/7：AI 生成前置/后置/SQL 脚本） ============
 export const scriptsApi = {
+  list: (projectId: string, params?: any) => api.get('/scripts', { params: { project_id: projectId, ...params } }),
   /** 生成脚本：data { project_id, script_type, nl_input, context?, case_id? } */
   generateScript: (data: any) =>
     api.post('/scripts/generate', data, { timeout: 300000 }),
@@ -480,6 +493,7 @@ export const scriptsApi = {
   /** 绑定脚本到用例：data { pre_script?, post_script?, sql_script? } */
   bindScriptToCase: (caseId: string, data: any) =>
     api.put(`/cases/${caseId}/scripts`, data),
+  validate: (id: string) => api.post(`/scripts/${id}/validate`),
 }
 
 // ============ 数据库连接管理（能力7：AI 生成 SQL 脚本的前置） ============

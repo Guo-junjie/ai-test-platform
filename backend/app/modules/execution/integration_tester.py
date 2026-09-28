@@ -165,8 +165,14 @@ class IntegrationTester:
             except Exception:
                 response_body = response.text
 
-            # 执行断言（步骤级别的简单断言：状态码 2xx）
-            passed = 200 <= response.status_code < 400
+            assertion = step.get("assertion") or {"field": "$status", "operator": "between_2xx_3xx"}
+            passed, assertion_error = self._check_rule(assertion, response.status_code, response_body)
+            condition = step.get("condition") or {}
+            if passed and condition.get("field"):
+                passed, assertion_error = self._check_rule({
+                    "field": condition.get("field"), "operator": condition.get("operator", "eq"),
+                    "expected": condition.get("value"),
+                }, response.status_code, response_body)
 
             return {
                 "step": step_num,
@@ -176,7 +182,7 @@ class IntegrationTester:
                 "status_code": response.status_code,
                 "actual_response": response_body,
                 "response_time_ms": round(response_time_ms, 2),
-                "error_message": None if passed else f"HTTP {response.status_code}",
+                "error_message": None if passed else assertion_error,
             }
 
         except httpx.TimeoutException:
@@ -203,6 +209,28 @@ class IntegrationTester:
                 "response_time_ms": round(response_time_ms, 2),
                 "error_message": str(e),
             }
+
+    def _check_rule(self, rule: dict[str, Any], status_code: int, body: Any) -> tuple[bool, str | None]:
+        field = rule.get("field", "$status")
+        operator = rule.get("operator", "eq")
+        actual = status_code if field == "$status" else self._extract_value(body, field)
+        expected = rule.get("expected")
+        if isinstance(expected, str):
+            if expected.lower() in {"true", "false"}:
+                expected = expected.lower() == "true"
+            elif expected.replace(".", "", 1).isdigit():
+                expected = float(expected) if "." in expected else int(expected)
+        if operator == "between_2xx_3xx":
+            passed = 200 <= status_code < 400
+        elif operator == "exists":
+            passed = actual is not None
+        elif operator == "contains":
+            passed = expected in actual if isinstance(actual, (str, list, dict)) else False
+        elif operator == "neq":
+            passed = actual != expected
+        else:
+            passed = actual == expected
+        return passed, None if passed else f"断言失败：{field} 实际为 {actual!r}，期望 {operator} {expected!r}"
 
     def _extract_value(self, data: Any, json_path: str) -> Any:
         """

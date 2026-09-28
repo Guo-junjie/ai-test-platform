@@ -14,10 +14,12 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.models.database import (
     Project,
+    EnvironmentProfile,
     Scenario,
     ScenarioStatus,
     User,
@@ -35,6 +37,10 @@ from app.utils.logger import get_logger
 logger = get_logger(__name__)
 
 router = APIRouter()
+
+
+class ScenarioRunRequest(BaseModel):
+    environment_id: str
 
 
 # ==================== 序列化与工具 ====================
@@ -63,6 +69,29 @@ def _default_name(nl_input: str) -> str:
     if not text:
         return "未命名场景"
     return (text[:30] + "…") if len(text) > 30 else text
+
+
+def _scenario_assertion_to_expected(assertion: Any) -> dict[str, Any]:
+    """将可视化场景断言转换成用例库执行器使用的结构。"""
+    if not isinstance(assertion, dict):
+        return {"status_code": 200}
+    field = assertion.get("field") or "$status"
+    operator = assertion.get("operator") or "eq"
+    expected = assertion.get("expected")
+    if field == "$status":
+        try:
+            status_code = int(expected)
+        except (TypeError, ValueError):
+            status_code = 200
+        return {"status_code": status_code}
+    rule: dict[str, Any] = {
+        "type": "json_path",
+        "path": field,
+        "operator": operator,
+    }
+    if operator not in {"exists", "not_exists", "not_null"}:
+        rule["expected"] = expected
+    return {"assertions": [rule]}
 
 
 def _restrict_candidates(candidates: list[dict], endpoint_ids: list[str]) -> list[dict]:
@@ -352,9 +381,9 @@ async def adopt_scenario(
         from app.models.database import TestCaseAsset, CaseAssetStatus, CaseSource
         from app.schemas.case_library import CaseAssetCreate
 
-        for step in scenario.steps:
+        for index, step in enumerate(scenario.steps):
             # 每个步骤生成一个用例
-            step_order = step.get("step_order", 0)
+            step_order = step.get("step_order") or index + 1
             method = step.get("method", "GET")
             url = step.get("url", "")
             action_desc = step.get("action_desc", "")
@@ -365,8 +394,8 @@ async def adopt_scenario(
                 "project_id": str(scenario.project_id),
                 "endpoint_id": step.get("endpoint_id"),  # 可能为 None
                 "case_type": "positive",  # 默认 positive，可根据需要调整
-                "title": f"{scenario.name} - 步骤{step_order + 1}: {action_desc or url}",
-                "description": action_desc or f"场景「{scenario.name}」第{step_order + 1}步",
+                "title": f"{scenario.name} - 步骤{step_order}: {action_desc or url}",
+                "description": action_desc or f"场景「{scenario.name}」第{step_order}步",
                 "request_data": {
                     "method": method,
                     "url": url,
@@ -374,13 +403,13 @@ async def adopt_scenario(
                     "body": request_data.get("body"),
                     "params": request_data.get("params", {}),
                 },
-                "expected_result": {"status_code": 200},  # 默认期望
+                "expected_result": _scenario_assertion_to_expected(step.get("assertion")),
                 "priority": "P2",
                 "version": 1,
                 "generation_context": {
                     "channel": "scenario",
                     "scenario_id": str(scenario.id),
-                    "step_order": step_order + 1,
+                    "step_order": step_order,
                 },
                 "status": CaseAssetStatus.ADOPTED.value,
                 "source": CaseSource.AI_GENERATED.value,
@@ -405,4 +434,43 @@ async def adopt_scenario(
             "adopted_cases_count": adopted_count,
         },
         "message": f"adopted, {adopted_count} cases imported to library",
+    }
+
+
+@router.post("/{scenario_id}/run")
+async def run_scenario_once(
+    scenario_id: str,
+    req: ScenarioRunRequest,
+    current_user: User = Depends(get_current_user),
+    db=Depends(get_db_session),
+):
+    """在已发布环境中真实试运行场景，不创建正式测试运行记录。"""
+    try:
+        sid = uuid.UUID(scenario_id)
+        environment_id = uuid.UUID(req.environment_id)
+    except ValueError as exc:
+        raise HTTPException(422, "场景或环境 ID 格式错误") from exc
+    scenario = (await db.execute(select(Scenario).where(Scenario.id == sid))).scalar_one_or_none()
+    if scenario is None:
+        raise HTTPException(404, "scenario not found")
+    environment = (await db.execute(select(EnvironmentProfile).where(
+        EnvironmentProfile.id == environment_id,
+        EnvironmentProfile.project_id == scenario.project_id,
+    ))).scalar_one_or_none()
+    if environment is None or environment.status != "published" or not environment.current_revision_id:
+        raise HTTPException(422, "请选择属于该项目的已发布环境")
+
+    from app.modules.execution.integration_tester import IntegrationTester
+    from app.modules.scheduler.executor import _scenario_to_integration
+
+    result = await IntegrationTester().run_tests(
+        [_scenario_to_integration(scenario)], environment.base_url,
+    )
+    return {
+        "code": 0,
+        "data": {
+            "environment": {"id": str(environment.id), "name": environment.name, "base_url": environment.base_url},
+            "result": result[0] if result else None,
+        },
+        "message": "场景试运行完成",
     }

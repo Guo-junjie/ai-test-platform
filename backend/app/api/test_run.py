@@ -555,7 +555,7 @@ async def get_exec_summary(
 
     from sqlalchemy import func as _f
     from app.models.database import (
-        Defect, TestCase, TestResult, TestRun, TestPlan, TestPlanExecution, TestReport,
+        Defect, EnvironmentProfile, Project, TestCase, TestResult, TestRun, TestPlan, TestPlanExecution, TestReport, User,
     )
 
     run = (await db.execute(select(TestRun).where(TestRun.id == rid))).scalar_one_or_none()
@@ -579,6 +579,24 @@ async def get_exec_summary(
     report = (await db.execute(
         select(TestReport).where(TestReport.test_run_id == rid)
     )).scalar_one_or_none()
+    project_name = (await db.execute(select(Project.name).where(Project.id == run.project_id))).scalar_one_or_none()
+    actor_name = (await db.execute(select(User.username).where(User.id == run.user_id))).scalar_one_or_none()
+    environment_name = None
+    if run.environment_profile_id:
+        environment_name = (await db.execute(select(EnvironmentProfile.name).where(EnvironmentProfile.id == run.environment_profile_id))).scalar_one_or_none()
+    response_times = [float(value) for value in (await db.execute(select(TestResult.response_time_ms).where(
+        TestResult.test_run_id == rid, TestResult.response_time_ms.isnot(None),
+    ))).scalars().all()]
+    response_times.sort()
+    median_ms = response_times[len(response_times) // 2] if response_times else None
+    duration_ms = None
+    if run.started_at and run.completed_at:
+        duration_ms = int((run.completed_at - run.started_at).total_seconds() * 1000)
+    failed_rows = (await db.execute(
+        select(TestResult, TestCase).join(TestCase, TestCase.id == TestResult.test_case_id)
+        .where(TestResult.test_run_id == rid, TestResult.is_passed.is_(False))
+        .order_by(TestResult.executed_at.desc()).limit(100)
+    )).all()
 
     plan_name = None
     plan_execution = None
@@ -615,6 +633,11 @@ async def get_exec_summary(
         "data": {
             "run_id": str(run.id),
             "project_id": str(run.project_id) if run.project_id else None,
+            "project_name": project_name,
+            "environment_name": environment_name,
+            "actor_name": actor_name,
+            "trigger_type": run.trigger_type or "manual",
+            "code_version": run.commit_sha or run.source_ref,
             "mode": "plan" if run.plan_id else "auto",
             "status": run.status.value if run.status else "pending",
             "progress": run.progress or 0,
@@ -626,6 +649,14 @@ async def get_exec_summary(
             "results_total": results_total,
             "results_passed": passed,
             "results_failed": (results_total - passed),
+            "duration_ms": duration_ms,
+            "median_response_ms": median_ms,
+            "failed_cases": [{
+                "result_id": str(result.id), "case_id": str(case.id), "case_name": result.case_name or case.case_name,
+                "status_code": result.status_code, "expected": case.expected_result or {},
+                "actual": {"status_code": result.status_code, "body": result.response_body},
+                "reason": result.error_message or "断言未通过", "response_time_ms": result.response_time_ms,
+            } for result, case in failed_rows],
             "defect_count": defects,
             "has_report": report is not None,
             "report_id": str(report.id) if report else None,

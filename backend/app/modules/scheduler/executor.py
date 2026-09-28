@@ -62,6 +62,8 @@ def _scenario_to_integration(scenario: Scenario) -> dict[str, Any]:
                 "body": req.get("body") or {},
                 "params": req.get("params") or {},
                 "extract": s.get("extract") or {},
+                "condition": s.get("condition") or {},
+                "assertion": s.get("assertion") or {"field": "$status", "operator": "eq", "expected": 200},
             }
         )
     return {
