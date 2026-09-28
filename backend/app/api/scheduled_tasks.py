@@ -12,9 +12,11 @@
 - GET  /{id}/history:    执行历史
 """
 
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.scheduler.cron_parser import CronParser
@@ -26,8 +28,21 @@ from app.schemas.scheduled_task import (
 )
 from app.utils.database import get_db_session
 from app.modules.auth.dependencies import get_current_user
+from app.modules.scheduler.next_run import next_run
 
 router = APIRouter()
+
+
+class SchedulePreviewRequest(BaseModel):
+    cron_expression: str | None = None
+    mode: str = "daily"
+    hour: int = Field(default=9, ge=0, le=23)
+    minute: int = Field(default=0, ge=0, le=59)
+    weekday: int = Field(default=1, ge=0, le=6)
+    month_day: int = Field(default=1, ge=1, le=31)
+    interval_hours: int = Field(default=1, ge=1, le=23)
+    timezone: str = "Asia/Shanghai"
+    count: int = Field(default=5, ge=1, le=20)
 
 
 @router.get("")
@@ -97,6 +112,42 @@ async def parse_cron(
         },
         "message": "ok",
     }
+
+
+@router.post("/preview")
+async def preview_schedule(
+    req: SchedulePreviewRequest,
+    current_user=Depends(get_current_user),
+) -> dict[str, Any]:
+    """将表单化调度转换为 Cron，并预览后续触发时间。"""
+    if req.timezone != "Asia/Shanghai":
+        raise HTTPException(422, "当前调度器仅支持 Asia/Shanghai 时区")
+    if req.cron_expression:
+        cron = req.cron_expression.strip()
+    elif req.mode == "daily":
+        cron = f"{req.minute} {req.hour} * * *"
+    elif req.mode == "weekly":
+        cron = f"{req.minute} {req.hour} * * {req.weekday}"
+    elif req.mode == "monthly":
+        cron = f"{req.minute} {req.hour} {req.month_day} * *"
+    elif req.mode == "interval":
+        cron = f"{req.minute} */{req.interval_hours} * * *"
+    else:
+        raise HTTPException(422, "不支持的调度模式")
+    cursor = datetime.utcnow()
+    values: list[str] = []
+    try:
+        from zoneinfo import ZoneInfo
+        display_tz = ZoneInfo(req.timezone)
+    except Exception:
+        display_tz = timezone.utc
+    for _ in range(req.count):
+        value = next_run(cron, cursor)
+        if value is None:
+            raise HTTPException(422, "Cron 表达式无效或无法计算下次时间")
+        values.append(value.replace(tzinfo=timezone.utc).astimezone(display_tz).isoformat())
+        cursor = value
+    return {"code": 0, "data": {"cron_expression": cron, "timezone": req.timezone, "next_runs": values}, "message": "ok"}
 
 
 @router.get("/{task_id}")

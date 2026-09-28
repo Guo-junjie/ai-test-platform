@@ -55,6 +55,25 @@ class BatchUpdateCaseRequest(BaseModel):
     add_tags: list[str] = Field(default_factory=list, max_length=20)
 
 
+class CaseImportRow(BaseModel):
+    """用例导入的标准行；预检与提交共用，避免前端重复转换。"""
+
+    title: str = Field(min_length=1, max_length=500)
+    description: str = ""
+    execution_kind: str = "api"
+    case_type: str = "positive"
+    priority: str = "P2"
+    folder: str = ""
+    tags: list[str] = Field(default_factory=list)
+    request_data: dict[str, Any] = Field(default_factory=dict)
+    expected_result: dict[str, Any] = Field(default_factory=dict)
+
+
+class CaseImportCommitRequest(BaseModel):
+    project_id: str
+    rows: list[CaseImportRow] = Field(min_length=1, max_length=2000)
+
+
 class CaseAssetResponse(BaseModel):
     """用例资产序列化模型。"""
 

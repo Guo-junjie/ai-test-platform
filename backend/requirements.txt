@@ -73,3 +73,4 @@ sqlglot>=23.0.0
 
 # 能力8：动态定时任务调度（django-celery-beat DatabaseScheduler）
 django-celery-beat>=2.6.0
+openpyxl==3.1.5

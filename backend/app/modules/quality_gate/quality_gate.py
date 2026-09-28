@@ -75,6 +75,8 @@ class QualityGateEvaluator:
             raise ValueError("Quality gate config must be a dict")
 
         validated = QualityGateEvaluator.get_default_config()
+        known_keys = {"enabled", "rules", "rule_meta", "notify_on_fail", "notify_channels", "block_deployment"}
+        validated.update({key: value for key, value in config.items() if key not in known_keys})
 
         if "enabled" in config:
             validated["enabled"] = bool(config["enabled"])
@@ -105,6 +107,16 @@ class QualityGateEvaluator:
 
         if "block_deployment" in config:
             validated["block_deployment"] = bool(config["block_deployment"])
+
+        if isinstance(config.get("rule_meta"), dict):
+            validated["rule_meta"] = {
+                key: {
+                    "name": str(value.get("name") or key)[:100],
+                    "enabled": bool(value.get("enabled", True)),
+                }
+                for key, value in config["rule_meta"].items()
+                if key in validated["rules"] and isinstance(value, dict)
+            }
 
         return validated
 
@@ -141,13 +153,15 @@ class QualityGateEvaluator:
             }
 
         rules = self.config.get("rules", {})
+        rule_meta = self.config.get("rule_meta", {})
+        is_enabled = lambda key: rule_meta.get(key, {}).get("enabled", True)
         violations: list[dict[str, Any]] = []
 
         # 1. P0 缺陷检查
         by_severity = defects.get("summary", {}).get("by_severity", {})
         p0_count = by_severity.get("P0", 0)
         max_p0 = rules.get("max_p0_defects", 0)
-        if p0_count > max_p0:
+        if is_enabled("max_p0_defects") and p0_count > max_p0:
             violations.append({
                 "rule": "max_p0_defects",
                 "actual": p0_count,
@@ -158,7 +172,7 @@ class QualityGateEvaluator:
         # 2. P1 缺陷检查
         p1_count = by_severity.get("P1", 0)
         max_p1 = rules.get("max_p1_defects", 5)
-        if p1_count > max_p1:
+        if is_enabled("max_p1_defects") and p1_count > max_p1:
             violations.append({
                 "rule": "max_p1_defects",
                 "actual": p1_count,
@@ -173,7 +187,7 @@ class QualityGateEvaluator:
         if api_total > 0:
             api_pass_rate = round(api_passed / api_total * 100, 1)
             min_api = rules.get("min_api_pass_rate", 90)
-            if api_pass_rate < min_api:
+            if is_enabled("min_api_pass_rate") and api_pass_rate < min_api:
                 violations.append({
                     "rule": "min_api_pass_rate",
                     "actual": f"{api_pass_rate}%",
@@ -188,7 +202,7 @@ class QualityGateEvaluator:
         if perf_total > 0:
             perf_pass_rate = round(perf_passed / perf_total * 100, 1)
             min_perf = rules.get("min_performance_pass_rate", 80)
-            if perf_pass_rate < min_perf:
+            if is_enabled("min_performance_pass_rate") and perf_pass_rate < min_perf:
                 violations.append({
                     "rule": "min_performance_pass_rate",
                     "actual": f"{perf_pass_rate}%",
@@ -203,7 +217,7 @@ class QualityGateEvaluator:
         if integ_total > 0:
             integ_pass_rate = round(integ_passed / integ_total * 100, 1)
             min_integ = rules.get("min_integration_pass_rate", 85)
-            if integ_pass_rate < min_integ:
+            if is_enabled("min_integration_pass_rate") and integ_pass_rate < min_integ:
                 violations.append({
                     "rule": "min_integration_pass_rate",
                     "actual": f"{integ_pass_rate}%",
@@ -213,7 +227,7 @@ class QualityGateEvaluator:
 
         # 6. 质量评分检查
         min_score = rules.get("min_quality_score", 70)
-        if quality_score < min_score:
+        if is_enabled("min_quality_score") and quality_score < min_score:
             violations.append({
                 "rule": "min_quality_score",
                 "actual": quality_score,

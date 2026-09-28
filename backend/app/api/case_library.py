@@ -14,12 +14,15 @@
 """
 
 import hashlib
+import csv
+import io
 import json
 import uuid
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,6 +33,7 @@ from app.schemas.case_library import (
     AdoptBatchRequest,
     BatchUpdateCaseRequest,
     CaseAssetResponse,
+    CaseImportCommitRequest,
 )
 from app.schemas.script import BindScriptRequest
 from app.models.database import (
@@ -606,6 +610,146 @@ async def get_case_traceability(
         "created_by": str(item.created_by) if item.created_by else None,
         "created_at": item.created_at.isoformat() if item.created_at else None,
     }
+
+
+def _json_cell(value: Any, default: Any) -> Any:
+    if value is None or value == "":
+        return default
+    if isinstance(value, (dict, list)):
+        return value
+    try:
+        return json.loads(str(value))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return default
+
+
+def _normalize_import_row(raw: dict[str, Any], row_no: int) -> dict[str, Any]:
+    title = str(raw.get("title") or raw.get("用例名称") or raw.get("名称") or "").strip()
+    kind = str(raw.get("execution_kind") or raw.get("执行类型") or "api").strip().lower()
+    method = str(raw.get("method") or raw.get("请求方法") or "GET").upper()
+    url = str(raw.get("url") or raw.get("请求地址") or "").strip()
+    request_data = _json_cell(raw.get("request_data") or raw.get("请求数据"), {})
+    if not request_data:
+        request_data = {
+            "method": method, "url": url,
+            "params": _json_cell(raw.get("params") or raw.get("查询参数"), {}),
+            "headers": _json_cell(raw.get("headers") or raw.get("请求头"), {}),
+            "body": _json_cell(raw.get("body") or raw.get("请求体"), None),
+        }
+    expected = _json_cell(raw.get("expected_result") or raw.get("预期结果"), {})
+    if not expected and raw.get("status_code"):
+        expected = {"status_code": int(raw["status_code"]), "assertions": []}
+    tags_raw = raw.get("tags") or raw.get("标签") or []
+    tags = tags_raw if isinstance(tags_raw, list) else [v.strip() for v in str(tags_raw).split(",") if v.strip()]
+    errors: list[str] = []
+    if not title:
+        errors.append("用例名称不能为空")
+    if kind not in {"api", "manual"}:
+        errors.append("执行类型只支持 api 或 manual")
+    if kind == "api" and not url:
+        errors.append("API 用例必须填写请求地址")
+    return {
+        "row_no": row_no,
+        "valid": not errors,
+        "errors": errors,
+        "data": {
+            "title": title, "description": str(raw.get("description") or raw.get("描述") or ""),
+            "execution_kind": kind, "case_type": str(raw.get("case_type") or raw.get("设计类型") or "positive"),
+            "priority": str(raw.get("priority") or raw.get("优先级") or "P2").upper(),
+            "folder": str(raw.get("folder") or raw.get("目录") or ""), "tags": tags,
+            "request_data": request_data, "expected_result": expected,
+        },
+    }
+
+
+@router.post("/import/preview")
+async def preview_case_import(
+    project_id: str = Form(...),
+    file: UploadFile = File(...),
+    current_user: User = Depends(case_editor),
+) -> dict[str, Any]:
+    """解析 CSV/JSON/XLSX，并返回逐行错误；预检不写入数据库。"""
+    content = await file.read()
+    suffix = (file.filename or "").lower().rsplit(".", 1)[-1]
+    try:
+        if suffix == "csv":
+            text = content.decode("utf-8-sig")
+            raw_rows = list(csv.DictReader(io.StringIO(text)))
+        elif suffix == "json":
+            parsed = json.loads(content.decode("utf-8-sig"))
+            raw_rows = parsed if isinstance(parsed, list) else parsed.get("rows", [])
+        elif suffix in {"xlsx", "xlsm"}:
+            from openpyxl import load_workbook
+            sheet = load_workbook(io.BytesIO(content), read_only=True, data_only=True).active
+            values = list(sheet.iter_rows(values_only=True))
+            headers = [str(v or "").strip() for v in (values[0] if values else [])]
+            raw_rows = [dict(zip(headers, row)) for row in values[1:]]
+        else:
+            raise HTTPException(415, "仅支持 CSV、JSON、XLSX 文件")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(422, f"文件解析失败：{exc}") from exc
+    if len(raw_rows) > 2000:
+        raise HTTPException(422, "单次最多导入 2000 条用例")
+    rows = [_normalize_import_row(row, index + 2) for index, row in enumerate(raw_rows)]
+    return {"code": 0, "data": {
+        "project_id": project_id, "filename": file.filename, "rows": rows,
+        "success_count": sum(1 for row in rows if row["valid"]),
+        "failed_count": sum(1 for row in rows if not row["valid"]),
+    }, "message": "预检完成"}
+
+
+@router.post("/import/commit")
+async def commit_case_import(
+    req: CaseImportCommitRequest,
+    current_user: User = Depends(case_editor),
+    db: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    """提交已通过预检的标准行，原子写入用例资产与首个版本。"""
+    try:
+        project_id = uuid.UUID(req.project_id)
+    except ValueError as exc:
+        raise HTTPException(400, "项目 ID 格式错误") from exc
+    from app.models.database import Project
+    if not (await db.execute(select(Project.id).where(Project.id == project_id))).scalar_one_or_none():
+        raise HTTPException(404, "项目不存在")
+    assets: list[TestCaseAsset] = []
+    for row in req.rows:
+        data = row.model_dump()
+        asset = TestCaseAsset(
+            project_id=project_id, title=data["title"], description=data["description"],
+            execution_kind=data["execution_kind"], case_type=data["case_type"], design_type=data["case_type"],
+            priority=data["priority"], folder=data["folder"] or None,
+            tags=_normalize_tags(data["tags"]), request_data=data["request_data"],
+            expected_result=data["expected_result"], status=CaseAssetStatus.DRAFT,
+            review_state="draft", source="manual", version=1,
+            generation_context={"channel": "file_import"}, created_by=current_user.id,
+        )
+        db.add(asset)
+        assets.append(asset)
+    await db.flush()
+    for asset in assets:
+        _add_case_version(db, asset, current_user.id, "imported")
+    await db.flush()
+    return {"code": 0, "data": {"imported": len(assets), "asset_ids": [str(a.id) for a in assets]}, "message": "导入完成"}
+
+
+@router.get("/import/template")
+async def download_case_import_template(
+    current_user: User = Depends(get_current_user),
+):
+    from openpyxl import Workbook
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "用例导入"
+    sheet.append(["用例名称", "描述", "执行类型", "设计类型", "优先级", "目录", "标签", "请求方法", "请求地址", "查询参数", "请求头", "请求体", "预期结果"])
+    sheet.append(["查询商品列表", "正常查询", "api", "positive", "P1", "商品", "冒烟,回归", "GET", "/api/products", "{}", "{}", "", '{"status_code":200,"assertions":[]}'])
+    output = io.BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    headers = {"Content-Disposition": 'attachment; filename="case-import-template.xlsx"'}
+    return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers=headers)
     if item.created_by:
         creator = (await db.execute(select(User.username).where(User.id == item.created_by))).scalar_one_or_none()
         source_trace["created_by_name"] = creator

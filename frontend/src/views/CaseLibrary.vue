@@ -11,6 +11,8 @@
           <el-select v-model="projectId" placeholder="选择项目" filterable @change="onProjectChange">
             <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
           </el-select>
+          <el-upload :auto-upload="false" :show-file-list="false" accept=".csv,.json,.xlsx" :on-change="handleImportFile"><el-button :disabled="!projectId">导入用例</el-button></el-upload>
+          <el-button text type="primary" @click="downloadTemplate">下载模板</el-button>
           <el-button :loading="listLoading" @click="loadCases">刷新</el-button>
         </div>
       </div>
@@ -113,6 +115,7 @@
               <template #dropdown>
                 <el-dropdown-menu>
                   <el-dropdown-item command="edit">编辑</el-dropdown-item>
+                  <el-dropdown-item command="assert" :disabled="row.execution_kind === 'manual'">配置断言</el-dropdown-item>
                   <el-dropdown-item command="copy">复制</el-dropdown-item>
                   <el-dropdown-item command="review-events">评审记录</el-dropdown-item>
                   <el-dropdown-item command="submit" :disabled="!['draft', 'changes_requested'].includes(row.review_state)">提交评审</el-dropdown-item>
@@ -228,6 +231,7 @@
                 <el-tab-pane label="Auth" name="auth">
                   <template v-if="editing">
                     <el-select v-model="editor.auth.type" style="width: 200px"><el-option label="无认证" value="none" /><el-option label="Bearer Token" value="bearer" /><el-option label="Basic Auth" value="basic" /><el-option label="API Key" value="api_key" /></el-select>
+                    <el-select v-if="editor.auth.type !== 'none'" v-model="selectedCredential" clearable filterable class="credential-picker" placeholder="引用已配置凭据（不展示密钥值）" @change="applyCredential"><el-option v-for="item in credentials" :key="`${item.scope}:${item.name}`" :label="`${item.name} · ${item.scope}`" :value="item.name" /></el-select>
                     <div v-if="editor.auth.type === 'bearer'" class="auth-fields"><el-input v-model="editor.auth.token" placeholder="变量占位符或实际 Token" show-password /></div>
                     <div v-if="editor.auth.type === 'basic'" class="auth-fields two-cols"><el-input v-model="editor.auth.username" placeholder="用户名" /><el-input v-model="editor.auth.password" placeholder="密码" show-password /></div>
                     <div v-if="editor.auth.type === 'api_key'" class="auth-fields api-key-grid"><el-input v-model="editor.auth.key" placeholder="参数名，如 X-API-Key" /><el-input v-model="editor.auth.value" placeholder="变量占位符或实际密钥" show-password /><el-select v-model="editor.auth.in"><el-option label="Header" value="header" /><el-option label="Query" value="query" /></el-select></div>
@@ -299,6 +303,8 @@
 
     <el-dialog v-model="reviewEventsVisible" title="用例评审记录" width="620px"><el-timeline v-if="reviewEvents.length"><el-timeline-item v-for="event in reviewEvents" :key="event.id" :timestamp="formatTime(event.created_at)">{{ reviewActionLabel(event.action) }} · {{ event.actor_name || event.actor_id }}<div v-if="event.comment">{{ event.comment }}</div></el-timeline-item></el-timeline><el-empty v-else description="尚无评审记录" /></el-dialog>
 
+    <el-dialog v-model="importVisible" title="用例导入预检" width="820px"><el-alert :title="`可导入 ${importSuccess} 条，错误 ${importFailed} 条；只有通过预检的行会提交。`" :type="importFailed ? 'warning' : 'success'" :closable="false" show-icon/><el-table :data="importRows" max-height="430" style="margin-top:14px"><el-table-column prop="row_no" label="行" width="65"/><el-table-column label="用例名称" min-width="220"><template #default="{row}">{{ row.data?.title || '—' }}</template></el-table-column><el-table-column label="类型" width="90"><template #default="{row}">{{ row.data?.execution_kind }}</template></el-table-column><el-table-column label="校验" min-width="260"><template #default="{row}"><el-tag :type="row.valid?'success':'danger'">{{ row.valid?'通过':'错误' }}</el-tag><span class="import-error">{{ (row.errors||[]).join('；') }}</span></template></el-table-column></el-table><template #footer><el-button @click="importVisible=false">取消</el-button><el-button type="primary" :loading="importing" :disabled="!importSuccess" @click="commitImport">导入 {{ importSuccess }} 条</el-button></template></el-dialog>
+
     <el-dialog v-model="addToPlanVisible" :title="addIntent === 'run' ? '运行用例' : '加入测试计划'" width="560px" destroy-on-close @open="loadPlansIfNeeded">
       <el-alert v-if="addIntent === 'run'" type="info" :closable="false" show-icon title="企业执行以已发布计划版本为准。加入后将前往测试计划页完成发布并选择环境运行。" />
       <el-form label-width="90px" class="plan-form">
@@ -317,7 +323,7 @@ import { computed, defineComponent, h, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElButton, ElCheckbox, ElInput, ElMessage, ElMessageBox } from 'element-plus'
 import { Delete, MoreFilled, Plus } from '@element-plus/icons-vue'
-import { caseApi, planApi, projectApi } from '@/api'
+import { caseApi, planApi, projectApi, secretApi } from '@/api'
 
 type KeyValueRow = { key: string; value: string; enabled: boolean }
 type AssertionRow = { type: string; path: string; operator: string; value: string; raw?: any }
@@ -384,6 +390,13 @@ const batchTagsVisible = ref(false)
 const batchFolder = ref('')
 const batchTags = ref<string[]>([])
 const batchUpdating = ref(false)
+const importVisible = ref(false)
+const importing = ref(false)
+const importRows = ref<any[]>([])
+const importSuccess = ref(0)
+const importFailed = ref(0)
+const credentials = ref<any[]>([])
+const selectedCredential = ref('')
 
 const addToPlanVisible = ref(false)
 const addToPlanLoading = ref(false)
@@ -430,7 +443,9 @@ function assertionToRow(item: any): AssertionRow { return { type: item.type || '
 function parseExpectedValue(value: string): any { const text = String(value ?? '').trim(); if (!text) return ''; try { return JSON.parse(text) } catch { return text } }
 
 async function loadProjects() { try { const res: any = await projectApi.getList(); const data = res?.data ?? res; projects.value = Array.isArray(data) ? data : data?.list || data?.items || [] } catch { projects.value = [] } }
-async function onProjectChange() { page.value = 1; selectedRows.value = []; plans.value = []; await loadCases() }
+async function onProjectChange() { page.value = 1; selectedRows.value = []; plans.value = []; await Promise.all([loadCases(), loadCredentials()]) }
+async function loadCredentials() { if (!projectId.value) { credentials.value = []; return } try { const res: any = await secretApi.list(projectId.value); credentials.value = res?.data?.items || [] } catch { credentials.value = [] } }
+function applyCredential(name: string) { if (!name) return; const refValue = `{{credential:${name}}}`; if (editor.value.auth.type === 'bearer') editor.value.auth.token = refValue; else if (editor.value.auth.type === 'basic') editor.value.auth.password = refValue; else editor.value.auth.value = refValue }
 function onFilterChange() { page.value = 1; loadCases() }
 async function loadCases() { if (!projectId.value) { cases.value = []; totalCases.value = 0; return } listLoading.value = true; try { const res: any = await caseApi.list({ project_id: projectId.value, page: page.value, page_size: pageSize, case_type: activeType.value === 'all' ? undefined : activeType.value, source: activeSource.value || undefined, keyword: searchKeyword.value || undefined }); cases.value = res?.data?.items || []; totalCases.value = res?.data?.total || 0 } catch { cases.value = []; totalCases.value = 0 } finally { listLoading.value = false } }
 function onSelectionChange(rows: any[]) { selectedRows.value = rows }
@@ -494,7 +509,11 @@ async function saveEdit() {
   } finally { savingEdit.value = false }
 }
 
-async function handleMore(command: string, row: any) { if (command === 'edit') return openDetail(row, true); if (command === 'copy') return copyCase(row); if (command === 'review-events') return showReviewEvents(row); if (command === 'submit') return submitReview(row); if (command === 'approve') return adopt(row); if (command === 'changes') return requestChanges(row); if (command === 'plan') return openAddToPlan([row.id]); if (command === 'deprecate') return deprecate(row); if (command === 'delete') return deleteCase(row) }
+async function handleMore(command: string, row: any) { if (command === 'edit') return openDetail(row, true); if (command === 'assert') return router.push(`/case-assert/${row.id}`); if (command === 'copy') return copyCase(row); if (command === 'review-events') return showReviewEvents(row); if (command === 'submit') return submitReview(row); if (command === 'approve') return adopt(row); if (command === 'changes') return requestChanges(row); if (command === 'plan') return openAddToPlan([row.id]); if (command === 'deprecate') return deprecate(row); if (command === 'delete') return deleteCase(row) }
+
+async function handleImportFile(uploadFile: any) { if (!projectId.value || !uploadFile?.raw) return; importing.value = true; try { const res: any = await caseApi.importPreview(projectId.value, uploadFile.raw); importRows.value = res?.data?.rows || []; importSuccess.value = res?.data?.success_count || 0; importFailed.value = res?.data?.failed_count || 0; importVisible.value = true } finally { importing.value = false } }
+async function commitImport() { importing.value = true; try { await caseApi.importCommit({ project_id: projectId.value, rows: importRows.value.filter(row => row.valid).map(row => row.data) }); ElMessage.success(`已导入 ${importSuccess.value} 条用例`); importVisible.value = false; await loadCases() } finally { importing.value = false } }
+async function downloadTemplate() { const res: any = await caseApi.importTemplate(); const blob = new Blob([res], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = '用例导入模板.xlsx'; link.click(); URL.revokeObjectURL(url) }
 async function copyCase(row: any) { const res: any = await caseApi.copy(row.id); ElMessage.success('已复制为草稿'); await loadCases(); if (res?.data) openDetail(res.data, true) }
 async function submitReview(row: any) { await caseApi.submitReview(row.id); ElMessage.success('已提交评审'); await loadCases(); if (detailVisible.value) detailVisible.value = false }
 async function adopt(row: any) { await caseApi.review(row.id, 'approve'); ElMessage.success('评审已批准'); await loadCases(); if (detailVisible.value) detailVisible.value = false }
@@ -530,5 +549,7 @@ onMounted(async () => { await loadProjects(); const pid = String(route.query.pro
 .request-line { justify-content: flex-start; margin-bottom: 14px; }.request-line .method-select { width: 120px; flex: none; }.request-line code { padding: 8px 10px; background: var(--el-fill-color-light); border-radius: 4px; font-size: 13px; }.request-tabs { margin-bottom: 22px; }.code-editor { margin-top: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }.json-view, .diff-value { margin: 0; padding: 10px; max-height: 280px; overflow: auto; white-space: pre-wrap; word-break: break-word; background: var(--el-fill-color-light); border-radius: 4px; font-size: 12px; }.section-title { margin: 16px 0 10px; font-weight: 600; }.section-header .section-title { margin-right: auto; }.status-assertion { display: flex; align-items: center; gap: 16px; margin-bottom: 10px; padding: 10px 12px; background: var(--el-fill-color-lighter); border-radius: 6px; }.assertion-table { margin-bottom: 12px; }
 .kv-row { display: grid; grid-template-columns: 30px minmax(140px, 1fr) minmax(200px, 2fr) 56px; align-items: center; gap: 8px; margin-bottom: 8px; }.kv-row code { font-weight: 600; }.empty-inline { color: var(--el-text-color-secondary); }.auth-fields { margin-top: 12px; }.two-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }.api-key-grid { display: grid; grid-template-columns: 1fr 1fr 120px; gap: 10px; }.step-row { display: grid; grid-template-columns: 24px 1fr 54px; align-items: center; gap: 8px; margin-bottom: 8px; }.manual-expected { margin-top: 18px; }.manual-steps { line-height: 2; }
 .trace-card { margin-bottom: 22px; }.version-toolbar { justify-content: flex-start; margin-bottom: 14px; }.version-toolbar .el-select { width: 230px; }.diff-value.removed { background: var(--el-color-danger-light-9); }.diff-value.added { background: var(--el-color-success-light-9); }.plan-form { margin-top: 16px; }
+.import-error { margin-left: 8px; color: var(--el-color-danger); font-size: 12px; }
+.credential-picker { width: min(420px, 100%); margin-left: 10px; }
 @media (max-width: 768px) { .header-row, .project-picker { align-items: flex-start; flex-direction: column; }.project-picker, .project-picker .el-select, .keyword-input { width: 100%; }.result-count { margin-left: 0; }.form-grid, .two-cols, .api-key-grid { grid-template-columns: 1fr; }.kv-row { grid-template-columns: 28px 1fr; }.kv-row > :nth-child(3) { grid-column: 2; }.drawer-title { max-width: 60vw; } }
 </style>

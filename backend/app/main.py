@@ -276,3 +276,9 @@ app.include_router(plan_router, prefix="/api/plans", tags=["测试计划"])
 # 知识库 RAG（能力12：状态概览 / 术语表维护 / 检索预览）
 from app.api.knowledge import router as knowledge_router
 app.include_router(knowledge_router, prefix="/api/knowledge", tags=["知识库RAG"])
+
+from app.api.endpoints import router as endpoints_router
+app.include_router(endpoints_router, prefix="/api/endpoints", tags=["接口运行证据"])
+
+from app.api.secrets import router as secrets_router
+app.include_router(secrets_router, prefix="/api/secrets", tags=["凭据目录"])

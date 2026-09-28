@@ -75,7 +75,7 @@
           />
         </el-form-item>
         <el-form-item label="Cron 表达式" prop="cron_expression">
-          <el-input v-model="form.cron_expression" placeholder="自动解析或手动输入，例如：0 8 * * *" />
+          <el-input v-model="form.cron_expression" placeholder="自动解析或手动输入，例如：0 8 * * *"><template #append><el-button @click="previewNextRuns">预览</el-button></template></el-input>
         </el-form-item>
         <el-alert
           v-if="cronPreview"
@@ -85,6 +85,7 @@
           :closable="false"
           style="margin-bottom: 16px;"
         />
+        <div v-if="nextRuns.length" class="next-runs"><b>后续触发时间（Asia/Shanghai）</b><span v-for="item in nextRuns" :key="item">{{ formatTime(item) }}</span></div>
         <el-form-item label="目标类型" prop="target_type">
           <el-select v-model="form.target_type" style="width: 100%;" @change="onTargetTypeChange">
             <el-option label="测试计划（周期回归）" value="plan" />
@@ -166,6 +167,7 @@ const isEdit = ref(false)
 const currentId = ref('')
 const formRef = ref<FormInstance>()
 const cronPreview = ref<any>(null)
+const nextRuns = ref<string[]>([])
 
 const historyVisible = ref(false)
 const historyLoading = ref(false)
@@ -299,6 +301,12 @@ async function previewCron(): Promise<void> {
   }
 }
 
+async function previewNextRuns(): Promise<void> {
+  if (!form.cron_expression.trim()) return
+  const res: any = await scheduledTaskApi.preview({ cron_expression: form.cron_expression, timezone: 'Asia/Shanghai', count: 5 })
+  nextRuns.value = res?.data?.next_runs || []
+}
+
 async function submitForm(): Promise<void> {
   if (!formRef.value) return
   const valid = await formRef.value.validate().catch(() => false)
@@ -392,4 +400,6 @@ onMounted(() => {
   line-height: 1.6;
   margin-top: 4px;
 }
+.next-runs { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 12px; margin: -4px 0 16px 130px; padding: 10px 12px; background: var(--el-fill-color-light); border-radius: 6px; font-size: 12px; }
+.next-runs b { grid-column: 1 / -1; }
 </style>

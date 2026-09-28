@@ -355,6 +355,10 @@ export const qualityGateApi = {
   updateConfig: (projectId: string, data: any) => api.put(`/quality-gate/config/${projectId}`, data),
   evaluate: (runId: string) => api.post(`/quality-gate/evaluate/${runId}`, {}, { timeout: 60000 }),
   getHistory: (projectId: string, params?: any) => api.get(`/quality-gate/history/${projectId}`, { params }),
+  listRules: (projectId: string) => api.get('/quality-gate/rules', { params: { project_id: projectId } }),
+  saveRule: (data: any) => api.post('/quality-gate/rules', data),
+  updateRule: (id: string, data: any) => api.put(`/quality-gate/rules/${id}`, data),
+  removeRule: (id: string, projectId: string) => api.delete(`/quality-gate/rules/${id}`, { params: { project_id: projectId } }),
 }
 
 // ============ 质量趋势 ============
@@ -397,6 +401,20 @@ export const caseApi = {
   deprecate: (id: string) => api.post(`/cases/${id}/deprecate`),
   /** 批量接纳：data { ids: string[] } */
   adoptBatch: (ids: string[]) => api.post('/cases/adopt-batch', { ids }),
+  importPreview: (projectId: string, file: File) => {
+    const form = new FormData(); form.append('project_id', projectId); form.append('file', file)
+    return api.post('/cases/import/preview', form, { headers: { 'Content-Type': 'multipart/form-data' } })
+  },
+  importCommit: (data: any) => api.post('/cases/import/commit', data),
+  importTemplate: () => api.get('/cases/import/template', { responseType: 'blob' }),
+}
+
+export const endpointRuntimeApi = {
+  lastResponse: (endpointId: string) => api.get(`/endpoints/${endpointId}/last-response`),
+}
+
+export const secretApi = {
+  list: (projectId?: string) => api.get('/secrets', { params: projectId ? { project_id: projectId } : {} }),
 }
 // ============ 测试环境档案（M1：取代临时 target_service_url） ============
 export const environmentApi = {
@@ -488,6 +506,14 @@ export const scheduledTaskApi = {
     api.get(`/scheduled-tasks/${id}/history`, { params }),
   parseCron: (data: { nl_schedule: string }) =>
     api.post('/scheduled-tasks/parse-cron', data),
+  preview: (data: any) => api.post('/scheduled-tasks/preview', data),
+}
+
+export const defectsApi = {
+  list: (params?: any) => api.get('/defects', { params }),
+  get: (id: string) => api.get(`/defects/${id}`),
+  create: (data: any) => api.post('/defects', data),
+  update: (id: string, data: any) => api.put(`/defects/${id}`, data),
 }
 
 // ============ 报告分析（能力9：AI 分析测试报告） ============

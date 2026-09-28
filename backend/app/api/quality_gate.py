@@ -45,7 +45,107 @@ class QualityGateConfigRequest(BaseModel):
     block_deployment: bool = True
 
 
+class QualityGateRuleRequest(BaseModel):
+    project_id: str
+    metric: str
+    name: str | None = None
+    threshold: float
+    enabled: bool = True
+
+
+RULE_LABELS = {
+    "max_p0_defects": "P0 缺陷数",
+    "max_p1_defects": "P1 缺陷数",
+    "min_api_pass_rate": "API 测试通过率",
+    "min_performance_pass_rate": "性能测试通过率",
+    "min_integration_pass_rate": "集成测试通过率",
+    "min_quality_score": "质量评分",
+}
+
+
+async def _get_project(project_id: str, db: AsyncSession) -> Project:
+    try:
+        pid = uuid.UUID(project_id)
+    except ValueError as exc:
+        raise HTTPException(400, "项目 ID 格式错误") from exc
+    project = (await db.execute(select(Project).where(Project.id == pid))).scalar_one_or_none()
+    if project is None:
+        raise HTTPException(404, "项目不存在")
+    return project
+
+
+def _rule_items(config: dict[str, Any]) -> list[dict[str, Any]]:
+    meta = config.get("rule_meta", {})
+    return [{
+        "id": key, "metric": key,
+        "name": meta.get(key, {}).get("name") or RULE_LABELS[key],
+        "operator": "<=" if key.startswith("max_") else ">=",
+        "threshold": value,
+        "enabled": meta.get(key, {}).get("enabled", True),
+    } for key, value in config.get("rules", {}).items() if key in RULE_LABELS]
+
+
 # ==================== API 路由 ====================
+
+
+@router.get("/rules")
+async def list_quality_gate_rules(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+):
+    project = await _get_project(project_id, db)
+    config = QualityGateEvaluator.validate_config(project.quality_gate_config or {})
+    return {"code": 0, "data": {"items": _rule_items(config)}, "message": "success"}
+
+
+@router.post("/rules")
+async def create_or_replace_quality_gate_rule(
+    req: QualityGateRuleRequest,
+    current_user: User = Depends(require_tester),
+    db: AsyncSession = Depends(get_db_session),
+):
+    if req.metric not in RULE_LABELS:
+        raise HTTPException(422, "不支持的门禁指标")
+    project = await _get_project(req.project_id, db)
+    config = QualityGateEvaluator.validate_config(project.quality_gate_config or {})
+    config["rules"][req.metric] = req.threshold
+    config.setdefault("rule_meta", {})[req.metric] = {"name": req.name or RULE_LABELS[req.metric], "enabled": req.enabled}
+    validated = QualityGateEvaluator.validate_config(config)
+    project.quality_gate_config = validated
+    await db.commit()
+    await cache_set(f"{GATE_CONFIG_CACHE_PREFIX}{req.project_id}", validated, ttl=3600)
+    return {"code": 0, "data": next(item for item in _rule_items(validated) if item["id"] == req.metric), "message": "规则已保存"}
+
+
+@router.put("/rules/{rule_id}")
+async def update_quality_gate_rule(
+    rule_id: str,
+    req: QualityGateRuleRequest,
+    current_user: User = Depends(require_tester),
+    db: AsyncSession = Depends(get_db_session),
+):
+    if rule_id != req.metric:
+        raise HTTPException(422, "规则 ID 与指标不一致")
+    return await create_or_replace_quality_gate_rule(req, current_user, db)
+
+
+@router.delete("/rules/{rule_id}")
+async def disable_quality_gate_rule(
+    rule_id: str,
+    project_id: str,
+    current_user: User = Depends(require_tester),
+    db: AsyncSession = Depends(get_db_session),
+):
+    if rule_id not in RULE_LABELS:
+        raise HTTPException(404, "规则不存在")
+    project = await _get_project(project_id, db)
+    config = QualityGateEvaluator.validate_config(project.quality_gate_config or {})
+    config.setdefault("rule_meta", {})[rule_id] = {"name": RULE_LABELS[rule_id], "enabled": False}
+    project.quality_gate_config = config
+    await db.commit()
+    await cache_set(f"{GATE_CONFIG_CACHE_PREFIX}{project_id}", config, ttl=3600)
+    return {"code": 0, "data": None, "message": "规则已停用"}
 
 
 @router.get("/config/{project_id}")
@@ -107,7 +207,7 @@ async def update_quality_gate_config(
         raise HTTPException(404, f"Project not found: {project_id}")
 
     # 验证配置
-    config_dict = req.model_dump()
+    config_dict = {**(project.quality_gate_config or {}), **req.model_dump()}
     try:
         validated = QualityGateEvaluator.validate_config(config_dict)
     except ValueError as e:

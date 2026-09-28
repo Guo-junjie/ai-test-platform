@@ -1,341 +1,67 @@
 <template>
   <el-container class="layout-container">
-    <!-- 侧边栏 -->
-    <el-aside
-      :width="
-        isMobile
-          ? 'var(--app-sidebar-width)'
-          : isCollapse
-          ? 'var(--app-sidebar-collapsed-width)'
-          : 'var(--app-sidebar-width)'
-      "
-      class="sidebar"
-      :class="{ 'mobile-sidebar': isMobile, 'mobile-open': mobileMenuOpen }"
-    >
-      <div class="logo">
-        <el-icon size="24" color="var(--app-accent)"><Monitor /></el-icon>
-        <span v-show="!isCollapse" class="logo-text">AI 测试平台</span>
-      </div>
-      <!-- 菜单颜色统一由 theme.css 的 --el-menu-* / --app-sidebar-* 令牌驱动，
-           不再使用内联颜色 prop，以便三个视觉变体自由切换 -->
+    <el-aside :width="sidebarWidth" class="sidebar" :class="{ 'mobile-sidebar': isMobile, 'mobile-open': mobileMenuOpen }">
+      <div class="logo"><span class="logo-mark">AI</span><div v-show="!isCollapse || isMobile" class="logo-copy"><strong>测试平台</strong><small>AI Quality Platform</small></div></div>
       <el-menu :default-active="activeMenu" :collapse="!isMobile && isCollapse" router @select="onMenuSelect">
-        <template v-if="!authStore.isAuditor">
-        <!-- 工作台 -->
-        <el-menu-item index="/dashboard">
-          <el-icon><DataLine /></el-icon>
-          <template #title>工作台</template>
-        </el-menu-item>
-
-        <!-- 项目（M4：项目工作区为第一入口） -->
-        <el-menu-item index="/projects">
-          <el-icon><Folder /></el-icon>
-          <template #title>项目</template>
-        </el-menu-item>
-
-        <!-- 测试中心：跨项目的执行与资产 -->
-        <el-sub-menu index="g-test">
-          <template #title>
-            <el-icon><VideoPlay /></el-icon>
-            <span>测试中心</span>
-          </template>
-          <el-menu-item index="/case-generation">智能用例生成</el-menu-item>
-          <el-menu-item index="/case-library">用例管理与评审</el-menu-item>
-          <el-menu-item index="/test-run">API 计划执行</el-menu-item>
-          <el-menu-item index="/scheduled-tasks">定时任务</el-menu-item>
-          <el-menu-item index="/scenario">场景编排</el-menu-item>
-          <el-menu-item index="/scripts">脚本生成</el-menu-item>
-          <el-menu-item index="/database-manage">数据库连接</el-menu-item>
-        </el-sub-menu>
-
-        <!-- 质量中心 -->
-        <el-sub-menu index="g-quality">
-          <template #title>
-            <el-icon><DataLine /></el-icon>
-            <span>质量中心</span>
-          </template>
-          <el-menu-item index="/report">测试报告</el-menu-item>
-          <el-menu-item index="/report-analysis">报告分析</el-menu-item>
-          <el-menu-item index="/defects">缺陷中心</el-menu-item>
-          <el-menu-item index="/coverage">代码覆盖率</el-menu-item>
-          <el-menu-item index="/quality-trend">质量趋势</el-menu-item>
-        </el-sub-menu>
-
-        <!-- 知识中心 -->
-        <el-sub-menu index="g-kb">
-          <template #title>
-            <el-icon><Reading /></el-icon>
-            <span>知识中心</span>
-          </template>
-          <el-menu-item index="/knowledge">知识库</el-menu-item>
-          <el-menu-item index="/knowledge-qa">知识问答</el-menu-item>
-        </el-sub-menu>
-
-        <!-- 解析与集成 -->
-        <el-sub-menu index="g-prep">
-          <template #title>
-            <el-icon><Cpu /></el-icon>
-            <span>解析与集成</span>
-          </template>
-          <el-menu-item v-if="authStore.isAdmin" index="/analysis">代码解析</el-menu-item>
-          <el-menu-item index="/doc-review">接口文档评审</el-menu-item>
-          <el-menu-item v-if="authStore.isAdmin" index="/sources">仓库配置</el-menu-item>
-        </el-sub-menu>
+        <template v-for="(group, index) in visibleGroups" :key="group.title || index">
+          <div v-if="group.title && (!isCollapse || isMobile)" class="menu-group-title">{{ group.title }}</div>
+          <el-menu-item v-for="item in group.items" :key="item.path" :index="item.path"><span class="nav-dot" aria-hidden="true"></span><template #title>{{ item.label }}</template></el-menu-item>
         </template>
-
-        <!-- 系统 -->
-        <el-sub-menu index="g-system">
-          <template #title>
-            <el-icon><Setting /></el-icon>
-            <span>系统</span>
-          </template>
-          <el-menu-item v-if="authStore.isAdmin" index="/user-management"
-            >用户管理</el-menu-item
-          >
-          <el-menu-item index="/notifications">消息通知</el-menu-item>
-          <el-menu-item v-if="authStore.isAdmin" index="/settings"
-            >基础配置</el-menu-item
-          >
-          <el-menu-item v-if="authStore.isAdmin" index="/settings/models"
-            >AI 模型配置</el-menu-item
-          >
-          <el-menu-item v-if="!authStore.isAuditor" index="/settings/quality-gate">质量门禁</el-menu-item>
-          <el-menu-item v-if="authStore.isAdmin || authStore.isAuditor" index="/settings/audit">审计日志</el-menu-item>
-          <el-menu-item index="/profile">个人设置</el-menu-item>
-        </el-sub-menu>
       </el-menu>
+      <button class="sidebar-collapse" :aria-label="isCollapse ? '展开导航' : '折叠导航'" @click="toggleNavigation"><el-icon><Expand v-if="isCollapse" /><Fold v-else /></el-icon><span v-if="!isCollapse">收起导航</span></button>
     </el-aside>
     <div v-if="isMobile && mobileMenuOpen" class="mobile-mask" aria-hidden="true" @click="mobileMenuOpen = false"></div>
-
-    <!-- 主内容区 -->
-    <el-container>
+    <el-container class="content-shell">
       <el-header class="header">
         <div class="header-left">
-          <el-button text class="collapse-btn" :aria-label="isMobile ? '打开或关闭导航菜单' : '折叠或展开导航菜单'" @click="toggleNavigation">
-            <el-icon><Expand v-if="isMobile || isCollapse" /><Fold v-else /></el-icon>
-          </el-button>
-          <span class="header-divider" aria-hidden="true"></span>
-          <!-- 当前页面标题：作为主内容区的视觉起点（面包屑已移除，侧栏已表达位置） -->
-          <span class="header-title">{{ currentTitle }}</span>
+          <el-button v-if="isMobile" text aria-label="打开导航菜单" @click="toggleNavigation"><el-icon><Expand /></el-icon></el-button>
+          <el-breadcrumb separator="/" class="breadcrumb"><el-breadcrumb-item :to="{ path: '/dashboard' }">首页</el-breadcrumb-item><el-breadcrumb-item v-if="currentGroup">{{ currentGroup }}</el-breadcrumb-item><el-breadcrumb-item>{{ currentTitle }}</el-breadcrumb-item></el-breadcrumb>
         </div>
         <div class="header-right">
-          <UiVariantSwitch />
-          <NotificationBell />
-          <el-dropdown @command="handleUserCommand">
-            <span class="user-info">
-              <el-avatar :size="30" icon="UserFilled" />
-              <span class="username">{{ authStore.username }}</span>
-              <el-tag
-                size="small"
-                :type="roleTagType"
-                effect="plain"
-                class="role-tag"
-                >{{ roleLabel }}</el-tag
-              >
-            </span>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item command="profile">个人设置</el-dropdown-item>
-                <el-dropdown-item command="logout" divided
-                  >退出登录</el-dropdown-item
-                >
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
+          <button class="global-search" aria-label="全局搜索" @click="searchOpen = true"><el-icon><Search /></el-icon><span>搜索功能、项目、用例</span><kbd>Ctrl K</kbd></button>
+          <UiVariantSwitch /><NotificationBell />
+          <el-dropdown @command="handleUserCommand"><span class="user-info"><el-avatar :size="30">{{ (authStore.username || 'U').slice(0, 1).toUpperCase() }}</el-avatar><span class="username">{{ authStore.username }}</span><el-icon><ArrowDown /></el-icon></span><template #dropdown><el-dropdown-menu><el-dropdown-item command="profile">个人设置</el-dropdown-item><el-dropdown-item command="notifications">消息通知</el-dropdown-item><el-dropdown-item command="logout" divided>退出登录</el-dropdown-item></el-dropdown-menu></template></el-dropdown>
         </div>
       </el-header>
-
-      <el-main class="main-content">
-        <router-view />
-      </el-main>
+      <el-main class="main-content"><router-view /></el-main>
     </el-container>
+    <el-dialog v-model="searchOpen" title="全局搜索" width="560px" class="search-dialog" @opened="focusSearch">
+      <el-input ref="searchInput" v-model="searchText" size="large" clearable placeholder="输入功能名称" :prefix-icon="Search" />
+      <div class="search-results"><button v-for="item in searchResults" :key="item.path" @click="goSearch(item.path)"><span>{{ item.label }}</span><small>{{ item.path }}</small></button><el-empty v-if="searchResults.length === 0" description="没有匹配的功能" :image-size="56" /></div>
+    </el-dialog>
   </el-container>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from "vue";
-import { useRoute, useRouter } from "vue-router";
-import { ElMessage } from "element-plus";
-import NotificationBell from "@/components/NotificationBell.vue";
-import UiVariantSwitch from "@/components/UiVariantSwitch.vue";
-import { useAuthStore } from "@/stores";
-import {
-  roleLabel as toRoleLabel,
-  roleTagType as toRoleTagType,
-} from "@/utils/roles";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { ArrowDown, Expand, Fold, Search } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
+import NotificationBell from '@/components/NotificationBell.vue'
+import UiVariantSwitch from '@/components/UiVariantSwitch.vue'
+import { NAV_GROUPS, NAV_ITEMS } from '@/constants/nav'
+import { useAuthStore } from '@/stores'
 
-const route = useRoute();
-const router = useRouter();
-const isCollapse = ref(false);
-const isMobile = ref(false);
-const mobileMenuOpen = ref(false);
-const authStore = useAuthStore();
-
-const activeMenu = computed(() => route.path);
-const currentTitle = computed(() => (route.meta?.title as string) || "");
-
-/** 当前用户角色中文名（统一取自角色字典） */
-const roleLabel = computed<string>(() => toRoleLabel(authStore.role));
-
-/** 当前用户角色 tag 颜色（统一取自角色字典） */
-const roleTagType = computed(() => toRoleTagType(authStore.role));
-
-function updateViewport() {
-  isMobile.value = window.innerWidth <= 768;
-  if (!isMobile.value) mobileMenuOpen.value = false;
-}
-function toggleNavigation() {
-  if (isMobile.value) mobileMenuOpen.value = !mobileMenuOpen.value;
-  else isCollapse.value = !isCollapse.value;
-}
+const route = useRoute(); const router = useRouter(); const authStore = useAuthStore()
+const isCollapse = ref(false); const isMobile = ref(false); const mobileMenuOpen = ref(false)
+const searchOpen = ref(false); const searchText = ref(''); const searchInput = ref<any>()
+const sidebarWidth = computed(() => isMobile.value ? '224px' : isCollapse.value ? '64px' : '224px')
+const visibleGroups = computed(() => NAV_GROUPS.map(group => ({ ...group, items: group.items.filter(item => (!item.admin || authStore.isAdmin) && (!item.audit || authStore.isAdmin || authStore.isAuditor)) })).filter(group => group.items.length))
+const activeMenu = computed(() => route.path.startsWith('/runs') ? '/runs' : route.path)
+const currentTitle = computed(() => String(route.meta?.title || NAV_ITEMS.find(item => route.path.startsWith(item.path))?.label || '工作台'))
+const currentGroup = computed(() => visibleGroups.value.find(group => group.items.some(item => route.path.startsWith(item.path)))?.title || '')
+const searchResults = computed(() => { const q = searchText.value.trim().toLowerCase(); return visibleGroups.value.flatMap(g => g.items).filter(i => !q || i.label.toLowerCase().includes(q) || i.path.includes(q)).slice(0, 12) })
+function updateViewport() { isMobile.value = window.innerWidth <= 768; if (!isMobile.value) mobileMenuOpen.value = false }
+function toggleNavigation() { if (isMobile.value) mobileMenuOpen.value = !mobileMenuOpen.value; else isCollapse.value = !isCollapse.value }
 function onMenuSelect() { if (isMobile.value) mobileMenuOpen.value = false }
-onMounted(() => { updateViewport(); window.addEventListener('resize', updateViewport) })
-onBeforeUnmount(() => window.removeEventListener('resize', updateViewport))
-
-function handleUserCommand(cmd: string) {
-  if (cmd === "logout") {
-    authStore.logout();
-    ElMessage.success("已退出登录");
-    router.push("/login");
-  } else if (cmd === "profile") {
-    router.push("/profile");
-  }
-}
+function focusSearch() { nextTick(() => searchInput.value?.focus()) }
+function goSearch(path: string) { searchOpen.value = false; searchText.value = ''; router.push(path) }
+function onShortcut(event: KeyboardEvent) { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); searchOpen.value = true } }
+function handleUserCommand(command: string) { if (command === 'logout') { authStore.logout(); ElMessage.success('已退出登录'); router.push('/login') } else router.push(command === 'profile' ? '/profile' : '/notifications') }
+onMounted(() => { updateViewport(); window.addEventListener('resize', updateViewport); window.addEventListener('keydown', onShortcut) })
+onBeforeUnmount(() => { window.removeEventListener('resize', updateViewport); window.removeEventListener('keydown', onShortcut) })
 </script>
 
 <style scoped>
-.layout-container {
-  height: 100vh;
-}
-
-/* ---------- 侧栏：颜色全部走 --app-sidebar-* 语义令牌（v1/v3 浅色、v2 深色） ---------- */
-.sidebar {
-  background-color: var(--app-sidebar-bg);
-  border-right: 1px solid var(--app-sidebar-border);
-  transition: width 0.3s;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-
-.logo {
-  height: var(--app-header-height);
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--app-sp-2);
-  background-color: var(--app-sidebar-bg);
-  /* 品牌文字色 8% 的极淡分隔线：v1 近黑→浅灰、v2 白→rgba(255,255,255,.08) */
-  border-bottom: 1px solid var(--app-sidebar-divider);
-}
-
-.logo-text {
-  color: var(--app-sidebar-brand-text);
-  font-size: 16px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-/* ---------- 顶栏 ---------- */
-.header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  height: var(--app-header-height);
-  background: var(--app-header-bg);
-  border-bottom: 1px solid var(--app-header-border);
-  padding: 0 var(--app-page-padding);
-}
-
-.header-left {
-  display: flex;
-  align-items: center;
-  gap: var(--app-sp-3);
-  min-width: 0;
-}
-
-.collapse-btn {
-  font-size: 18px;
-  color: var(--app-text-secondary);
-  transition: color 0.16s ease;
-}
-
-.collapse-btn:hover {
-  color: var(--app-accent);
-}
-
-.header-divider {
-  width: 1px;
-  height: 18px;
-  background-color: var(--app-border-base);
-}
-
-.header-title {
-  font-size: var(--app-fs-md);
-  font-weight: 600;
-  color: var(--app-text-primary);
-  line-height: 1.4;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.header-right {
-  display: flex;
-  align-items: center;
-  gap: var(--app-sp-4);
-  flex-shrink: 0;
-}
-
-.user-info {
-  display: flex;
-  align-items: center;
-  gap: var(--app-sp-2);
-  cursor: pointer;
-}
-
-.username {
-  font-size: var(--app-fs-base);
-  color: var(--app-text-regular);
-}
-
-/* 角色标签：保留但收敛视觉重量与内边距 */
-.role-tag {
-  height: 20px;
-  padding: 0 6px;
-  line-height: 18px;
-  font-size: var(--app-fs-xs);
-}
-
-/* ---------- 主内容区 ---------- */
-.main-content {
-  background-color: var(--app-bg-page);
-  padding: var(--app-page-padding);
-  overflow-y: auto;
-}
-
-:deep(.el-menu) {
-  border-right: none;
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-}
-
-.mobile-mask { display: none; }
-@media (max-width: 768px) {
-  .mobile-sidebar {
-    position: fixed;
-    inset: 0 auto 0 0;
-    z-index: 2100;
-    transform: translateX(-100%);
-    box-shadow: var(--el-box-shadow-dark);
-  }
-  .mobile-sidebar.mobile-open { transform: translateX(0); }
-  .mobile-mask { display: block; position: fixed; inset: 0; z-index: 2099; background: rgba(15, 23, 42, .42); }
-  .header { padding: 0 12px; }
-  .header-right { gap: 8px; }
-  .username, .role-tag, .header-divider { display: none; }
-  .main-content { min-width: 0; padding: 12px; overflow-x: hidden; }
-}
+.layout-container{height:100vh}.content-shell{min-width:0}.sidebar{background:#fff;border-right:1px solid var(--app-border-base);transition:width .2s;display:flex;flex-direction:column;overflow:hidden}.logo{height:56px;display:flex;align-items:center;padding:0 16px;gap:10px;border-bottom:1px solid var(--app-border-base);flex:none}.logo-mark{display:grid;place-items:center;width:30px;height:30px;border-radius:8px;background:var(--app-accent);color:#fff;font-size:12px;font-weight:800;flex:none}.logo-copy{display:flex;flex-direction:column;white-space:nowrap;color:var(--app-text-primary);font-size:15px}.logo-copy small{font-size:9px;color:var(--app-text-secondary);letter-spacing:.3px}.menu-group-title{padding:18px 20px 6px;color:var(--app-text-placeholder);font-size:11px;font-weight:700;letter-spacing:1px}.nav-dot{width:6px;height:6px;border:1.5px solid currentColor;border-radius:50%;margin-right:12px;opacity:.7}:deep(.el-menu){border:0;overflow:auto;flex:1}:deep(.el-menu-item){height:38px;line-height:38px;margin:2px 8px;border-radius:7px;color:var(--app-text-regular)}:deep(.el-menu-item.is-active){background:var(--app-accent-light);color:var(--app-accent);font-weight:600}.sidebar-collapse{height:44px;border:0;border-top:1px solid var(--app-border-base);background:#fff;color:var(--app-text-secondary);display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer}.header{height:56px;display:flex;align-items:center;justify-content:space-between;background:#fff;border-bottom:1px solid var(--app-border-base);padding:0 24px}.header-left,.header-right,.user-info{display:flex;align-items:center}.header-right{gap:14px}.user-info{gap:8px;cursor:pointer;color:var(--app-text-regular)}.global-search{width:250px;height:32px;border:1px solid var(--app-border-base);border-radius:7px;background:var(--app-bg-page);color:var(--app-text-placeholder);display:flex;align-items:center;gap:8px;padding:0 10px;cursor:pointer}.global-search span{flex:1;text-align:left}.global-search kbd{border:1px solid var(--app-border-base);border-radius:4px;background:#fff;padding:1px 5px;font-size:10px}.main-content{background:var(--app-bg-page);padding:24px;overflow:auto}.search-results{display:grid;gap:6px;margin-top:14px;max-height:360px;overflow:auto}.search-results button{border:1px solid transparent;background:var(--app-bg-page);border-radius:7px;padding:11px 12px;display:flex;justify-content:space-between;cursor:pointer;color:var(--app-text-primary)}.search-results button:hover{border-color:var(--app-accent);background:var(--app-accent-light)}.search-results small{color:var(--app-text-placeholder)}.mobile-mask{display:none}@media(max-width:768px){.mobile-sidebar{position:fixed;inset:0 auto 0 0;z-index:2100;transform:translateX(-100%);box-shadow:var(--el-box-shadow-dark)}.mobile-sidebar.mobile-open{transform:translateX(0)}.mobile-mask{display:block;position:fixed;inset:0;z-index:2099;background:rgba(15,23,42,.42)}.header{padding:0 12px}.global-search{width:36px;padding:0;justify-content:center}.global-search span,.global-search kbd,.username,.breadcrumb :deep(.el-breadcrumb__item:not(:last-child)){display:none}.main-content{padding:12px;overflow-x:hidden}}
 </style>

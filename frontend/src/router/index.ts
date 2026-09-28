@@ -31,10 +31,14 @@ const routes = [
     children: [
       { path: '', redirect: { name: 'ws-overview' } },
       { path: 'overview', name: 'ws-overview', component: () => import('@/views/workspace/ProjectOverview.vue'), meta: { title: '项目概览' } },
-      { path: 'context', name: 'ws-context', component: () => import('@/views/workspace/ProjectContext.vue'), meta: { title: '测试上下文' } },
+      { path: 'cases', name: 'ws-cases', component: () => import('@/views/workspace/ProjectCases.vue'), meta: { title: '项目用例' } },
       { path: 'plans', name: 'ws-plans', component: () => import('@/views/workspace/ProjectPlans.vue'), meta: { title: '测试计划' } },
-      { path: 'runs', name: 'ws-runs', component: () => import('@/views/workspace/ProjectRuns.vue'), meta: { title: '运行中心' } },
+      { path: 'runs', name: 'ws-runs', component: () => import('@/views/workspace/ProjectRuns.vue'), meta: { title: '执行记录' } },
       { path: 'quality', name: 'ws-quality', component: () => import('@/views/workspace/ProjectQuality.vue'), meta: { title: '质量结果' } },
+      { path: 'environments', name: 'ws-environments', component: () => import('@/views/workspace/ProjectEnvironments.vue'), meta: { title: '测试环境' } },
+      { path: 'members', name: 'ws-members', component: () => import('@/views/workspace/ProjectMembersPage.vue'), meta: { title: '项目成员' } },
+      { path: 'settings', name: 'ws-settings', component: () => import('@/views/workspace/ProjectSettings.vue'), meta: { title: '项目设置' } },
+      { path: 'context', redirect: (to: any) => `/projects/${to.params.id}/settings` },
     ],
   },
   {
@@ -45,7 +49,19 @@ const routes = [
   },
   {
     path: '/test-runs',
-    redirect: '/test-run',
+    redirect: '/runs',
+  },
+  {
+    path: '/runs',
+    name: 'RunList',
+    component: () => import('@/views/RunList.vue'),
+    meta: { title: '执行记录' },
+  },
+  {
+    path: '/runs/:id',
+    name: 'RunDetail',
+    component: () => import('@/views/RunDetail.vue'),
+    meta: { title: '运行详情' },
   },
   {
     path: '/defects',
@@ -116,6 +132,12 @@ const routes = [
     name: 'CaseLibrary',
     component: () => import('@/views/CaseLibrary.vue'),
     meta: { title: '用例库' },
+  },
+  {
+    path: '/case-assert/:id?',
+    name: 'CaseAssert',
+    component: () => import('@/views/CaseAssert.vue'),
+    meta: { title: '断言配置' },
   },
   {
     path: '/scenario',

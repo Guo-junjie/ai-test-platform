@@ -17,17 +17,19 @@
           </div>
         </div>
         <div class="ws-actions">
-          <ProjectMembers :project-id="projectId" :owner-id="project?.owner_id" />
           <el-button v-if="hasCapability('test_execution')" type="primary" @click="$router.push(`/projects/${projectId}/plans`)">执行测试计划</el-button>
         </div>
       </div>
       <!-- 分区导航 -->
       <el-tabs v-model="activeTab" class="ws-tabs" @tab-change="onTab">
         <el-tab-pane label="概览" name="overview" />
-        <el-tab-pane label="测试上下文" name="context" />
+        <el-tab-pane label="用例" name="cases" />
         <el-tab-pane v-if="hasCapability('test_plans')" label="测试计划" name="plans" />
-        <el-tab-pane v-if="hasCapability('test_execution')" label="运行中心" name="runs" />
+        <el-tab-pane v-if="hasCapability('test_execution')" label="执行记录" name="runs" />
         <el-tab-pane v-if="hasCapability('reports')" label="质量结果" name="quality" />
+        <el-tab-pane label="环境" name="environments" />
+        <el-tab-pane label="成员" name="members" />
+        <el-tab-pane label="设置" name="settings" />
       </el-tabs>
     </el-card>
 
@@ -47,7 +49,6 @@
 import { defineComponent } from 'vue'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import { projectApi } from '@/api'
-import ProjectMembers from '@/components/ProjectMembers.vue'
 
 const SOURCE_LABELS: Record<string, string> = { github: 'GitHub', svn: 'SVN', upload: '本地上传' }
 const PROJECT_KIND_LABELS: Record<string, string> = {
@@ -56,7 +57,7 @@ const PROJECT_KIND_LABELS: Record<string, string> = {
 
 export default defineComponent({
   name: 'ProjectWorkspace',
-  components: { ArrowLeft, ProjectMembers },
+  components: { ArrowLeft },
   data() {
     return {
       projectId: (this.$route.params.id as string) || '',
@@ -68,8 +69,11 @@ export default defineComponent({
       const name = this.$route.name as string
       return name === 'ws-plans' ? 'plans'
         : name === 'ws-runs' ? 'runs'
-        : name === 'ws-context' ? 'context'
+        : name === 'ws-cases' ? 'cases'
         : name === 'ws-quality' ? 'quality'
+        : name === 'ws-environments' ? 'environments'
+        : name === 'ws-members' ? 'members'
+        : name === 'ws-settings' ? 'settings'
         : 'overview'
     },
   },
