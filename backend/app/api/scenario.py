@@ -376,6 +376,12 @@ async def adopt_scenario(
                 },
                 "expected_result": {"status_code": 200},  # 默认期望
                 "priority": "P2",
+                "version": 1,
+                "generation_context": {
+                    "channel": "scenario",
+                    "scenario_id": str(scenario.id),
+                    "step_order": step_order + 1,
+                },
                 "status": CaseAssetStatus.ADOPTED.value,
                 "source": CaseSource.AI_GENERATED.value,
                 "created_by": current_user.id,

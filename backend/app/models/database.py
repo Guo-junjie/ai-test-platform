@@ -391,6 +391,8 @@ class TestCase(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     test_run_id = Column(UUID(as_uuid=True), ForeignKey("test_runs.id"), nullable=False)
+    # 执行实例对应的用例资产；AI 临时生成用例可为空。
+    case_asset_id = Column(UUID(as_uuid=True), ForeignKey("test_case_assets.id", ondelete="SET NULL"), nullable=True, index=True)
 
     # 用例信息
     case_type = Column(String(50), nullable=False)  # api / performance / integration
@@ -862,6 +864,10 @@ class TestCaseAsset(Base):
     request_data = Column(JSONB, nullable=False, default={})  # {method, url, headers, body, params}
     expected_result = Column(JSONB, nullable=True)            # {status_code, assertions:[...]}
     priority = Column(String(10), default="P2")               # P0-P3
+    folder = Column(String(200), nullable=True)                # 业务归类/目录
+    tags = Column(JSONB, nullable=False, default=list)         # 自由标签
+    version = Column(Integer, nullable=False, default=1)       # 内容版本号
+    generation_context = Column(JSONB, nullable=False, default=dict)  # 生成来源追踪
     status = Column(CasePairEnum(CaseAssetStatus, values_callable=lambda x: [e.value for e in x], name="caseassetstatus"), default=CaseAssetStatus.DRAFT, nullable=False)
     review_state = Column(String(24), nullable=False, default="draft")  # draft/pending/approved/changes_requested
     source = Column(CasePairEnum(CaseSource, values_callable=lambda x: [e.value for e in x], name="casesource"), default=CaseSource.AI_GENERATED, nullable=False)
@@ -893,6 +899,25 @@ class CaseReviewEvent(Base):
     comment = Column(Text, nullable=True)
     content_hash = Column(String(64), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class TestCaseAssetVersion(Base):
+    """用例资产的不可变内容版本，用于审计与差异比较。"""
+
+    __tablename__ = "test_case_asset_versions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    case_asset_id = Column(UUID(as_uuid=True), ForeignKey("test_case_assets.id", ondelete="CASCADE"), nullable=False, index=True)
+    version = Column(Integer, nullable=False)
+    snapshot = Column(JSONB, nullable=False, default=dict)
+    change_type = Column(String(30), nullable=False, default="edit")
+    changed_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("case_asset_id", "version", name="uq_case_asset_version"),
+        Index("idx_case_asset_versions_asset_created", "case_asset_id", "created_at"),
+    )
 
 
 # ==================== 能力4：测试场景表（steps JSONB 单表） ====================

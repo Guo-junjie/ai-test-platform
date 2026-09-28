@@ -163,9 +163,16 @@ async def _persist_test_cases_async(test_run_id: str, test_cases: dict[str, list
             if not cases:
                 continue
             for case in cases:
+                case_asset_id = None
+                try:
+                    case_asset_id = uuid.UUID(str(case.get("case_id")))
+                except (TypeError, ValueError, AttributeError):
+                    # 流水线临时生成用例使用非 UUID 标识，不对应资产库。
+                    pass
                 rows.append({
                     "id": uuid.uuid4(),
                     "test_run_id": run_uuid,
+                    "case_asset_id": case_asset_id,
                     "case_type": case_type,  # api / performance / integration
                     "case_name": (case.get("name") or case.get("case_name") or "")[:500],
                     "description": case.get("description") or "",

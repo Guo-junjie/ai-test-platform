@@ -37,12 +37,22 @@ class UpdateCaseRequest(BaseModel):
     priority: str | None = None
     case_type: str | None = None
     execution_kind: str | None = None  # manual → api 时必须填写真实请求与断言
+    folder: str | None = Field(default=None, max_length=200)
+    tags: list[str] | None = None
 
 
 class AdoptBatchRequest(BaseModel):
     """批量接纳请求 — 传入用例资产 id 列表。"""
 
     ids: list[str] = Field(default_factory=list)
+
+
+class BatchUpdateCaseRequest(BaseModel):
+    """批量归类与标签维护。folder 为空字符串表示清除归类。"""
+
+    ids: list[str] = Field(default_factory=list, min_length=1, max_length=500)
+    folder: str | None = Field(default=None, max_length=200)
+    add_tags: list[str] = Field(default_factory=list, max_length=20)
 
 
 class CaseAssetResponse(BaseModel):
@@ -59,6 +69,12 @@ class CaseAssetResponse(BaseModel):
     priority: str = "P2"
     status: str
     source: str
+    execution_kind: str = "api"
+    review_state: str = "draft"
+    folder: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    version: int = 1
+    generation_context: dict[str, Any] = Field(default_factory=dict)
     created_by: str | None = None
     created_at: str | None = None
     updated_at: str | None = None

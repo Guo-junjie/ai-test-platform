@@ -481,6 +481,13 @@ async def generate_cases(
             },
             expected_result={"text": str(c.get("expected") or "")},
             priority=priority,
+            version=1,
+            generation_context={
+                "channel": "requirement_document",
+                "requirement_doc_id": str(r.id),
+                "requirement_id": str(c.get("related_requirement", "")),
+                "generation_engine": generation_engine,
+            },
             status=CaseAssetStatus.DRAFT,
             source=CaseSource.REQUIREMENT,
             created_by=current_user.id,

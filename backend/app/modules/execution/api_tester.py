@@ -106,6 +106,26 @@ class APITester:
                 raw_params = request_data.get("params")
                 params = self._replace_variables_in_dict(raw_params, context) if isinstance(raw_params, dict) else {}
 
+                # 结构化 Auth 编辑器的执行语义。敏感值支持 {{variable}} 环境变量替换。
+                auth_config = request_data.get("auth") if isinstance(request_data.get("auth"), dict) else {}
+                auth_type = str(auth_config.get("type") or "none").lower()
+                request_auth = None
+                if auth_type == "bearer":
+                    token = self._replace_variables(str(auth_config.get("token") or ""), context)
+                    if token and "Authorization" not in headers:
+                        headers["Authorization"] = f"Bearer {token}"
+                elif auth_type == "basic":
+                    username = self._replace_variables(str(auth_config.get("username") or ""), context)
+                    password = self._replace_variables(str(auth_config.get("password") or ""), context)
+                    request_auth = httpx.BasicAuth(username, password)
+                elif auth_type == "api_key":
+                    key = str(auth_config.get("key") or "").strip()
+                    value = self._replace_variables(str(auth_config.get("value") or ""), context)
+                    if key and auth_config.get("in") == "query":
+                        params.setdefault(key, value)
+                    elif key:
+                        headers.setdefault(key, value)
+
                 raw_body = request_data.get("body")
                 if isinstance(raw_body, dict):
                     body = self._replace_variables_in_dict(raw_body, context)
@@ -127,6 +147,8 @@ class APITester:
                         req_kwargs["json"] = body
                     else:
                         req_kwargs["content"] = str(body)
+                if request_auth is not None:
+                    req_kwargs["auth"] = request_auth
 
                 response = await client.request(**req_kwargs)
                 response_time_ms = (time.time() - start_time) * 1000

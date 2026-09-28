@@ -374,10 +374,19 @@ export const caseApi = {
   list: (params: any) => api.get('/cases', { params }),
   /** 详情 */
   get: (id: string) => api.get(`/cases/${id}`),
+  /** 用例版本列表（含不可变内容快照） */
+  versions: (id: string) => api.get(`/cases/${id}/versions`),
+  /** 计划引用、最近运行、缺陷与生成来源 */
+  traceability: (id: string) => api.get(`/cases/${id}/traceability`),
   /** 编辑（标题/描述/请求/预期/优先级/类型） */
   update: (id: string, data: any) => api.put(`/cases/${id}`, data),
   /** 删除 */
   remove: (id: string) => api.delete(`/cases/${id}`),
+  /** 复制为草稿 */
+  copy: (id: string) => api.post(`/cases/${id}/copy`),
+  /** 批量归类与追加标签 */
+  batchUpdate: (data: { ids: string[]; folder?: string; add_tags?: string[] }) =>
+    api.post('/cases/batch-update', data),
   /** 单条接纳 */
   adopt: (id: string) => api.post(`/cases/${id}/adopt`),
   submitReview: (id: string) => api.post(`/cases/${id}/submit-review`),

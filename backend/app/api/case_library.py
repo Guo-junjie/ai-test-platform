@@ -28,10 +28,29 @@ from app.schemas.case_library import (
     GenerateRequest,
     UpdateCaseRequest,
     AdoptBatchRequest,
+    BatchUpdateCaseRequest,
     CaseAssetResponse,
 )
 from app.schemas.script import BindScriptRequest
-from app.models.database import CaseAssetStatus, CaseReviewEvent, TestCaseAsset, User, UserRole
+from app.models.database import (
+    ApiEndpoint,
+    CaseAssetStatus,
+    CaseReviewEvent,
+    Defect,
+    InterfaceDoc,
+    RequirementDoc,
+    TestCase,
+    TestCaseAsset,
+    TestCaseAssetVersion,
+    TestPlan,
+    TestPlanCase,
+    TestPlanRevision,
+    TestPlanRevisionCase,
+    TestResult,
+    TestRun,
+    User,
+    UserRole,
+)
 from app.modules.auth.dependencies import get_current_user, require_role
 from app.modules.runs.case_readiness import api_case_errors
 from app.utils.database import get_db_session
@@ -44,6 +63,76 @@ case_reviewer = require_role(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.TEST
 class ReviewDecisionRequest(BaseModel):
     decision: str  # approve / changes_requested
     comment: str = Field(default="", max_length=2000)
+
+
+def _enum_value(value: Any) -> Any:
+    return getattr(value, "value", value)
+
+
+def _normalize_tags(tags: list[str] | None) -> list[str]:
+    result: list[str] = []
+    for value in tags or []:
+        tag = str(value).strip()[:40]
+        if tag and tag not in result:
+            result.append(tag)
+    return result[:20]
+
+
+def _case_snapshot(item: TestCaseAsset) -> dict[str, Any]:
+    return {
+        "title": item.title,
+        "description": item.description or "",
+        "execution_kind": item.execution_kind or "api",
+        "case_type": item.case_type,
+        "request_data": item.request_data or {},
+        "expected_result": item.expected_result or {},
+        "priority": item.priority or "P2",
+        "folder": item.folder or "",
+        "tags": list(item.tags or []),
+    }
+
+
+def _add_case_version(
+    db: AsyncSession,
+    item: TestCaseAsset,
+    actor_id: uuid.UUID | None,
+    change_type: str,
+    *,
+    snapshot: dict[str, Any] | None = None,
+    version: int | None = None,
+) -> None:
+    db.add(TestCaseAssetVersion(
+        case_asset_id=item.id,
+        version=version or int(item.version or 1),
+        snapshot=snapshot or _case_snapshot(item),
+        change_type=change_type,
+        changed_by=actor_id,
+    ))
+
+
+def _case_to_dict(item: TestCaseAsset) -> dict[str, Any]:
+    return {
+        "id": str(item.id),
+        "project_id": str(item.project_id),
+        "endpoint_id": str(item.endpoint_id) if item.endpoint_id else None,
+        "case_type": item.case_type,
+        "title": item.title,
+        "description": item.description or "",
+        "request_data": item.request_data or {},
+        "expected_result": item.expected_result,
+        "priority": item.priority,
+        "status": _enum_value(item.status),
+        "execution_kind": item.execution_kind,
+        "review_state": item.review_state,
+        "source": _enum_value(item.source),
+        "folder": item.folder or "",
+        "tags": list(item.tags or []),
+        "version": int(item.version or 1),
+        "generation_context": item.generation_context or {},
+        "created_by": str(item.created_by) if item.created_by else None,
+        "created_at": item.created_at.isoformat() if item.created_at else None,
+        "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+    }
 
 
 def _record_review(db: AsyncSession, item: TestCaseAsset, actor: User,
@@ -161,6 +250,12 @@ async def generate_cases(
             priority=case.get("priority", "P2"),
             status="DRAFT",
             source="ai_generated",
+            version=1,
+            generation_context={
+                "channel": "api_document",
+                "endpoint_id": case.get("endpoint_id"),
+                "generator": "ai_case_generator",
+            },
             created_by=current_user.id,
             created_at=datetime.utcnow(),
             updated_at=datetime.utcnow(),
@@ -168,6 +263,9 @@ async def generate_cases(
         db.add(asset)
         saved.append(asset)
 
+    await db.flush()
+    for asset in saved:
+        _add_case_version(db, asset, current_user.id, "generated")
     await db.flush()
 
     return {
@@ -246,26 +344,7 @@ async def list_cases(
     return {
         "code": 0,
         "data": {
-            "items": [
-                {
-                    "id": item.id,
-                    "project_id": item.project_id,
-                    "endpoint_id": getattr(item, "endpoint_id", None),
-                    "case_type": item.case_type,
-                    "title": item.title,
-                    "description": getattr(item, "description", ""),
-                    "request_data": getattr(item, "request_data", {}),
-                    "expected_result": getattr(item, "expected_result", None),
-                    "priority": item.priority,
-                    "status": item.status,
-                    "execution_kind": item.execution_kind,
-                    "review_state": item.review_state,
-                    "source": getattr(item, "source", ""),
-                    "created_at": item.created_at.isoformat() if item.created_at else None,
-                    "updated_at": item.updated_at.isoformat() if item.updated_at else None,
-                }
-                for item in items
-            ],
+            "items": [_case_to_dict(item) for item in items],
             "total": total,
             "page": page,
             "page_size": page_size,
@@ -292,23 +371,7 @@ async def get_case(
 
     return {
         "code": 0,
-        "data": {
-            "id": item.id,
-            "project_id": item.project_id,
-            "endpoint_id": getattr(item, "endpoint_id", None),
-            "case_type": item.case_type,
-            "title": item.title,
-            "description": getattr(item, "description", ""),
-            "request_data": getattr(item, "request_data", {}),
-            "expected_result": getattr(item, "expected_result", None),
-            "priority": item.priority,
-            "status": item.status,
-            "execution_kind": item.execution_kind,
-            "review_state": item.review_state,
-            "source": getattr(item, "source", ""),
-            "created_at": item.created_at.isoformat() if item.created_at else None,
-            "updated_at": item.updated_at.isoformat() if item.updated_at else None,
-        },
+        "data": _case_to_dict(item),
         "message": "ok",
     }
 
@@ -324,11 +387,25 @@ async def update_case(
     from app.models.database import TestCaseAsset
 
     result = await db.execute(
-        select(TestCaseAsset).where(TestCaseAsset.id == case_id)
+        select(TestCaseAsset).where(TestCaseAsset.id == case_id).with_for_update()
     )
     item = result.scalar_one_or_none()
     if item is None:
         raise HTTPException(status_code=404, detail="Case not found")
+
+    current_version = int(item.version or 1)
+    prior_snapshot = _case_snapshot(item)
+    has_current_version = (await db.execute(
+        select(func.count()).select_from(TestCaseAssetVersion).where(
+            TestCaseAssetVersion.case_asset_id == item.id,
+            TestCaseAssetVersion.version == current_version,
+        )
+    )).scalar_one() > 0
+    if not has_current_version:
+        _add_case_version(
+            db, item, item.created_by, "baseline",
+            snapshot=prior_snapshot, version=current_version,
+        )
 
     if req.title is not None:
         item.title = req.title
@@ -351,15 +428,241 @@ async def update_case(
         if req.execution_kind not in {"manual", "api"}:
             raise HTTPException(422, "当前用例库只允许手工或 API 执行类型")
         item.execution_kind = req.execution_kind
+    if req.folder is not None:
+        item.folder = req.folder.strip() or None
+    if req.tags is not None:
+        item.tags = _normalize_tags(req.tags)
 
     if item.review_state in {"pending", "approved", "changes_requested"}:
         item.review_state = "draft"
         item.status = CaseAssetStatus.DRAFT
         _record_review(db, item, current_user, "edit", "内容变更，重新进入草稿")
     item.updated_at = datetime.utcnow()
+    item.version = current_version + 1
+    _add_case_version(db, item, current_user.id, "edit")
     await db.flush()
 
     return {"code": 0, "data": None, "message": "ok"}
+
+
+@router.post("/batch-update")
+async def batch_update_cases(
+    req: BatchUpdateCaseRequest,
+    current_user: User = Depends(case_editor),
+    db: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    """批量归类和追加标签，不改变评审状态。"""
+    try:
+        ids = list(dict.fromkeys(uuid.UUID(value) for value in req.ids))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, "用例 ID 格式错误") from exc
+    items = (await db.execute(
+        select(TestCaseAsset).where(TestCaseAsset.id.in_(ids)).with_for_update()
+    )).scalars().all()
+    if len(items) != len(ids):
+        raise HTTPException(404, "部分用例不存在")
+
+    existing_versions = {(row[0], row[1]) for row in (await db.execute(
+        select(TestCaseAssetVersion.case_asset_id, TestCaseAssetVersion.version).where(
+            TestCaseAssetVersion.case_asset_id.in_(ids)
+        )
+    )).all()}
+    add_tags = _normalize_tags(req.add_tags)
+    for item in items:
+        current_version = int(item.version or 1)
+        if (item.id, current_version) not in existing_versions:
+            _add_case_version(db, item, item.created_by, "baseline", version=current_version)
+        if req.folder is not None:
+            item.folder = req.folder.strip() or None
+        item.tags = _normalize_tags([*(item.tags or []), *add_tags])
+        item.version = current_version + 1
+        item.updated_at = datetime.utcnow()
+        _add_case_version(db, item, current_user.id, "classify")
+    await db.flush()
+    return {"code": 0, "data": {"count": len(items)}, "message": "批量更新完成"}
+
+
+@router.post("/{case_id}/copy")
+async def copy_case(
+    case_id: str,
+    current_user: User = Depends(case_editor),
+    db: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    """复制为新的草稿用例，保留来源链路但重新进入评审。"""
+    source = (await db.execute(
+        select(TestCaseAsset).where(TestCaseAsset.id == case_id)
+    )).scalar_one_or_none()
+    if source is None:
+        raise HTTPException(404, "用例不存在")
+    generation_context = dict(source.generation_context or {})
+    generation_context.update({"channel": "copy", "copied_from": str(source.id), "copied_from_version": int(source.version or 1)})
+    copied = TestCaseAsset(
+        project_id=source.project_id,
+        endpoint_id=source.endpoint_id,
+        case_type=source.case_type,
+        execution_kind=source.execution_kind,
+        design_type=source.design_type,
+        title=f"{source.title}（副本）"[:500],
+        description=source.description,
+        request_data=dict(source.request_data or {}),
+        expected_result=dict(source.expected_result or {}),
+        priority=source.priority,
+        folder=source.folder,
+        tags=list(source.tags or []),
+        version=1,
+        generation_context=generation_context,
+        status=CaseAssetStatus.DRAFT,
+        review_state="draft",
+        source="manual",
+        created_by=current_user.id,
+    )
+    db.add(copied)
+    await db.flush()
+    _add_case_version(db, copied, current_user.id, "copied")
+    await db.flush()
+    return {"code": 0, "data": _case_to_dict(copied), "message": "用例已复制为草稿"}
+
+
+@router.get("/{case_id}/versions")
+async def list_case_versions(
+    case_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    item = (await db.execute(select(TestCaseAsset).where(TestCaseAsset.id == case_id))).scalar_one_or_none()
+    if item is None:
+        raise HTTPException(404, "用例不存在")
+    rows = (await db.execute(
+        select(TestCaseAssetVersion, User.username)
+        .outerjoin(User, User.id == TestCaseAssetVersion.changed_by)
+        .where(TestCaseAssetVersion.case_asset_id == item.id)
+        .order_by(TestCaseAssetVersion.version.desc())
+    )).all()
+    versions = [{
+        "id": str(version.id),
+        "version": version.version,
+        "snapshot": version.snapshot or {},
+        "change_type": version.change_type,
+        "changed_by": str(version.changed_by) if version.changed_by else None,
+        "changed_by_name": username,
+        "created_at": version.created_at.isoformat() if version.created_at else None,
+    } for version, username in rows]
+    if not versions:
+        versions.append({
+            "id": None,
+            "version": int(item.version or 1),
+            "snapshot": _case_snapshot(item),
+            "change_type": "baseline",
+            "changed_by": str(item.created_by) if item.created_by else None,
+            "changed_by_name": None,
+            "created_at": item.created_at.isoformat() if item.created_at else None,
+        })
+    return {"code": 0, "data": {"items": versions}, "message": "ok"}
+
+
+@router.get("/{case_id}/traceability")
+async def get_case_traceability(
+    case_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    item = (await db.execute(select(TestCaseAsset).where(TestCaseAsset.id == case_id))).scalar_one_or_none()
+    if item is None:
+        raise HTTPException(404, "用例不存在")
+
+    plan_rows = (await db.execute(
+        select(TestPlanCase, TestPlan)
+        .join(TestPlan, TestPlan.id == TestPlanCase.plan_id)
+        .where(TestPlanCase.case_asset_id == item.id)
+        .order_by(TestPlan.updated_at.desc())
+    )).all()
+    revision_rows = (await db.execute(
+        select(TestPlanRevisionCase, TestPlanRevision, TestPlan)
+        .join(TestPlanRevision, TestPlanRevision.id == TestPlanRevisionCase.revision_id)
+        .join(TestPlan, TestPlan.id == TestPlanRevision.plan_id)
+        .where(TestPlanRevisionCase.case_asset_id == item.id)
+        .order_by(TestPlanRevision.published_at.desc())
+        .limit(50)
+    )).all()
+    run_rows = (await db.execute(
+        select(TestCase, TestResult, TestRun)
+        .join(TestRun, TestRun.id == TestCase.test_run_id)
+        .outerjoin(TestResult, TestResult.test_case_id == TestCase.id)
+        .where(TestCase.case_asset_id == item.id)
+        .order_by(TestCase.created_at.desc())
+        .limit(10)
+    )).all()
+    defect_rows = (await db.execute(
+        select(Defect, TestCase)
+        .join(TestCase, TestCase.id == Defect.test_case_id)
+        .where(TestCase.case_asset_id == item.id)
+        .order_by(Defect.created_at.desc())
+        .limit(20)
+    )).all()
+
+    source_trace: dict[str, Any] = {
+        "source": _enum_value(item.source),
+        "generation_context": item.generation_context or {},
+        "created_by": str(item.created_by) if item.created_by else None,
+        "created_at": item.created_at.isoformat() if item.created_at else None,
+    }
+    if item.created_by:
+        creator = (await db.execute(select(User.username).where(User.id == item.created_by))).scalar_one_or_none()
+        source_trace["created_by_name"] = creator
+    if item.endpoint_id:
+        endpoint_row = (await db.execute(
+            select(ApiEndpoint, InterfaceDoc)
+            .outerjoin(InterfaceDoc, InterfaceDoc.id == ApiEndpoint.doc_id)
+            .where(ApiEndpoint.id == item.endpoint_id)
+        )).first()
+        if endpoint_row:
+            endpoint, document = endpoint_row
+            source_trace["endpoint"] = {
+                "id": str(endpoint.id), "method": endpoint.method, "path": endpoint.path,
+                "version": endpoint.version, "document_id": str(document.id) if document else None,
+                "document_name": document.filename if document else None,
+            }
+    requirement_doc_id = (item.request_data or {}).get("requirement_doc_id")
+    if requirement_doc_id:
+        requirement = (await db.execute(
+            select(RequirementDoc).where(RequirementDoc.id == requirement_doc_id)
+        )).scalar_one_or_none()
+        if requirement:
+            source_trace["requirement"] = {
+                "id": str(requirement.id), "filename": requirement.filename,
+                "parse_engine": requirement.parse_engine,
+            }
+
+    return {
+        "code": 0,
+        "data": {
+            "source": source_trace,
+            "plans": [{
+                "id": str(plan.id), "name": plan.name, "status": plan.status,
+                "enabled": bool(link.enabled), "added_at": link.added_at.isoformat() if link.added_at else None,
+            } for link, plan in plan_rows],
+            "plan_revisions": [{
+                "plan_id": str(plan.id), "plan_name": plan.name,
+                "revision": revision.revision, "revision_status": revision.status,
+                "enabled": bool(link.enabled),
+                "published_at": revision.published_at.isoformat() if revision.published_at else None,
+            } for link, revision, plan in revision_rows],
+            "recent_runs": [{
+                "run_id": str(run.id), "run_status": _enum_value(run.status),
+                "passed": result.is_passed if result else None,
+                "status_code": result.status_code if result else None,
+                "response_time_ms": result.response_time_ms if result else None,
+                "executed_at": result.executed_at.isoformat() if result and result.executed_at else None,
+            } for _case, result, run in run_rows],
+            "defects": [{
+                "id": str(defect.id), "title": defect.title,
+                "severity": _enum_value(defect.severity),
+                "status": defect.status or ("closed" if defect.is_resolved else "open"),
+                "created_at": defect.created_at.isoformat() if defect.created_at else None,
+            } for defect, _case in defect_rows],
+        },
+        "message": "ok",
+    }
 
 
 @router.delete("/{case_id}")
