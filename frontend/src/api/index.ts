@@ -1,6 +1,6 @@
 import axios from 'axios'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { safeGetItem, safeRemoveItem } from '@/utils/safeStorage'
+import { safeGetAuthItem, safeRemoveAuthItem } from '@/utils/safeStorage'
 
 const api = axios.create({
   baseURL: '/api',
@@ -10,7 +10,7 @@ const api = axios.create({
 // 请求拦截器
 api.interceptors.request.use(
   (config) => {
-    const token = safeGetItem('token')
+    const token = safeGetAuthItem('token')
     if (token) {
       config.headers.Authorization = `Bearer ${token}`
     }
@@ -24,8 +24,8 @@ api.interceptors.response.use(
   (response) => response.data,
   (error) => {
     if (error.response?.status === 401) {
-      safeRemoveItem('token')
-      safeRemoveItem('user')
+      safeRemoveAuthItem('token')
+      safeRemoveAuthItem('user')
       if (window.location.pathname !== '/login') {
         window.location.href = '/login'
       }
@@ -41,7 +41,7 @@ api.interceptors.response.use(
       // 读取当前用户角色，决定是引导去配置还是提示联系管理员
       let currentRole = ''
       try {
-        const u = JSON.parse(safeGetItem('user') || '{}')
+        const u = JSON.parse(safeGetAuthItem('user') || '{}')
         currentRole = u.role || ''
       } catch {
         currentRole = ''

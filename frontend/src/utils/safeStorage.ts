@@ -1,5 +1,5 @@
 /**
- * localStorage 安全访问封装
+ * localStorage / sessionStorage 安全访问封装
  *
  * 用途：浏览器隐私模式、存储配额已满、禁用第三方 Cookie 等场景下，
  * 直接读写 localStorage 会抛出 SecurityError / QuotaExceededError，
@@ -12,6 +12,7 @@
  */
 
 const memoryFallback = new Map<string, string>()
+const sessionMemoryFallback = new Map<string, string>()
 
 export function safeGetItem(key: string): string | null {
   try {
@@ -36,4 +37,38 @@ export function safeRemoveItem(key: string): void {
   } catch {
     memoryFallback.delete(key)
   }
+}
+
+export function safeGetSessionItem(key: string): string | null {
+  try {
+    return window.sessionStorage.getItem(key)
+  } catch {
+    return sessionMemoryFallback.get(key) ?? null
+  }
+}
+
+export function safeSetSessionItem(key: string, value: string): void {
+  try {
+    window.sessionStorage.setItem(key, value)
+  } catch {
+    sessionMemoryFallback.set(key, value)
+  }
+}
+
+export function safeRemoveSessionItem(key: string): void {
+  try {
+    window.sessionStorage.removeItem(key)
+  } catch {
+    sessionMemoryFallback.delete(key)
+  }
+}
+
+/** 登录态优先读取持久存储，未勾选“记住我”时回退到当前标签页会话。 */
+export function safeGetAuthItem(key: string): string | null {
+  return safeGetItem(key) || safeGetSessionItem(key)
+}
+
+export function safeRemoveAuthItem(key: string): void {
+  safeRemoveItem(key)
+  safeRemoveSessionItem(key)
 }

@@ -85,7 +85,7 @@
   --app-shadow-lg: 0 12px 32px -8px rgba(16, 24, 40, 0.14);
 
   /* ---------- 骨架尺寸（变体可覆盖） ---------- */
-  --app-sidebar-width: 208px;
+  --app-sidebar-width: 224px;
   --app-sidebar-collapsed-width: 64px;
   --app-header-height: 56px;
   --app-page-padding: 20px;
@@ -201,13 +201,14 @@
   --el-color-primary-light-9: #e9effd;
   --el-color-primary-dark-2: #1e4fbc;
 
-  --app-sidebar-width: 192px;
-  --app-header-height: 48px;
-  --app-page-padding: 14px;
+  /* 外壳尺寸与交互原型保持一致；紧凑模式只收紧业务卡片和表格密度。 */
+  --app-sidebar-width: 224px;
+  --app-header-height: 56px;
+  --app-page-padding: 20px;
   --app-card-padding: 14px;
   --app-card-padding-x: 16px;
-  --app-radius-md: 6px;
-  --app-radius-lg: 8px;
+  --app-radius-md: 8px;
+  --app-radius-lg: 12px;
 
   --app-table-cell-padding-y: 8px;
 }

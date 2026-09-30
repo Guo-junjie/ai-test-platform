@@ -218,7 +218,7 @@ import { Search, View, Download, Share, Delete, ArrowDown, Plus } from '@element
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { reportApi, projectApi, testRunApi } from '@/api'
 import { useAuthStore } from '@/stores'
-import { safeGetItem } from '@/utils/safeStorage'
+import { safeGetAuthItem } from '@/utils/safeStorage'
 
 // R2：关联数据跳转（缺陷 / 覆盖率按本任务过滤）
 const router = useRouter()
@@ -427,7 +427,7 @@ async function exportPdf(row: any) {
 }
 
 function apiAuthHeaders(): Record<string, string> {
-  const token = safeGetItem('token') || ''
+  const token = safeGetAuthItem('token') || ''
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 

@@ -12,7 +12,15 @@ import { ref, computed } from 'vue'
 import axios from 'axios'
 import { authApi } from '@/api'
 import { ROLE_LABELS } from '@/utils/roles'
-import { safeGetItem, safeSetItem, safeRemoveItem } from '@/utils/safeStorage'
+import {
+  safeGetAuthItem,
+  safeGetItem,
+  safeRemoveAuthItem,
+  safeRemoveItem,
+  safeRemoveSessionItem,
+  safeSetItem,
+  safeSetSessionItem,
+} from '@/utils/safeStorage'
 
 // ==================== 统一响应类型 ====================
 
@@ -121,10 +129,10 @@ export const useAppStore = defineStore('app', () => {
 export const useAuthStore = defineStore('auth', () => {
   // ==================== State ====================
 
-  const token = ref<string>(safeGetItem('token') || '')
+  const token = ref<string>(safeGetAuthItem('token') || '')
   const user = ref<UserInfo | null>(
     (() => {
-      const stored = safeGetItem('user')
+      const stored = safeGetAuthItem('user')
       try {
         return stored ? JSON.parse(stored) as UserInfo : null
       } catch {
@@ -151,14 +159,23 @@ export const useAuthStore = defineStore('auth', () => {
 
   // ==================== Actions ====================
 
-  async function login(username: string, password: string): Promise<boolean> {
+  async function login(username: string, password: string, remember = true): Promise<boolean> {
     try {
       const res: any = await authApi.login({ username, password })
       if (res.code === 0 && res.data?.token) {
         token.value = res.data.token
         user.value = res.data.user
-        safeSetItem('token', res.data.token)
-        safeSetItem('user', JSON.stringify(res.data.user))
+        if (remember) {
+          safeRemoveSessionItem('token')
+          safeRemoveSessionItem('user')
+          safeSetItem('token', res.data.token)
+          safeSetItem('user', JSON.stringify(res.data.user))
+        } else {
+          safeRemoveItem('token')
+          safeRemoveItem('user')
+          safeSetSessionItem('token', res.data.token)
+          safeSetSessionItem('user', JSON.stringify(res.data.user))
+        }
         return true
       }
       return false
@@ -170,8 +187,8 @@ export const useAuthStore = defineStore('auth', () => {
   function logout(): void {
     token.value = ''
     user.value = null
-    safeRemoveItem('token')
-    safeRemoveItem('user')
+    safeRemoveAuthItem('token')
+    safeRemoveAuthItem('user')
   }
 
   async function fetchCurrentUser(): Promise<void> {
@@ -180,7 +197,8 @@ export const useAuthStore = defineStore('auth', () => {
       const res: any = await authApi.me()
       if (res.code === 0 && res.data) {
         user.value = res.data
-        safeSetItem('user', JSON.stringify(res.data))
+        if (safeGetItem('token')) safeSetItem('user', JSON.stringify(res.data))
+        else safeSetSessionItem('user', JSON.stringify(res.data))
       }
     } catch {
       logout()

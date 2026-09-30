@@ -35,7 +35,7 @@ import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { notificationApi } from '@/api'
-import { safeGetItem } from '@/utils/safeStorage'
+import { safeGetAuthItem } from '@/utils/safeStorage'
 
 interface Notification {
   id: string
@@ -64,7 +64,7 @@ function normalize(raw: any): Notification {
 /** 轮询拉取最新通知（仅展示最近 10 条） */
 async function loadNotifications() {
   // 未登录（无 token）时不发起请求，避免登录页 / 未认证状态下产生 401 噪音
-  if (!safeGetItem('token')) {
+  if (!safeGetAuthItem('token')) {
     notifications.value = []
     unreadCount.value = 0
     return
@@ -142,18 +142,39 @@ onBeforeUnmount(() => {
 .notification-badge {
   margin-right: 0;
   cursor: pointer;
-  display: inline-flex;
-  align-items: center;
+  width: 34px;
+  height: 34px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: var(--app-radius-md);
+  transition: background-color 0.16s ease;
 }
 
 .bell-icon {
   color: var(--app-text-secondary);
   vertical-align: middle;
   transition: color 0.16s ease;
+  font-size: 17px !important;
+}
+
+.notification-badge:hover {
+  background: var(--app-fill-lighter);
 }
 
 .notification-badge:hover .bell-icon {
   color: var(--app-accent);
+}
+
+.notification-badge :deep(.el-badge__content) {
+  top: 5px;
+  right: 5px;
+  height: 15px;
+  min-width: 15px;
+  padding: 0 4px;
+  border: 1.5px solid #fff;
+  font-size: 9.5px;
+  line-height: 12px;
+  transform: translate(50%, -50%);
 }
 
 .notification-menu {
