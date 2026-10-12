@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import select
 
+from app.config import settings
 from app.models.database import (
     ApiEndpoint,
     AuditLog,
@@ -42,7 +43,7 @@ logger = get_logger(__name__)
 router = APIRouter()
 
 # 本地卷文档目录（已挂载 ./data:/app/data）
-DOCS_DIR = os.path.join("/app", "data", "uploads", "docs")
+DOCS_DIR = os.path.join(settings.DATA_DIR, "uploads", "docs")
 os.makedirs(DOCS_DIR, exist_ok=True)
 
 MAX_UPLOAD_SIZE = 20 * 1024 * 1024  # 20MB

@@ -28,6 +28,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models.database import TestRun
 from app.modules.ai.model_router import ModelNotConfiguredError
 from app.modules.code_analyzer import AICodeAnalyzer, APIExtractor, StackDetector
@@ -145,7 +146,7 @@ async def do_analyze(project_path: str, db: AsyncSession, test_run_id: str | Non
 
 
 # 容器内代码解析专用临时目录
-CODE_ANALYSIS_DIR = os.path.join("/app", "data", "code_analysis")
+CODE_ANALYSIS_DIR = os.path.join(settings.DATA_DIR, "code_analysis")
 os.makedirs(CODE_ANALYSIS_DIR, exist_ok=True)
 
 
@@ -385,7 +386,7 @@ async def project_analysis(
             svn_password=source_config_dict.get("svn_password"),
             svn_revision=source_config_dict.get("svn_revision"),
             upload_file_path=source_config_dict.get("upload_file_path"),
-            workspace_dir=f"/app/data/repos/{project.id}",
+            workspace_dir=str(Path(settings.WORKSPACE_DIR) / str(project.id)),
             incremental=True,
         )
 

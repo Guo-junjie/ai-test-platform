@@ -6,11 +6,12 @@
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any, Type
 
+from app.config import settings
 from app.utils.logger import get_logger
 
 logger = get_logger()
@@ -40,7 +41,7 @@ class SourceConfig:
         svn_password: SVN 认证密码。
         svn_revision: SVN 修订版本号（可选，用于指定版本检出）。
         upload_file_path: 上传文件在服务器上的本地路径。
-        workspace_dir: 代码拉取/解压的工作目录，默认 /app/data/repos。
+        workspace_dir: 代码拉取/解压的工作目录，默认取平台 WORKSPACE_DIR 配置。
         incremental: 是否启用增量更新模式，默认 True。
     """
 
@@ -62,7 +63,7 @@ class SourceConfig:
     upload_file_path: str | None = None
 
     # 通用
-    workspace_dir: str = "/app/data/repos"
+    workspace_dir: str = field(default_factory=lambda: settings.WORKSPACE_DIR)
     incremental: bool = True
     # upload 专用：保留压缩包（上传接口需返回路径供后续测试任务再次解压；
     # 流水线内二次解压时默认 False，用完即删）

@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 import httpx
 from sqlalchemy import select
 
+from app.config import settings
 from app.models.database import (
     CoverageReport, CoverageRun, CoverageService, CoverageSource, CoverageTool,
     Project, TestRun, TestStatus,
@@ -22,7 +23,7 @@ from app.modules.coverage.parser import parse_coverage_report
 from app.utils.database import AsyncSessionLocal
 
 
-ARTIFACT_ROOT = Path("/app/data/uploads/coverage/runs")
+ARTIFACT_ROOT = Path(settings.DATA_DIR) / "uploads" / "coverage" / "runs"
 SERVICE_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,100}$")
 ENV_NAME = re.compile(r"^COVERAGE_AGENT_[A-Z0-9_]{1,80}$")
 

@@ -11,6 +11,7 @@ from pathlib import Path
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
+from app.config import settings
 from app.modules.source import SourceConfig, SourceAdapterFactory, SourceType
 from app.utils.logger import get_logger
 
@@ -19,7 +20,7 @@ logger = get_logger()
 router = APIRouter()
 
 # 上传文件保存目录
-UPLOAD_DIR = Path("/app/data/uploads")
+UPLOAD_DIR = Path(settings.DATA_DIR) / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 # 最大上传文件大小：500MB

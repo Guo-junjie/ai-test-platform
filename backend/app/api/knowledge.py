@@ -81,7 +81,7 @@ require_kb_doc_writer = require_role(
 _KB_TYPES = ("defect", "case", "doc", "term")
 
 # 知识文档本地存储目录（与 interface_docs 的 /app/data/uploads/docs 同模式）
-KNOWLEDGE_DOCS_DIR = os.path.join("/app", "data", "uploads", "knowledge")
+KNOWLEDGE_DOCS_DIR = os.path.join(settings.DATA_DIR, "uploads", "knowledge")
 
 # 重建状态卡死阈值（小时）：state==running 且 updated_at 超过此值视为卡死
 _REBUILD_STUCK_HOURS = 1

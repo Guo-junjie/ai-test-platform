@@ -83,8 +83,9 @@ class Settings(BaseModel):
     KB_RAG_ENABLED: bool = os.getenv("KB_RAG_ENABLED", "false").lower() == "true"
 
     # 文件路径
-    WORKSPACE_DIR: str = os.getenv("WORKSPACE_DIR", "/app/data/repos")
-    REPORT_DIR: str = os.getenv("REPORT_DIR", "/app/data/reports")
+    DATA_DIR: str = os.getenv("DATA_DIR", "/app/data")
+    WORKSPACE_DIR: str = os.getenv("WORKSPACE_DIR", os.path.join(DATA_DIR, "repos"))
+    REPORT_DIR: str = os.getenv("REPORT_DIR", os.path.join(DATA_DIR, "reports"))
 
     # 报告分享链接对外基址（留空则自动用反向代理的 Host / X-Forwarded 头推导）。
     # 例如 http://<VM公网IP>:3000 或 https://report.example.com

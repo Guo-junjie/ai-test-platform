@@ -40,6 +40,7 @@ jobs:
         working-directory: backend
         env:
           APP_DEBUG: "false"
+          DATA_DIR: /tmp/aitp-test-data
           LOG_DIR: /tmp/aitp-test-logs
           ENTERPRISE_ACCESS_INTEGRATION: "true"
           POSTGRES_DB: aitp_security_test_ci

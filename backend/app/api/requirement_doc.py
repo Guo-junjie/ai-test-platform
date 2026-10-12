@@ -28,6 +28,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models.database import (
     AuditLog,
     CaseAssetStatus,
@@ -51,7 +52,7 @@ logger = get_logger(__name__)
 
 router = APIRouter()
 
-REQ_DIR = os.path.join("/app", "data", "uploads", "requirements")
+REQ_DIR = os.path.join(settings.DATA_DIR, "uploads", "requirements")
 os.makedirs(REQ_DIR, exist_ok=True)
 
 MAX_UPLOAD_SIZE = 20 * 1024 * 1024  # 20MB

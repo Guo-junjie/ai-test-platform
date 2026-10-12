@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models.database import (
     Project,
     ProjectCodeVersion,
@@ -36,7 +37,7 @@ logger = get_logger(__name__)
 router = APIRouter()
 
 # 与 /api/upload 保持一致的保存目录与限制
-UPLOAD_DIR = Path("/app/data/uploads")
+UPLOAD_DIR = Path(settings.DATA_DIR) / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 MAX_UPLOAD_SIZE = 500 * 1024 * 1024
 SUPPORTED_EXTENSIONS = (".zip", ".tar.gz", ".tgz", ".tar")

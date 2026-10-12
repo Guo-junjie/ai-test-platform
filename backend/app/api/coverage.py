@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models.database import (
     AuditLog,
     CoverageReport,
@@ -56,7 +57,7 @@ def _is_legacy_estimate(report: CoverageReport) -> bool:
         for item in (report.files_json or [])
     )
 
-COV_DIR = os.path.join("/app", "data", "uploads", "coverage")
+COV_DIR = os.path.join(settings.DATA_DIR, "uploads", "coverage")
 os.makedirs(COV_DIR, exist_ok=True)
 
 MAX_UPLOAD_SIZE = 20 * 1024 * 1024  # 20MB
