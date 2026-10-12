@@ -40,7 +40,18 @@ class TestCaseGenerator:
 
     def _degrade(self, exc: Exception) -> None:
         """一次模型路由失败后熔断本批次，避免对余额不足等错误反复重试。"""
-        reason = str(exc).strip() or exc.__class__.__name__
+        detail = str(exc).strip() or exc.__class__.__name__
+        lowered = detail.lower()
+        if "402" in lowered or "insufficient balance" in lowered:
+            reason = "AI 模型余额不足，已使用规则模板完成本批次生成"
+        elif "429" in lowered or "rate limit" in lowered:
+            reason = "AI 模型请求频率受限，已使用规则模板完成本批次生成"
+        elif "timeout" in lowered or "timed out" in lowered:
+            reason = "AI 模型调用超时，已使用规则模板完成本批次生成"
+        elif "无法解析" in detail:
+            reason = "AI 模型返回格式不符合要求，已使用规则模板完成本批次生成"
+        else:
+            reason = f"AI 模型暂时不可用，已使用规则模板完成本批次生成（{detail[:300]}）"
         if reason not in self.degraded_reasons:
             self.degraded_reasons.append(reason[:1000])
         self.ai_circuit_open = True
@@ -87,7 +98,7 @@ class TestCaseGenerator:
             )
         except Exception as e:
             self._degrade(e)
-            logger.error(
+            logger.warning(
                 f"AI case generation failed for {api_info.get('path', 'unknown')}: {e}"
             )
             return self._generate_fallback_cases(api_info)
@@ -163,8 +174,17 @@ class TestCaseGenerator:
                     )
                     return self._generate_fallback_cases(api)
 
-        tasks = [generate_with_semaphore(api) for api in apis]
-        results = await asyncio.gather(*tasks)
+        # 先用首个接口探测本批次模型。余额不足、限流或响应格式异常时，
+        # 直接让剩余接口走规则模板，避免并发窗口内重复请求和重复报错。
+        results: list[list[dict[str, Any]]] = []
+        if apis:
+            results.append(await generate_with_semaphore(apis[0]))
+            remaining = apis[1:]
+            if self.ai_circuit_open:
+                results.extend(self._generate_fallback_cases(api) for api in remaining)
+            else:
+                tasks = [generate_with_semaphore(api) for api in remaining]
+                results.extend(await asyncio.gather(*tasks))
 
         # 汇总所有接口测试用例
         all_api_cases: list[dict[str, Any]] = []

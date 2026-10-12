@@ -114,7 +114,8 @@ class ModelRouter:
         try:
             return await client.chat(messages, **kwargs)
         except Exception as e:
-            logger.error(f"Model call failed for {use_case}: {e}")
+            # 调用方会决定是否降级；主模型失败且仍可回退属于可恢复事件。
+            logger.warning(f"Model call failed for {use_case}: {e}")
             # 切换到备用模型重试（避免回退到刚刚失败的同一模型）
             fallback_id = getattr(self.routing, "fallback_model_id", None) if self.routing else None
             if fallback_id == current_config_id:
