@@ -20,6 +20,7 @@ celery_app = Celery(
         "app.modules.knowledge.tasks",
         "app.modules.report.tasks",
         "app.modules.webhook_tasks",
+        "app.modules.defects.tasks",
     ],
 )
 
@@ -70,6 +71,14 @@ celery_app.conf.beat_schedule = {
     "kb-auto-sync-daily-3am": {
         "task": "app.modules.knowledge.tasks.auto_sync_knowledge",
         "schedule": crontab(hour=3, minute=0),
+    },
+    "defect-notification-outbox-every-10s": {
+        "task": "app.modules.defects.tasks.dispatch_notifications",
+        "schedule": 10.0,
+    },
+    "defect-daily-metrics-0010": {
+        "task": "app.modules.defects.tasks.snapshot_daily_metrics",
+        "schedule": crontab(hour=0, minute=10),
     },
 }
 

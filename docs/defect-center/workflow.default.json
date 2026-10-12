@@ -1,0 +1,182 @@
+{
+  "schema_version": 1,
+  "artifact_kind": "design_contract",
+  "production_enabled": false,
+  "workflow_key": "default_defect_workflow",
+  "name": "默认缺陷协作流程",
+  "revision": 1,
+  "initial_state": "new",
+  "settings": {
+    "require_expected_version": true,
+    "require_request_id": true,
+    "allow_self_verification": false,
+    "allow_direct_close": false,
+    "privileged_override_requires_note": true
+  },
+  "states": [
+    { "key": "new", "label": "新建", "category": "todo", "legacy_status": "open", "is_resolved": false, "is_backlog": true },
+    { "key": "unassigned", "label": "待分配", "category": "todo", "legacy_status": "open", "is_resolved": false, "is_backlog": true },
+    { "key": "in_progress", "label": "处理中", "category": "in_progress", "legacy_status": "in_fix", "is_resolved": false, "is_backlog": true },
+    { "key": "pending_verification", "label": "待验证", "category": "verification", "legacy_status": "in_fix", "is_resolved": false, "is_backlog": true },
+    { "key": "resolved", "label": "已解决", "category": "done_verified", "legacy_status": "verified", "is_resolved": true, "is_backlog": false },
+    { "key": "closed", "label": "已关闭", "category": "done_verified", "legacy_status": "closed", "is_resolved": true, "is_backlog": false },
+    { "key": "reopened", "label": "重开", "category": "todo", "legacy_status": "open", "is_resolved": false, "is_backlog": true },
+    { "key": "rejected", "label": "拒绝", "category": "done_rejected", "legacy_status": "rejected", "is_resolved": false, "is_backlog": false }
+  ],
+  "transitions": [
+    {
+      "action_id": "triage",
+      "label": "完成分诊",
+      "from": ["new"],
+      "to": "unassigned",
+      "permission": "defect.assign",
+      "roles": ["project_manager", "qa_lead"],
+      "actor_relations": ["project_manager", "qa_lead"],
+      "required_fields": ["title", "description", "severity", "priority"],
+      "validators": ["project_required_fields"],
+      "effects": []
+    },
+    {
+      "action_id": "start",
+      "label": "接受处理",
+      "from": ["unassigned"],
+      "to": "in_progress",
+      "permission": "defect.start",
+      "roles": ["developer", "project_manager", "qa_lead"],
+      "actor_relations": ["assignee", "privileged_override"],
+      "required_fields": ["assignee_id"],
+      "validators": ["active_project_assignee", "privileged_override_note"],
+      "effects": ["set_started_at_if_missing"]
+    },
+    {
+      "action_id": "submit_fix",
+      "label": "提交修复",
+      "from": ["in_progress"],
+      "to": "pending_verification",
+      "permission": "defect.submit_fix",
+      "roles": ["developer", "project_manager", "qa_lead"],
+      "actor_relations": ["assignee", "privileged_override"],
+      "required_fields": ["note", "verifier_id", "fix_available"],
+      "required_any": [["fix_release_id", "fix_build"]],
+      "validators": ["active_project_verifier", "same_project_release", "fix_available_true", "self_verification_policy", "privileged_override_note"],
+      "effects": ["set_fix_submitted_at", "set_proposed_resolution_fixed"]
+    },
+    {
+      "action_id": "verify_pass",
+      "label": "验证通过",
+      "from": ["pending_verification"],
+      "to": "resolved",
+      "permission": "defect.verify",
+      "roles": ["qa", "qa_lead", "project_manager"],
+      "actor_relations": ["verifier", "privileged_override"],
+      "required_fields": ["note"],
+      "required_any": [["verified_release_id", "verified_build"]],
+      "validators": ["same_project_release", "self_verification_policy", "privileged_override_note"],
+      "effects": ["set_resolution_fixed", "set_resolved_at", "set_first_resolved_at_if_missing"]
+    },
+    {
+      "action_id": "verify_fail",
+      "label": "验证失败",
+      "from": ["pending_verification"],
+      "to": "reopened",
+      "permission": "defect.verify",
+      "roles": ["qa", "qa_lead", "project_manager"],
+      "actor_relations": ["verifier", "privileged_override"],
+      "required_fields": ["note", "actual_result"],
+      "validators": ["self_verification_policy", "privileged_override_note"],
+      "effects": ["snapshot_current_cycle", "clear_current_cycle", "increment_reopened_count"]
+    },
+    {
+      "action_id": "close",
+      "label": "关闭",
+      "from": ["resolved"],
+      "to": "closed",
+      "permission": "defect.close",
+      "roles": ["qa", "qa_lead", "project_manager"],
+      "actor_relations": ["verifier", "qa_lead", "project_manager"],
+      "required_fields": [],
+      "validators": ["verified_resolution"],
+      "effects": ["set_closed_at"]
+    },
+    {
+      "action_id": "reopen",
+      "label": "重开",
+      "from": ["resolved", "closed", "rejected"],
+      "to": "reopened",
+      "permission": "defect.reopen",
+      "roles": ["qa", "developer", "qa_lead", "project_manager"],
+      "actor_relations": ["reporter", "verifier", "qa_lead", "project_manager"],
+      "required_fields": ["note"],
+      "validators": [],
+      "effects": ["snapshot_current_cycle", "clear_current_cycle", "increment_reopened_count"]
+    },
+    {
+      "action_id": "resume",
+      "label": "继续处理",
+      "from": ["reopened"],
+      "to": "in_progress",
+      "permission": "defect.start",
+      "roles": ["developer", "project_manager", "qa_lead"],
+      "actor_relations": ["assignee", "privileged_override"],
+      "required_fields": ["assignee_id"],
+      "validators": ["active_project_assignee", "privileged_override_note"],
+      "effects": ["set_started_at_if_missing"]
+    },
+    {
+      "action_id": "return_to_queue",
+      "label": "退回待分配",
+      "from": ["in_progress", "reopened"],
+      "to": "unassigned",
+      "permission": "defect.return_to_queue",
+      "roles": ["developer", "qa_lead", "project_manager"],
+      "actor_relations": ["assignee", "qa_lead", "project_manager"],
+      "required_fields": ["note"],
+      "validators": [],
+      "effects": ["snapshot_current_cycle", "clear_started_at"]
+    },
+    {
+      "action_id": "reject",
+      "label": "拒绝",
+      "from": ["new", "unassigned", "in_progress", "reopened"],
+      "to": "rejected",
+      "permission": "defect.reject",
+      "roles": ["project_manager", "qa_lead"],
+      "actor_relations": ["project_manager", "qa_lead"],
+      "required_fields": ["note", "resolution"],
+      "validators": ["rejection_resolution", "duplicate_target_if_required"],
+      "effects": ["set_rejection_resolution", "set_resolution_note"]
+    }
+  ],
+  "side_actions": [
+    {
+      "action_id": "assign",
+      "label": "指派或转派",
+      "allowed_states": ["new", "unassigned", "in_progress", "pending_verification", "reopened"],
+      "permission": "defect.assign",
+      "roles": ["project_manager", "qa_lead"],
+      "required_fields": ["assignee_id"],
+      "validators": ["active_project_assignee", "active_project_verifier_if_set", "reassignment_note_if_required"],
+      "effects": ["set_assigned_at"],
+      "changes_state": false
+    }
+  ],
+  "legacy_migration": {
+    "open": "unassigned",
+    "in_fix": "in_progress",
+    "verified": "resolved",
+    "closed": "closed",
+    "rejected": "rejected"
+  },
+  "rejection_resolutions": ["duplicate", "not_a_bug", "wont_fix", "cannot_reproduce"],
+  "common_effects": ["increment_row_version", "append_defect_event", "append_audit_log", "enqueue_notification_if_enabled"],
+  "notes": [
+    "这是设计样例，未接入生产执行器。服务端必须对白名单校验器及副作用逐项实现，不能执行任意表达式。",
+    "required_fields 可读取本次动作输入及当前缺陷；note 必须来自本次动作。required_any 中每一组至少满足一个非空字段。",
+    "roles 与 actor_relations 分别为 OR 集合，二者及全局/项目/操作权限之间为 AND。",
+    "privileged_override 仅限项目经理和测试负责人，并要求本次理由；它不能绕过状态、字段或项目校验。",
+    "clear_current_cycle 清空当前周期的开始、修复提交、修复/验证版本、构建号、实际修复/验证/关闭操作者、建议及最终解决结果、解决/关闭时间；保留报告人、处理人、验证人、first_resolved_at 和不可变历史。",
+    "self_verification_policy 比较实际验证操作者与 fix_submitted_by_id，不能用转派后的 assignee_id 作为修复操作者。",
+    "is_resolved 是修复验证成功投影，rejected 不属于修复成功；is_backlog 以语义类别计算。",
+    "历史 verified/closed 允许 legacy_unknown 结果用于保持存量状态，时效统计排除未知时间样本；重开后必须补齐新流程字段。"
+  ]
+}

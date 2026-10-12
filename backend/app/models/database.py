@@ -2,11 +2,11 @@
 AI 自动化测试平台 — 数据库模型
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum as PyEnum
 from sqlalchemy import (
     Column, Integer, String, Text, Boolean, DateTime, JSON, Float,
-    ForeignKey, Enum as SAEnum, Index, UniqueConstraint, CheckConstraint, text
+    ForeignKey, ForeignKeyConstraint, Sequence, Enum as SAEnum, Index, UniqueConstraint, CheckConstraint, text
 )
 from app.utils.case_pair_enum import CasePairEnum  # 修复后替代裸 SAEnum（兼容老数据大小写）
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -15,6 +15,7 @@ import json
 import uuid
 
 Base = declarative_base()
+defect_number_seq = Sequence("defect_number_seq", metadata=Base.metadata)
 
 
 # ==================== 枚举类型 ====================
@@ -516,10 +517,56 @@ class Defect(Base):
     # 历史数据 NULL 视为 open
     status = Column(String(20), default="open", nullable=True)
     # 归属项目（流水线缺陷经 test_run 解析回填；手动创建直接填写；
-    # NULL 兜底为全局可见）
+    # 无法确定归属的历史数据仅管理员可见）
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)
+
+    defect_key = Column(String(40), unique=True, nullable=False,
+                        server_default=text("'BUG-' || nextval('defect_number_seq')::text"))
+    priority = Column(String(16), nullable=False, default="normal", server_default="normal")
+    module_id = Column(UUID(as_uuid=True), ForeignKey("project_modules.id", ondelete="RESTRICT"))
+    iteration_id = Column(UUID(as_uuid=True), ForeignKey("project_iterations.id", ondelete="RESTRICT"))
+    environment_profile_id = Column(UUID(as_uuid=True), ForeignKey("environment_profiles.id"))
+    environment_revision_id = Column(UUID(as_uuid=True), ForeignKey("environment_profile_revisions.id"))
+    environment_snapshot = Column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
+    preconditions = Column(Text)
+    expected_result = Column(Text)
+    actual_result = Column(Text)
+    reproducibility = Column(String(16), nullable=False, default="unknown", server_default="unknown")
+    reporter_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
+    assignee_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
+    verifier_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
+    fix_submitted_by_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
+    resolved_by_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
+    closed_by_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
+    source = Column(String(20), nullable=False, default="manual", server_default="manual")
+    source_metadata = Column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
+    workflow_state = Column(String(64), nullable=False, default="new", server_default="new")
+    workflow_revision_id = Column(UUID(as_uuid=True), ForeignKey("defect_workflow_revisions.id"))
+    proposed_resolution = Column(String(32))
+    resolution = Column(String(32))
+    resolution_note = Column(Text)
+    duplicate_of_id = Column(UUID(as_uuid=True), ForeignKey("defects.id", ondelete="RESTRICT"))
+    fix_release_id = Column(UUID(as_uuid=True), ForeignKey("project_releases.id"))
+    verified_release_id = Column(UUID(as_uuid=True), ForeignKey("project_releases.id"))
+    fix_build = Column(String(200))
+    verified_build = Column(String(200))
+    labels = Column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
+    due_at = Column(DateTime(timezone=True))
+    assigned_at = Column(DateTime(timezone=True))
+    started_at = Column(DateTime(timezone=True))
+    fix_submitted_at = Column(DateTime(timezone=True))
+    resolved_at = Column(DateTime(timezone=True))
+    closed_at = Column(DateTime(timezone=True))
+    first_resolved_at = Column(DateTime(timezone=True))
+    reopened_count = Column(Integer, nullable=False, default=0, server_default="0")
+    row_version = Column(Integer, nullable=False, default=1, server_default="1")
+    event_sequence = Column(Integer, nullable=False, default=0, server_default="0")
+    creation_request_id = Column(UUID(as_uuid=True))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), server_default=text("now()"))
+    deleted_at = Column(DateTime(timezone=True))
+    deleted_by = Column(UUID(as_uuid=True), ForeignKey("users.id"))
 
     # 关系
     test_run = relationship("TestRun", back_populates="defects")
@@ -528,7 +575,304 @@ class Defect(Base):
         Index("idx_defects_run_severity", "test_run_id", "severity"),
         Index("idx_defects_status", "status"),
         Index("idx_defects_project", "project_id"),
+        UniqueConstraint("id", "project_id", name="uq_defect_id_project"),
+        UniqueConstraint("project_id", "reporter_id", "creation_request_id", name="uq_defect_creation_request"),
+        CheckConstraint("priority IN ('urgent','high','normal','low')", name="ck_defect_priority"),
+        Index("idx_defects_project_state_updated", "project_id", "workflow_state", "updated_at"),
+        Index("idx_defects_project_assignee", "project_id", "assignee_id", "workflow_state"),
+        Index("idx_defects_labels", "labels", postgresql_using="gin"),
     )
+
+
+class ProjectModule(Base):
+    __tablename__ = "project_modules"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False, index=True)
+    parent_id = Column(UUID(as_uuid=True), ForeignKey("project_modules.id", ondelete="RESTRICT"))
+    name = Column(String(100), nullable=False)
+    path = Column(String(500), nullable=False)
+    is_active = Column(Boolean, nullable=False, default=True, server_default=text("true"))
+    sort_order = Column(Integer, nullable=False, default=0, server_default="0")
+    created_at = Column(DateTime(timezone=True), server_default=text("now()"))
+    __table_args__ = (UniqueConstraint("project_id", "path", name="uq_project_module_path"),)
+
+
+class ProjectIteration(Base):
+    __tablename__ = "project_iterations"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    start_date = Column(DateTime(timezone=True))
+    end_date = Column(DateTime(timezone=True))
+    status = Column(String(16), nullable=False, default="planned", server_default="planned")
+    created_at = Column(DateTime(timezone=True), server_default=text("now()"))
+    __table_args__ = (UniqueConstraint("project_id", "name", name="uq_project_iteration_name"),
+                     CheckConstraint("end_date IS NULL OR start_date IS NULL OR end_date >= start_date", name="ck_iteration_dates"))
+
+
+class ProjectRelease(Base):
+    __tablename__ = "project_releases"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    build_ref = Column(String(200))
+    released_at = Column(DateTime(timezone=True))
+    status = Column(String(16), nullable=False, default="planned", server_default="planned")
+    created_at = Column(DateTime(timezone=True), server_default=text("now()"))
+    __table_args__ = (UniqueConstraint("project_id", "name", name="uq_project_release_name"),)
+
+
+class DefectWorkflow(Base):
+    __tablename__ = "defect_workflows"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    active_revision_id = Column(UUID(as_uuid=True), ForeignKey("defect_workflow_revisions.id", use_alter=True,
+                                name="fk_defect_workflow_active_revision"), nullable=True)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"))
+    created_at = Column(DateTime(timezone=True), server_default=text("now()"))
+    updated_at = Column(DateTime(timezone=True), server_default=text("now()"))
+    __table_args__ = (UniqueConstraint("project_id", "name", name="uq_defect_workflow_name"),)
+
+
+class DefectWorkflowRevision(Base):
+    __tablename__ = "defect_workflow_revisions"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workflow_id = Column(UUID(as_uuid=True), ForeignKey("defect_workflows.id", ondelete="RESTRICT"), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False, index=True)
+    revision = Column(Integer, nullable=False, default=1)
+    status = Column(String(16), nullable=False, default="published")
+    definition_json = Column(JSONB, nullable=False)
+    published_by = Column(UUID(as_uuid=True), ForeignKey("users.id"))
+    published_at = Column(DateTime(timezone=True), server_default=text("now()"))
+    __table_args__ = (UniqueConstraint("workflow_id", "revision", name="uq_defect_workflow_revision"),)
+
+
+class ProjectDefectSettings(Base):
+    __tablename__ = "project_defect_settings"
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), primary_key=True)
+    default_workflow_id = Column(UUID(as_uuid=True), ForeignKey("defect_workflows.id"))
+    permission_config = Column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
+    field_config = Column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
+    notification_config = Column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
+    timezone = Column(String(64), nullable=False, default="Asia/Shanghai", server_default="Asia/Shanghai")
+    row_version = Column(Integer, nullable=False, default=1, server_default="1")
+
+
+class ProjectDefectRole(Base):
+    __tablename__ = "project_defect_role_assignments"
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), primary_key=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), primary_key=True)
+    role_key = Column(String(32), primary_key=True)
+
+
+class DefectAffectedRelease(Base):
+    __tablename__ = "defect_affected_releases"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    defect_id = Column(UUID(as_uuid=True), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False, index=True)
+    release_id = Column(UUID(as_uuid=True), ForeignKey("project_releases.id"), nullable=False)
+    __table_args__ = (
+        ForeignKeyConstraint(["defect_id", "project_id"], ["defects.id", "defects.project_id"], ondelete="RESTRICT"),
+        UniqueConstraint("defect_id", "release_id", name="uq_defect_affected_release"),)
+
+
+class DefectReference(Base):
+    __tablename__ = "defect_references"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    defect_id = Column(UUID(as_uuid=True), nullable=False)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False, index=True)
+    kind = Column(String(16), nullable=False)
+    requirement_doc_id = Column(UUID(as_uuid=True), ForeignKey("requirement_docs.id"))
+    requirement_item_key = Column(String(200))
+    case_asset_id = Column(UUID(as_uuid=True), ForeignKey("test_case_assets.id"))
+    related_defect_id = Column(UUID(as_uuid=True), ForeignKey("defects.id"))
+    relation = Column(String(16), nullable=False, default="relates")
+    title_snapshot = Column(String(500))
+    created_at = Column(DateTime(timezone=True), server_default=text("now()"))
+    __table_args__ = (
+        ForeignKeyConstraint(["defect_id", "project_id"], ["defects.id", "defects.project_id"], ondelete="RESTRICT"),
+        CheckConstraint("(kind='requirement' AND requirement_doc_id IS NOT NULL AND case_asset_id IS NULL AND related_defect_id IS NULL) OR (kind='case' AND requirement_doc_id IS NULL AND case_asset_id IS NOT NULL AND related_defect_id IS NULL) OR (kind='defect' AND requirement_doc_id IS NULL AND case_asset_id IS NULL AND related_defect_id IS NOT NULL)", name="ck_defect_reference_target"),)
+
+
+class DefectEvent(Base):
+    __tablename__ = "defect_events"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    defect_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False, index=True)
+    sequence = Column(Integer, nullable=False)
+    event_type = Column(String(40), nullable=False)
+    actor_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
+    actor_kind = Column(String(16), nullable=False, default="user")
+    from_state = Column(String(64))
+    to_state = Column(String(64))
+    changes_json = Column(JSONB, nullable=False, default=dict)
+    note = Column(Text)
+    request_id = Column(UUID(as_uuid=True))
+    request_hash = Column(String(64))
+    result_json = Column(JSONB, nullable=False, default=dict)
+    is_legacy = Column(Boolean, nullable=False, default=False, server_default=text("false"))
+    occurred_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+    __table_args__ = (
+        ForeignKeyConstraint(["defect_id", "project_id"], ["defects.id", "defects.project_id"], ondelete="RESTRICT"),
+        UniqueConstraint("defect_id", "sequence", name="uq_defect_event_sequence"),
+        UniqueConstraint("defect_id", "request_id", name="uq_defect_event_request"),
+        Index("idx_defect_events_project_time", "project_id", "occurred_at", "event_type"),)
+
+
+class DefectOccurrence(Base):
+    __tablename__ = "defect_occurrences"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    defect_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False, index=True)
+    test_run_id = Column(UUID(as_uuid=True), ForeignKey("test_runs.id"), nullable=False)
+    test_case_id = Column(UUID(as_uuid=True), ForeignKey("test_cases.id"))
+    test_result_id = Column(UUID(as_uuid=True), ForeignKey("test_results.id"))
+    case_asset_id = Column(UUID(as_uuid=True), ForeignKey("test_case_assets.id"))
+    signature = Column(String(64), nullable=False)
+    signature_version = Column(Integer, nullable=False, default=1)
+    observed_at = Column(DateTime(timezone=True), server_default=text("now()"))
+    evidence_json = Column(JSONB, nullable=False, default=dict)
+    __table_args__ = (
+        ForeignKeyConstraint(["defect_id", "project_id"], ["defects.id", "defects.project_id"], ondelete="RESTRICT"),
+        UniqueConstraint("test_run_id", "signature_version", "signature", name="uq_defect_occurrence_signature"),)
+
+
+class DefectComment(Base):
+    __tablename__ = "defect_comments"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    defect_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False, index=True)
+    author_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    body = Column(Text, nullable=False)
+    mention_user_ids = Column(JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb"))
+    row_version = Column(Integer, nullable=False, default=1, server_default="1")
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+    edited_at = Column(DateTime(timezone=True))
+    deleted_at = Column(DateTime(timezone=True))
+    __table_args__ = (ForeignKeyConstraint(["defect_id", "project_id"], ["defects.id", "defects.project_id"], ondelete="RESTRICT"),)
+
+
+class DefectWatcher(Base):
+    __tablename__ = "defect_watchers"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    defect_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    kind = Column(String(16), nullable=False, default="watch")
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"))
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+    __table_args__ = (
+        ForeignKeyConstraint(["defect_id", "project_id"], ["defects.id", "defects.project_id"], ondelete="RESTRICT"),
+        UniqueConstraint("defect_id", "user_id", "kind", name="uq_defect_watcher_kind"),
+        CheckConstraint("kind IN ('watch','cc')", name="ck_defect_watcher_kind"),
+    )
+
+
+class DefectAttachment(Base):
+    __tablename__ = "defect_attachments"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False, index=True)
+    defect_id = Column(UUID(as_uuid=True), nullable=True, index=True)
+    comment_id = Column(UUID(as_uuid=True), ForeignKey("defect_comments.id"), nullable=True)
+    uploader_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    filename = Column(String(500), nullable=False)
+    content_type = Column(String(200), nullable=False)
+    size = Column(Integer, nullable=False)
+    sha256 = Column(String(64), nullable=False)
+    object_key = Column(String(700), nullable=False, unique=True)
+    status = Column(String(16), nullable=False, default="staged", server_default="staged")
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+    expires_at = Column(DateTime(timezone=True))
+    deleted_at = Column(DateTime(timezone=True))
+    __table_args__ = (
+        ForeignKeyConstraint(["defect_id", "project_id"], ["defects.id", "defects.project_id"], ondelete="RESTRICT"),
+        CheckConstraint("status IN ('staged','ready','failed','deleted')", name="ck_defect_attachment_status"),
+    )
+
+
+class NotificationOutbox(Base):
+    __tablename__ = "notification_outbox"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False, index=True)
+    event_id = Column(UUID(as_uuid=True), nullable=False, unique=True)
+    payload = Column(JSONB, nullable=False, default=dict)
+    status = Column(String(16), nullable=False, default="pending", server_default="pending")
+    attempts = Column(Integer, nullable=False, default=0, server_default="0")
+    next_attempt_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+    locked_until = Column(DateTime(timezone=True))
+    last_error = Column(Text)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+    __table_args__ = (CheckConstraint("status IN ('pending','processing','completed','failed')", name="ck_notification_outbox_status"),)
+
+
+class NotificationDelivery(Base):
+    __tablename__ = "notification_deliveries"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    outbox_id = Column(UUID(as_uuid=True), ForeignKey("notification_outbox.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    channel = Column(String(20), nullable=False)
+    status = Column(String(16), nullable=False, default="pending", server_default="pending")
+    attempts = Column(Integer, nullable=False, default=0, server_default="0")
+    delivered_at = Column(DateTime(timezone=True))
+    last_error = Column(Text)
+    __table_args__ = (UniqueConstraint("outbox_id", "user_id", "channel", name="uq_notification_delivery_target"),)
+
+
+class DefectView(Base):
+    __tablename__ = "defect_views"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False, index=True)
+    owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    name = Column(String(100), nullable=False)
+    visibility = Column(String(16), nullable=False, default="private")
+    query_json = Column(JSONB, nullable=False, default=dict)
+    columns_json = Column(JSONB, nullable=False, default=list)
+    sort_json = Column(JSONB, nullable=False, default=list)
+    row_version = Column(Integer, nullable=False, default=1, server_default="1")
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+    __table_args__ = (
+        UniqueConstraint("project_id", "owner_id", "name", name="uq_defect_view_owner_name"),
+        CheckConstraint("visibility IN ('private','project')", name="ck_defect_view_visibility"),
+    )
+
+
+class DefectJob(Base):
+    __tablename__ = "defect_jobs"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False, index=True)
+    creator_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    kind = Column(String(24), nullable=False)
+    status = Column(String(16), nullable=False, default="pending", server_default="pending")
+    request_key = Column(UUID(as_uuid=True), nullable=False)
+    input_hash = Column(String(64), nullable=False)
+    input_key = Column(String(700))
+    result_key = Column(String(700))
+    summary_json = Column(JSONB, nullable=False, default=dict)
+    expires_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+    completed_at = Column(DateTime(timezone=True))
+    __table_args__ = (
+        UniqueConstraint("project_id", "creator_id", "kind", "request_key", name="uq_defect_job_request"),
+        CheckConstraint("kind IN ('import_preview','import_commit','export','workflow_migration')", name="ck_defect_job_kind"),
+        CheckConstraint("status IN ('pending','running','completed','failed','expired')", name="ck_defect_job_status"),
+    )
+
+
+class DefectDailyMetric(Base):
+    __tablename__ = "defect_daily_metrics"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False, index=True)
+    date = Column(DateTime(timezone=True), nullable=False)
+    timezone = Column(String(64), nullable=False, default="Asia/Shanghai")
+    definition_version = Column(Integer, nullable=False, default=1)
+    dimension_key = Column(String(200), nullable=False, default="all")
+    dimensions_json = Column(JSONB, nullable=False, default=dict)
+    metrics_json = Column(JSONB, nullable=False, default=dict)
+    calculated_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+    history_coverage_from = Column(DateTime(timezone=True))
+    __table_args__ = (UniqueConstraint("project_id", "date", "dimension_key", "definition_version", name="uq_defect_daily_metric"),)
 
 
 # ==================== 报告 ====================
@@ -598,6 +942,10 @@ class Notification(Base):
     type = Column(String(50), nullable=False, default="system")
     is_read = Column(Boolean, default=False, nullable=False)
     related_url = Column(String(500), nullable=True)
+    source_event_id = Column(UUID(as_uuid=True), nullable=True)
+    resource_type = Column(String(50), nullable=True)
+    resource_id = Column(UUID(as_uuid=True), nullable=True)
+    dedupe_key = Column(String(200), nullable=True, unique=True)
 
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
 

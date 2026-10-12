@@ -1,6 +1,6 @@
 <template>
   <el-container class="layout-container">
-    <el-aside class="sidebar" :class="{ 'mobile-sidebar': isMobile, 'mobile-open': mobileMenuOpen }">
+    <el-aside id="platform-navigation" class="sidebar" :class="{ 'mobile-sidebar': isMobile, 'mobile-open': mobileMenuOpen }" :aria-hidden="isMobile && !mobileMenuOpen ? true : undefined" :inert="isMobile && !mobileMenuOpen">
       <router-link class="logo" to="/dashboard" aria-label="返回工作台">
         <span class="logo-mark"><el-icon><Promotion /></el-icon></span>
         <span class="logo-text">AI 测试平台</span>
@@ -25,7 +25,7 @@
     <el-container class="content-shell">
       <el-header class="header">
         <div class="header-left">
-          <button v-if="isMobile" type="button" class="icon-button" aria-label="打开导航菜单" @click="toggleNavigation">
+          <button v-if="isMobile" type="button" class="icon-button" aria-label="打开导航菜单" aria-controls="platform-navigation" :aria-expanded="mobileMenuOpen" @click="toggleNavigation">
             <el-icon><Expand /></el-icon>
           </button>
           <el-breadcrumb separator="/" class="breadcrumb">
@@ -232,9 +232,9 @@ onBeforeUnmount(() => {
   .global-search kbd, .account-role { display: none; }
 }
 @media (max-width: 860px) {
-  .mobile-sidebar { position: fixed; inset: 0 auto 0 0; z-index: 2100; width: 224px; transform: translateX(-100%); box-shadow: var(--app-shadow-lg); }
+  .mobile-sidebar { position: fixed; inset: 0 auto 0 0; z-index: 900; width: 224px; transform: translateX(-100%); box-shadow: var(--app-shadow-lg); }
   .mobile-sidebar.mobile-open { transform: translateX(0); }
-  .mobile-mask { position: fixed; inset: 0; z-index: 2099; display: block; background: rgba(15, 23, 42, .42); }
+  .mobile-mask { position: fixed; inset: 0; z-index: 899; display: block; background: rgba(15, 23, 42, .42); }
   .header { padding: 0 12px; }
   .breadcrumb { display: none; }
   .global-search { width: 36px; min-width: 36px; padding: 0; justify-content: center; }

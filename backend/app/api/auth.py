@@ -19,6 +19,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.database import PersonalAccessToken, TestRun, User, UserRole
@@ -112,8 +113,7 @@ async def apply_delete_user(session: AsyncSession, uid: uuid.UUID) -> dict[str, 
     """
     落地删除用户操作。
 
-    若该用户没有关联的 TestRun 记录则硬删除；否则仅置 is_active=False（软删），
-    避免触发 test_runs.user_id 外键约束冲突。
+    有运行或其他业务历史引用时仅停用账号，保留缺陷责任人与审计历史。
 
     Args:
         session: 数据库会话。
@@ -143,8 +143,18 @@ async def apply_delete_user(session: AsyncSession, uid: uuid.UUID) -> dict[str, 
         logger.info(f"User soft-deleted (has test runs): {username}")
         return {"id": str(uid), "username": username, "deleted": True, "soft": True}
 
-    await session.delete(user)
-    await session.flush()
+    try:
+        async with session.begin_nested():
+            await session.delete(user)
+            await session.flush()
+    except IntegrityError as failure:
+        if getattr(failure.orig, "sqlstate", None) != "23503" and getattr(failure.orig, "sqlite_errorcode", None) != 787:
+            raise
+        user = (await session.execute(select(User).where(User.id == uid))).scalar_one()
+        user.is_active = False
+        await session.flush()
+        logger.info(f"User deactivated (business history retained): {username}")
+        return {"id": str(uid), "username": username, "deleted": True, "soft": True}
     logger.info(f"User hard-deleted: {username}")
     return {"id": str(uid), "username": username, "deleted": True, "soft": False}
 

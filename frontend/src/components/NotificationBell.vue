@@ -43,6 +43,7 @@ interface Notification {
   content?: string
   read: boolean
   created_at: string
+  related_url?: string
 }
 
 const router = useRouter()
@@ -58,6 +59,7 @@ function normalize(raw: any): Notification {
     content: raw?.content || '',
     read: raw?.is_read ?? raw?.read ?? false,
     created_at: raw?.created_at || new Date().toISOString(),
+    related_url: raw?.related_url || '',
   }
 }
 
@@ -125,6 +127,7 @@ async function handleCommand(cmd: string | number) {
       /* 错误提示已由 axios 响应拦截器统一处理 */
     }
   }
+  if (target?.related_url) router.push(target.related_url)
 }
 
 onMounted(() => {

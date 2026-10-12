@@ -135,7 +135,7 @@ async def get_statistics(
 
     # 缺陷总数（统计周期内发现的所有缺陷，涵盖自动化测试与手动登记）
     defect_result = await db.execute(
-        select(func.count(Defect.id)).where(Defect.created_at >= since)
+        select(func.count(Defect.id)).where(Defect.created_at >= since, Defect.deleted_at.is_(None))
     )
     total_defects = defect_result.scalar() or 0
 
@@ -313,8 +313,8 @@ async def get_defect_trend(
                 func.nullif(Defect.severity != DefectSeverity.P3, True)  # type: ignore
             ).label("p3"),
         )
-        .join(TestRun)
-        .where(TestRun.created_at >= since)
+        .select_from(Defect)
+        .where(Defect.created_at >= since, Defect.deleted_at.is_(None))
         .group_by("date")
         .order_by("date")
     )

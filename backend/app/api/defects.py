@@ -1,304 +1,341 @@
-"""
-缺陷管理 API — 独立缺陷中心（不只藏在报告里）
-
-- GET /api/defects — 列表（项目/严重级/类型/状态/关键字过滤 + 分页 + 统计）
-- POST /api/defects — 手动创建（测试执行外发现的问题，如探索性测试）
-- PATCH /api/defects/{id}/status — 状态流转（open → in_fix → verified → closed / rejected）
-- GET /api/defects/{id} — 详情
-- DELETE /api/defects/{id} — 删除（manager 及以上）
-"""
-import uuid
+"""缺陷中心：薄路由，写操作统一由缺陷领域服务校验。"""
 from datetime import datetime
-from typing import Any
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 
 from app.models.database import (
-    Defect,
-    DefectSeverity,
-    DefectType,
-    Project,
-    TestRun,
-    User,
-    UserRole,
+    AuditLog, Defect, DefectEvent, DefectOccurrence, DefectReference, EnvironmentProfile,
+    ProjectMember, RequirementDoc, TestCaseAsset, TestRun, User, UserRole, ProjectDefectSettings, DefectWorkflow, DefectWorkflowRevision,
 )
-from app.modules.auth.dependencies import get_current_user, require_role
+from app.modules.auth.dependencies import get_current_user
+from app.modules.defects.permissions import context_for, validate_participant, can_edit
+from app.modules.defects.query import filter_conditions, enrich_list, detail_dict, display_event_changes
+from app.modules.defects.service import (
+    DIRECTORY_MODELS, add_reference, append_event, assign_defect, bump,
+    create_defect as create_service, delete_or_restore, edit_defect, json_value,
+    locked_defect, requirement_keys, same_project, snapshot, transition_defect,
+)
+from app.modules.defects.workflow import DEFAULT_WORKFLOW, PRIORITY_LABELS, STATES
+from app.schemas.defects import AssignmentRequest, DefectCreate, DefectUpdate, DirectoryInput, LegacyStatusRequest, ReferenceInput, TransitionRequest
 from app.utils.database import get_db_session
-from app.utils.logger import get_logger
-
-logger = get_logger(__name__)
 
 router = APIRouter()
-
-# 状态机：open → in_fix → verified → closed；任意状态可 rejected
-DEFECT_STATUSES = ("open", "in_fix", "verified", "closed", "rejected")
-_ALLOWED_TRANSITIONS = {
-    "open": {"in_fix", "rejected", "closed"},
-    "in_fix": {"verified", "open", "rejected"},
-    "verified": {"closed", "open"},
-    "closed": set(),
-    "rejected": {"open"},
-}
-_STATUS_LABELS = {
-    "open": "待处理", "in_fix": "修复中", "verified": "已验证", "closed": "已关闭", "rejected": "已驳回",
-}
-_TYPE_LABELS = {
-    "business": "业务缺陷", "program": "程序缺陷", "performance": "性能缺陷",
-    "integration": "集成缺陷", "security": "安全缺陷",
-}
+catalog_router = APIRouter()
 
 
-class DefectCreate(BaseModel):
-    """手动创建缺陷。"""
-
-    project_id: str
-    title: str = Field(..., min_length=2, max_length=500)
-    description: str
-    severity: str = "P2"          # P0-P3
-    defect_type: str = "business" # business/program/performance/integration/security
-    reproduce_steps: list[str] = Field(default_factory=list)
-    source: str = "manual"        # manual / pipeline（pipeline 为 AI 分析产生）
+def success(data, message="success"):
+    return {"code": 0, "data": data, "message": message}
 
 
-class DefectStatusUpdate(BaseModel):
-    status: str
-    note: str | None = None
+async def read_defect(db, defect_id, user):
+    defect = (await db.execute(select(Defect).where(Defect.id == defect_id))).scalar_one_or_none()
+    if defect is None:
+        raise HTTPException(404, "缺陷不存在或无权访问")
+    if defect.project_id:
+        await context_for(db, user, defect.project_id)
+    elif user.role not in {UserRole.ADMIN, UserRole.SUPER_ADMIN}:
+        raise HTTPException(404, "缺陷不存在或无权访问")
+    return defect
 
 
-def _severity_label(v: str) -> str:
-    return {"P0": "致命", "P1": "严重", "P2": "一般", "P3": "轻微"}.get(v, v)
+@router.get("/metadata")
+async def metadata(project_id: UUID, db=Depends(get_db_session), user=Depends(get_current_user)):
+    context = await context_for(db, user, project_id)
+    states = DEFAULT_WORKFLOW["states"]
+    settings_row = await db.get(ProjectDefectSettings, project_id)
+    if settings_row and settings_row.default_workflow_id:
+        workflow = await db.get(DefectWorkflow, settings_row.default_workflow_id)
+        revision = await db.get(DefectWorkflowRevision, workflow.active_revision_id) if workflow and workflow.active_revision_id else None
+        if revision and revision.status == "published": states = revision.definition_json.get("states", states)
+    data = {"states": states, "priorities": PRIORITY_LABELS,
+            "can_create": context.writable and bool(context.roles), "can_configure": "project_manager" in context.roles,
+            "roles": sorted(context.roles)}
+    for key, model in DIRECTORY_MODELS.items():
+        query = select(model).where(model.project_id == project_id)
+        if key == "modules":
+            query = query.where(model.is_active.is_(True)).order_by(model.path)
+        else:
+            query = query.where(model.status != "archived").order_by(model.name)
+        items = (await db.execute(query.limit(1000))).scalars().all()
+        data[key] = [{column.name: json_value(getattr(item, column.name)) for column in model.__table__.columns} for item in items]
+    envs = (await db.execute(select(EnvironmentProfile).where(EnvironmentProfile.project_id == project_id,
+                            EnvironmentProfile.status != "archived").order_by(EnvironmentProfile.name))).scalars().all()
+    data["environments"] = [{"id": str(item.id), "name": item.name, "status": item.status} for item in envs]
+    docs = (await db.execute(select(RequirementDoc).where(RequirementDoc.project_id == project_id).order_by(RequirementDoc.created_at.desc()).limit(200))).scalars().all()
+    data["requirements"] = [{"id": str(item.id), "filename": item.filename,
+                              "items": [{"key": key, "title": title} for key, title in requirement_keys(item.requirements_json or {}).items()]} for item in docs]
+    cases = (await db.execute(select(TestCaseAsset.id, TestCaseAsset.title).where(TestCaseAsset.project_id == project_id)
+                              .order_by(TestCaseAsset.updated_at.desc()).limit(200))).all()
+    data["cases"] = [{"id": str(item.id), "title": item.title} for item in cases]
+    return success(data)
 
 
-def _defect_to_dict(d: Defect, project_name: str | None = None) -> dict[str, Any]:
-    return {
-        "id": str(d.id),
-        "test_run_id": str(d.test_run_id) if d.test_run_id else None,
-        "project_id": str(d.project_id) if hasattr(d, "project_id") and d.project_id else None,
-        "project_name": project_name,
-        "title": d.title,
-        "description": d.description,
-        "defect_type": d.defect_type.value if d.defect_type else "business",
-        "defect_type_label": _TYPE_LABELS.get(d.defect_type.value if d.defect_type else "", ""),
-        "severity": d.severity.value if d.severity else "P2",
-        "severity_label": _severity_label(d.severity.value if d.severity else "P2"),
-        "reproduce_steps": d.reproduce_steps or [],
-        "root_cause": d.root_cause,
-        "fix_suggestion": d.fix_suggestion,
-        "status": _STATUS_LABELS.get(getattr(d, "status", None) or "open", "待处理"),
-        "status_code": getattr(d, "status", None) or "open",
-        "is_resolved": bool(d.is_resolved),
-        "created_at": d.created_at.isoformat() if d.created_at else None,
-    }
+@router.get("/participants")
+async def participants(project_id: UUID, purpose: str = "all", q: str = "", db=Depends(get_db_session), user=Depends(get_current_user)):
+    context = await context_for(db, user, project_id)
+    if purpose not in {"all", "assignee", "verifier"}:
+        raise HTTPException(422, "未知的选人用途")
+    members = select(ProjectMember.user_id).where(ProjectMember.project_id == project_id)
+    candidates = (await db.execute(select(User).where(User.is_active.is_(True),
+                  or_(User.id.in_(members), User.id == context.project.owner_id),
+                  User.role.notin_([UserRole.VIEWER, UserRole.AUDITOR]),
+                  User.username.ilike("%" + q + "%")).order_by(User.username).limit(200))).scalars().all()
+    items = []
+    for candidate in candidates:
+        if purpose != "all":
+            try:
+                await validate_participant(db, context.project, candidate.id, purpose)
+            except HTTPException:
+                continue
+        items.append({"id": str(candidate.id), "username": candidate.username, "role": candidate.role.value})
+    return success({"items": items})
+
+
+@router.get("/duplicates")
+async def duplicates(project_id: UUID, title: str = Query(..., min_length=2, max_length=500), exclude_defect_id: UUID | None = None,
+                     db=Depends(get_db_session), user=Depends(get_current_user)):
+    await context_for(db, user, project_id)
+    query = select(Defect).where(Defect.project_id == project_id, Defect.deleted_at.is_(None),
+                                 func.lower(Defect.title) == title.strip().lower())
+    if exclude_defect_id:
+        query = query.where(Defect.id != exclude_defect_id)
+    rows = (await db.execute(query.order_by(Defect.created_at.desc()).limit(10))).scalars().all()
+    return success({"items": await enrich_list(db, rows)})
 
 
 @router.get("")
-async def list_defects(
-    project_id: str | None = Query(None, description="按项目过滤"),
-    test_run_id: str | None = Query(None, description="按测试任务过滤（报告页互链）"),
-    severity: str | None = Query(None, description="P0/P1/P2/P3"),
-    defect_type: str | None = Query(None),
-    status_code: str | None = Query(None, description="open/in_fix/verified/closed/rejected"),
-    q: str | None = Query(None, description="标题/描述关键字"),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session),
-):
-    """缺陷列表：多条件过滤 + 分页 + 分组统计。"""
-    # 基础查询（通过 COALESCE(Defect.project_id, TestRun.project_id) 关联 Project）
-    effective_project_id = func.coalesce(Defect.project_id, TestRun.project_id)
-    stmt = (
-        select(Defect, effective_project_id.label("project_id"), Project.name)
-        .outerjoin(TestRun, TestRun.id == Defect.test_run_id)
-        .outerjoin(Project, Project.id == effective_project_id)
-    )
-    count_stmt = (
-        select(func.count())
-        .select_from(Defect)
-        .outerjoin(TestRun, TestRun.id == Defect.test_run_id)
-    )
-
-    conds = []
-    if project_id:
-        p_uuid = uuid.UUID(project_id)
-        conds.append(or_(Defect.project_id == p_uuid, TestRun.project_id == p_uuid))
-    if severity:
-        try:
-            conds.append(Defect.severity == DefectSeverity(severity))
-        except ValueError:
-            raise HTTPException(400, f"Invalid severity: {severity}")
-    if defect_type:
-        try:
-            conds.append(Defect.defect_type == DefectType(defect_type))
-        except ValueError:
-            raise HTTPException(400, f"Invalid defect_type: {defect_type}")
-    if status_code:
-        conds.append(Defect.status == status_code)  # status 为 String 列
-    if test_run_id:
-        try:
-            conds.append(Defect.test_run_id == uuid.UUID(test_run_id))
-        except ValueError:
-            raise HTTPException(400, f"Invalid test_run_id: {test_run_id}")
-    if q:
-        like = f"%{q}%"
-        conds.append(or_(Defect.title.ilike(like), Defect.description.ilike(like)))
-
-    for c in conds:
-        stmt = stmt.where(c)
-        count_stmt = count_stmt.where(c)
-
-    total = (await db.execute(count_stmt)).scalar() or 0
-    rows = (
-        await db.execute(stmt.order_by(Defect.created_at.desc()).offset((page - 1) * page_size).limit(page_size))
-    ).fetchall()
-
-    # 统计（不受分页影响，受过滤影响）
-    by_severity: dict[str, int] = {s: 0 for s in ("P0", "P1", "P2", "P3")}
-    by_status: dict[str, int] = {s: 0 for s in DEFECT_STATUSES}
-    if conds:
-        stat_stmt = (
-            select(Defect.severity, Defect.status, func.count())
-            .select_from(Defect)
-            .outerjoin(TestRun, TestRun.id == Defect.test_run_id)
-            .where(*conds)
-            .group_by(Defect.severity, Defect.status)
-        )
-    else:
-        stat_stmt = select(Defect.severity, Defect.status, func.count()).group_by(Defect.severity, Defect.status)
-    for sev, st, cnt in (await db.execute(stat_stmt)).fetchall():
-        if sev is not None:
-            by_severity[sev.value] = cnt
-        if st:
-            by_status[st] = cnt
-
-    return {
-        "code": 0,
-        "data": {
-            "list": [_defect_to_dict(d, pname) for d, _pid, pname in rows],
-            "total": total,
-            "page": page,
-            "page_size": page_size,
-            "stats": {"by_severity": by_severity, "by_status": by_status},
-        },
-        "message": "success",
-    }
+async def list_defects(project_id: UUID | None = None, test_run_id: UUID | None = None,
+                       severity: str | None = None, defect_type: str | None = None, status_code: str | None = None,
+                       workflow_states: list[str] | None = Query(None), priority: str | None = None,
+                       assignee_id: UUID | None = None, reporter_id: UUID | None = None,
+                       verifier_id: UUID | None = None,
+                       module_id: UUID | None = None, iteration_id: UUID | None = None, environment_profile_id: UUID | None = None,
+                       label: str | None = None, source: str | None = None, q: str | None = Query(None, max_length=500),
+                       created_from: datetime | None = None, created_to: datetime | None = None,
+                       updated_from: datetime | None = None, updated_to: datetime | None = None,
+                       overdue: bool = False, watching: bool = False,
+                       view: str | None = None, include_deleted: bool = False,
+                       page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100),
+                       db=Depends(get_db_session), current_user=Depends(get_current_user)):
+    if include_deleted:
+        if not project_id or not (await context_for(db, current_user, project_id)).privileged:
+            raise HTTPException(403, "回收站需要指定项目且具有管理权限")
+    conds = filter_conditions(project_id=project_id, test_run_id=test_run_id, severity=severity, defect_type=defect_type,
+          status_code=status_code, workflow_states=workflow_states, priority=priority, assignee_id=assignee_id,
+          reporter_id=reporter_id, verifier_id=verifier_id, module_id=module_id, iteration_id=iteration_id,
+          environment_profile_id=environment_profile_id, label=label, source=source, q=q, view=view,
+          created_from=created_from, created_to=created_to, updated_from=updated_from, updated_to=updated_to,
+          overdue=overdue, watching=watching,
+          user_id=current_user.id, include_deleted=include_deleted)
+    base = select(Defect).outerjoin(TestRun, TestRun.id == Defect.test_run_id).where(*conds)
+    total = (await db.execute(select(func.count()).select_from(base.subquery()))).scalar_one()
+    rows = (await db.execute(base.order_by(Defect.updated_at.desc(), Defect.id.desc())
+                            .offset((page - 1) * page_size).limit(page_size))).scalars().all()
+    grouped = (await db.execute(select(Defect.severity, Defect.status, Defect.workflow_state, Defect.workflow_revision_id, func.count())
+              .outerjoin(TestRun, TestRun.id == Defect.test_run_id).where(*conds)
+              .group_by(Defect.severity, Defect.status, Defect.workflow_state, Defect.workflow_revision_id))).all()
+    revision_ids = {row[3] for row in grouped if row[3]}
+    definitions = {item.id: {state["key"]: state for state in item.definition_json.get("states", [])}
+                   for item in (await db.execute(select(DefectWorkflowRevision).where(
+                       DefectWorkflowRevision.id.in_(revision_ids)))).scalars().all()} if revision_ids else {}
+    stats = {"by_severity": {key: 0 for key in ("P0", "P1", "P2", "P3")},
+             "by_status": {key: 0 for key in ("open", "in_fix", "verified", "closed", "rejected")},
+             "by_state": {key: 0 for key in STATES}, "backlog": 0, "pending_verification": 0}
+    for sev, legacy, state, revision_id, count in grouped:
+        stats["by_severity"][sev.value] += count
+        stats["by_status"][legacy or "open"] += count
+        stats["by_state"][state] = stats["by_state"].get(state, 0) + count
+        state_definition = definitions.get(revision_id, STATES).get(state, {})
+        if state_definition.get("is_backlog"):
+            stats["backlog"] += count
+        if state_definition.get("category") == "verification":
+            stats["pending_verification"] += count
+    return success({"list": await enrich_list(db, rows), "total": total, "page": page, "page_size": page_size, "stats": stats})
 
 
 @router.post("")
-async def create_defect(
-    req: DefectCreate,
-    current_user: User = Depends(require_role(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.TEST_MANAGER, UserRole.TESTER)),
-    db: AsyncSession = Depends(get_db_session),
-):
-    """手动创建缺陷（测试执行之外发现的问题）。"""
-    project = (
-        await db.execute(select(Project).where(Project.id == uuid.UUID(req.project_id)))
-    ).scalar_one_or_none()
-    if project is None:
-        raise HTTPException(404, f"Project not found: {req.project_id}")
-
-    try:
-        sev, dtype = DefectSeverity(req.severity), DefectType(req.defect_type)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-
-    defect = Defect(
-        id=uuid.uuid4(),
-        project_id=project.id,
-        test_run_id=None,  # 手动创建不挂 run
-        title=req.title.strip(),
-        description=req.description.strip(),
-        defect_type=dtype,
-        severity=sev,
-        reproduce_steps=req.reproduce_steps,
-        status="open",
-        is_resolved=False,
-    )
-    db.add(defect)
+async def create_defect(req: DefectCreate, db=Depends(get_db_session), user=Depends(get_current_user)):
+    defect = await create_service(db, user, req)
     await db.commit()
-    await db.refresh(defect)
-    return {"code": 0, "data": _defect_to_dict(defect, project.name), "message": "created"}
+    return success(await detail_dict(db, defect, user), "缺陷已登记")
 
 
 @router.get("/{defect_id}")
-async def get_defect(
-    defect_id: str,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session),
-):
-    try:
-        did = uuid.UUID(defect_id)
-    except ValueError:
-        raise HTTPException(400, f"Invalid defect id: {defect_id}")
-    row = (
-        await db.execute(
-            select(Defect, Project.name)
-            .outerjoin(TestRun, TestRun.id == Defect.test_run_id)
-            .outerjoin(Project, Project.id == func.coalesce(Defect.project_id, TestRun.project_id))
-            .where(Defect.id == did)
-        )
-    ).first()
-    if row is None:
-        raise HTTPException(404, "Defect not found")
-    return {"code": 0, "data": _defect_to_dict(row[0], row[1]), "message": "success"}
+async def get_defect(defect_id: UUID, db=Depends(get_db_session), user=Depends(get_current_user)):
+    return success(await detail_dict(db, await read_defect(db, defect_id, user), user))
+
+
+@router.patch("/{defect_id}")
+@router.put("/{defect_id}")
+async def update_defect(defect_id: UUID, req: DefectUpdate, db=Depends(get_db_session), user=Depends(get_current_user)):
+    defect = await edit_defect(db, user, defect_id, req)
+    await db.commit()
+    return success(await detail_dict(db, defect, user), "缺陷已保存")
+
+
+@router.post("/{defect_id}/assign")
+async def assign(defect_id: UUID, req: AssignmentRequest, db=Depends(get_db_session), user=Depends(get_current_user)):
+    defect, result = await assign_defect(db, user, defect_id, req)
+    await db.commit()
+    return success({**result, "detail": await detail_dict(db, defect, user)}, "责任人已更新")
+
+
+@router.get("/{defect_id}/transitions")
+async def transitions(defect_id: UUID, db=Depends(get_db_session), user=Depends(get_current_user)):
+    return success({"items": (await detail_dict(db, await read_defect(db, defect_id, user), user))["transitions"]})
+
+
+@router.post("/{defect_id}/transitions")
+async def transition(defect_id: UUID, req: TransitionRequest, db=Depends(get_db_session), user=Depends(get_current_user)):
+    defect, result = await transition_defect(db, user, defect_id, req)
+    await db.commit()
+    return success({**result, "detail": await detail_dict(db, defect, user)}, "缺陷流转成功")
 
 
 @router.patch("/{defect_id}/status")
-async def update_defect_status(
-    defect_id: str,
-    req: DefectStatusUpdate,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db_session),
-):
-    """缺陷状态流转（校验合法迁移）：open→in_fix→verified→closed；可驳回/重开。"""
-    if req.status not in DEFECT_STATUSES:
-        raise HTTPException(400, f"Invalid status, allowed: {DEFECT_STATUSES}")
-    try:
-        did = uuid.UUID(defect_id)
-    except ValueError:
-        raise HTTPException(400, f"Invalid defect id: {defect_id}")
+async def legacy_status(defect_id: UUID, req: LegacyStatusRequest, db=Depends(get_db_session), user=Depends(get_current_user)):
+    defect = await read_defect(db, defect_id, user)
+    actions = {"in_fix": "resume" if defect.workflow_state == "reopened" else "start",
+               "verified": "verify_pass", "closed": "close", "rejected": "reject"}
+    if req.status == "open":
+        action = "reopen" if defect.workflow_state in {"resolved", "closed", "rejected"} else "return_to_queue"
+    else:
+        action = actions[req.status]
+    return await transition(defect_id, TransitionRequest(action_id=action, expected_version=req.expected_version,
+                         request_id=req.request_id, note=req.note, fields=req.fields), db, user)
 
-    defect = (
-        await db.execute(select(Defect).where(Defect.id == did))
-    ).scalar_one_or_none()
-    if defect is None:
-        raise HTTPException(404, "Defect not found")
 
-    cur = defect.status or "open"
-    if req.status not in _ALLOWED_TRANSITIONS.get(cur, set()):
-        raise HTTPException(
-            400,
-            f"非法状态迁移: {cur} → {req.status}（允许: {_ALLOWED_TRANSITIONS.get(cur) or '无，终态'}）",
-        )
+@router.get("/{defect_id}/events")
+async def events(defect_id: UUID, after_sequence: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100),
+                 db=Depends(get_db_session), user=Depends(get_current_user)):
+    await read_defect(db, defect_id, user)
+    rows = (await db.execute(select(DefectEvent, User.username).outerjoin(User, User.id == DefectEvent.actor_id)
+                             .where(DefectEvent.defect_id == defect_id, DefectEvent.sequence > after_sequence)
+                             .order_by(DefectEvent.sequence).limit(limit + 1))).all()
+    items = [{"id": str(item.id), "sequence": item.sequence, "event_type": item.event_type,
+               "actor_id": str(item.actor_id) if item.actor_id else None, "actor_name": name or "系统",
+               "from_state": item.from_state, "to_state": item.to_state, "changes": item.changes_json,
+               "note": item.note, "is_legacy": item.is_legacy, "occurred_at": json_value(item.occurred_at)} for item, name in rows[:limit]]
+    await display_event_changes(db, items)
+    return success({"items": items, "has_more": len(rows) > limit, "next_sequence": items[-1]["sequence"] if items else after_sequence})
 
-    defect.status = req.status
-    if req.note:
-        notes = list(defect.reproduce_steps or [])
-        notes.append(f"[{datetime.utcnow().strftime('%m-%d %H:%M')} {current_user.username}] {req.note}")
-        defect.reproduce_steps = notes[:50]  # 复用 steps 存流转备注，避免改表
-    defect.is_resolved = req.status in ("verified", "closed")
+
+@router.get("/{defect_id}/occurrences")
+async def occurrences(defect_id: UUID, db=Depends(get_db_session), user=Depends(get_current_user)):
+    await read_defect(db, defect_id, user)
+    items = (await db.execute(select(DefectOccurrence).where(DefectOccurrence.defect_id == defect_id)
+                              .order_by(DefectOccurrence.observed_at.desc()).limit(100))).scalars().all()
+    return success({"items": [{column.name: json_value(getattr(item, column.name)) for column in DefectOccurrence.__table__.columns} for item in items]})
+
+
+@router.post("/{defect_id}/references")
+async def reference_add(defect_id: UUID, req: ReferenceInput, expected_version: int = Query(..., ge=1),
+                        db=Depends(get_db_session), user=Depends(get_current_user)):
+    defect, context, _ = await locked_defect(db, user, defect_id, expected_version)
+    if not can_edit(context, defect):
+        raise HTTPException(403, "没有修改此缺陷关联的权限")
+    before = snapshot(defect)
+    await add_reference(db, defect, req)
+    bump(defect)
+    append_event(db, defect, user, "reference_added", before, extra=req.model_dump(mode="json"))
     await db.commit()
-    return {"code": 0, "data": {"id": defect_id, "status": req.status}, "message": "success"}
+    return success(await detail_dict(db, defect, user))
+
+
+@router.delete("/{defect_id}/references/{reference_id}")
+async def reference_remove(defect_id: UUID, reference_id: UUID, expected_version: int = Query(..., ge=1),
+                           db=Depends(get_db_session), user=Depends(get_current_user)):
+    defect, context, _ = await locked_defect(db, user, defect_id, expected_version)
+    if not can_edit(context, defect):
+        raise HTTPException(403, "没有修改此缺陷关联的权限")
+    item = (await db.execute(select(DefectReference).where(DefectReference.id == reference_id,
+                                                         DefectReference.defect_id == defect_id))).scalar_one_or_none()
+    if item is None:
+        raise HTTPException(404, "关联记录不存在")
+    before = snapshot(defect)
+    await db.delete(item)
+    bump(defect)
+    append_event(db, defect, user, "reference_removed", before, extra={"reference_id": str(reference_id), "title": item.title_snapshot})
+    await db.commit()
+    return success(await detail_dict(db, defect, user))
 
 
 @router.delete("/{defect_id}")
-async def delete_defect(
-    defect_id: str,
-    current_user: User = Depends(require_role(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.TEST_MANAGER)),
-    db: AsyncSession = Depends(get_db_session),
-):
-    try:
-        did = uuid.UUID(defect_id)
-    except ValueError:
-        raise HTTPException(400, f"Invalid defect id: {defect_id}")
-    defect = (
-        await db.execute(select(Defect).where(Defect.id == did))
-    ).scalar_one_or_none()
-    if defect is None:
-        raise HTTPException(404, "Defect not found")
-    await db.delete(defect)
+async def delete_defect(defect_id: UUID, expected_version: int = Query(..., ge=1), db=Depends(get_db_session), user=Depends(get_current_user)):
+    defect = await delete_or_restore(db, user, defect_id, expected_version)
     await db.commit()
-    return {"code": 0, "data": {"deleted": True}, "message": "success"}
+    return success({"id": str(defect.id), "deleted": True, "row_version": defect.row_version})
+
+
+@router.post("/{defect_id}/restore")
+async def restore_defect(defect_id: UUID, expected_version: int = Query(..., ge=1), db=Depends(get_db_session), user=Depends(get_current_user)):
+    defect = await delete_or_restore(db, user, defect_id, expected_version, restore=True)
+    await db.commit()
+    return success(await detail_dict(db, defect, user), "缺陷已恢复")
+
+
+async def directory_list(project_id, kind, db, user):
+    await context_for(db, user, project_id)
+    model = DIRECTORY_MODELS[kind]
+    items = (await db.execute(select(model).where(model.project_id == project_id).order_by(model.name).limit(1000))).scalars().all()
+    return success({"items": [{column.name: json_value(getattr(item, column.name)) for column in model.__table__.columns} for item in items]})
+
+
+async def directory_write(project_id, kind, req, db, user, identifier=None):
+    context = await context_for(db, user, project_id, write=True)
+    if "project_manager" not in context.roles:
+        raise HTTPException(403, "项目目录配置仅限项目负责人或管理员")
+    model = DIRECTORY_MODELS[kind]
+    item = await same_project(db, model, identifier, project_id) if identifier else model(id=uuid4(), project_id=project_id)
+    if kind == "modules":
+        parent_id = req.parent_id if "parent_id" in req.model_fields_set else item.parent_id
+        parent = await same_project(db, model, parent_id, project_id, active=True)
+        if identifier and (parent_id != item.parent_id or req.name != item.name):
+            children = (await db.execute(select(model.id).where(model.parent_id == item.id))).scalars().all()
+            if children:
+                raise HTTPException(422, "有子模块时不能改名或调整父目录，请先调整子模块")
+        if parent and (parent.id == item.id or (item.path and parent.path.startswith(item.path + "/"))):
+            raise HTTPException(422, "模块不能形成父子循环")
+        item.parent_id = parent_id
+        item.path = (parent.path + "/" if parent else "") + req.name
+        if len(item.path) > 500:
+            raise HTTPException(422, "模块目录过长")
+        if req.is_active is not None:
+            item.is_active = req.is_active
+    else:
+        allowed = {"planned", "active", "completed", "archived"} if kind == "iterations" else {"planned", "released", "archived"}
+        if req.status and req.status not in allowed:
+            raise HTTPException(422, "无效的目录状态")
+        item.status = req.status or getattr(item, "status", None) or "planned"
+        for key in (("start_date", "end_date") if kind == "iterations" else ("build_ref", "released_at")):
+            if key in req.model_fields_set:
+                setattr(item, key, getattr(req, key))
+    item.name = req.name
+    db.add(item)
+    db.add(AuditLog(user_id=user.id, action="defect_directory_updated", resource_type=kind,
+                    resource_id=str(item.id), details={"project_id": str(project_id), "name": req.name}))
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(409, "目录名称或路径已存在，请检查日期及引用关系")
+    return success({column.name: json_value(getattr(item, column.name)) for column in model.__table__.columns})
+
+
+def register_catalog(kind):
+    async def listing(project_id: UUID, db=Depends(get_db_session), user=Depends(get_current_user)):
+        return await directory_list(project_id, kind, db, user)
+    async def creating(project_id: UUID, req: DirectoryInput, db=Depends(get_db_session), user=Depends(get_current_user)):
+        return await directory_write(project_id, kind, req, db, user)
+    async def updating(project_id: UUID, directory_id: UUID, req: DirectoryInput, db=Depends(get_db_session), user=Depends(get_current_user)):
+        return await directory_write(project_id, kind, req, db, user, directory_id)
+    catalog_router.add_api_route("/{project_id}/" + kind, listing, methods=["GET"], name="defect_" + kind + "_list")
+    catalog_router.add_api_route("/{project_id}/" + kind, creating, methods=["POST"], name="defect_" + kind + "_create")
+    catalog_router.add_api_route("/{project_id}/" + kind + "/{directory_id}", updating, methods=["PATCH"], name="defect_" + kind + "_update")
+
+
+for _kind in DIRECTORY_MODELS:
+    register_catalog(_kind)

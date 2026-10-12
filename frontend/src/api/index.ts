@@ -1,6 +1,7 @@
 import axios from 'axios'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { safeGetAuthItem, safeRemoveAuthItem } from '@/utils/safeStorage'
+import type { CreateManualCasePayload } from '@/types/manualCase'
 
 const api = axios.create({
   baseURL: '/api',
@@ -69,7 +70,13 @@ api.interceptors.response.use(
       }
       return Promise.reject(error)
     }
-    const message = error.response?.data?.detail || error.message || '请求失败'
+    // 同名提醒由录入表单展示并要求用户确认，保留原始错误供表单处理。
+    if (error.response?.status === 409 && error.response?.data?.detail?.code === 'CASE_DUPLICATE') {
+      return Promise.reject(error)
+    }
+    const detail = error.response?.data?.detail
+    const message = typeof detail === 'string' ? detail : Array.isArray(detail)
+      ? detail.map((item: any) => item.msg).join('；') : detail?.message || error.message || '请求失败'
     ElMessage.error(message)
     return Promise.reject(error)
   }
@@ -379,6 +386,9 @@ export const trendApi = {
 
 // ============ 用例库（能力3：AI 生成单接口用例·接纳闭环） ============
 export const caseApi = {
+  /** 人工录入为手工执行草稿，包含有序步骤和关联需求。 */
+  createManual: (data: CreateManualCasePayload) => api.post('/cases', data),
+  manualOptions: (projectId: string) => api.get('/cases/manual/options', { params: { project_id: projectId } }),
   /** 生成并落库（DRAFT）。data: { project_id, endpoint_ids?, endpoint_id? } */
   generate: (data: any) =>
     api.post('/cases/generate', data, { timeout: 300000 }),
@@ -528,6 +538,59 @@ export const defectsApi = {
   get: (id: string) => api.get(`/defects/${id}`),
   create: (data: any) => api.post('/defects', data),
   update: (id: string, data: any) => api.put(`/defects/${id}`, data),
+  metadata: (projectId: string) => api.get('/defects/metadata', { params: { project_id: projectId } }),
+  participants: (projectId: string, purpose = 'all', q = '') => api.get('/defects/participants', { params: { project_id: projectId, purpose, q } }),
+  duplicates: (projectId: string, title: string, excludeId?: string) => api.get('/defects/duplicates', { params: { project_id: projectId, title, exclude_defect_id: excludeId } }),
+  assign: (id: string, data: any) => api.post(`/defects/${id}/assign`, data),
+  transitions: (id: string) => api.get(`/defects/${id}/transitions`),
+  transition: (id: string, data: any) => api.post(`/defects/${id}/transitions`, data),
+  events: (id: string, after = 0) => api.get(`/defects/${id}/events`, { params: { after_sequence: after } }),
+  occurrences: (id: string) => api.get(`/defects/${id}/occurrences`),
+  remove: (id: string, version: number) => api.delete(`/defects/${id}`, { params: { expected_version: version } }),
+  restore: (id: string, version: number) => api.post(`/defects/${id}/restore`, null, { params: { expected_version: version } }),
+  addReference: (id: string, data: any, version: number) => api.post(`/defects/${id}/references`, data, { params: { expected_version: version } }),
+  removeReference: (id: string, referenceId: string, version: number) => api.delete(`/defects/${id}/references/${referenceId}`, { params: { expected_version: version } }),
+  catalogList: (projectId: string, kind: string) => api.get(`/projects/${projectId}/${kind}`),
+  catalogCreate: (projectId: string, kind: string, data: any) => api.post(`/projects/${projectId}/${kind}`, data),
+  catalogUpdate: (projectId: string, kind: string, id: string, data: any) => api.patch(`/projects/${projectId}/${kind}/${id}`, data),
+  comments: (id: string) => api.get(`/defects/${id}/comments`),
+  addComment: (id: string, data: any) => api.post(`/defects/${id}/comments`, data),
+  updateComment: (id: string, commentId: string, data: any) => api.patch(`/defects/${id}/comments/${commentId}`, data),
+  removeComment: (id: string, commentId: string) => api.delete(`/defects/${id}/comments/${commentId}`),
+  watchers: (id: string) => api.get(`/defects/${id}/watchers`),
+  addWatcher: (id: string, data: any = {}) => api.post(`/defects/${id}/watchers`, data),
+  removeWatcher: (id: string, watcherId: string) => api.delete(`/defects/${id}/watchers/${watcherId}`),
+  attachments: (id: string) => api.get(`/defects/${id}/attachments`),
+  uploadAttachment: (projectId: string, file: File, defectId?: string) => {
+    const data = new FormData(); data.append('project_id', projectId); data.append('file', file)
+    if (defectId) data.append('defect_id', defectId)
+    return api.post('/defect-attachments', data, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 120000 })
+  },
+  downloadAttachment: (id: string) => api.get(`/defect-attachments/${id}/download`, { responseType: 'blob' }),
+  removeAttachment: (id: string) => api.delete(`/defect-attachments/${id}`),
+  savedViews: (projectId: string) => api.get('/defect-management/views', { params: { project_id: projectId } }),
+  createView: (projectId: string, data: any) => api.post('/defect-management/views', data, { params: { project_id: projectId } }),
+  updateView: (id: string, data: any) => api.put(`/defect-management/views/${id}`, data),
+  removeView: (id: string) => api.delete(`/defect-management/views/${id}`),
+  batch: (data: any) => api.post('/defect-management/batch', data),
+  importTemplate: () => api.get('/defect-management/import-template', { responseType: 'blob' }),
+  previewImport: (projectId: string, requestKey: string, file: File) => {
+    const data = new FormData(); data.append('project_id', projectId); data.append('request_key', requestKey); data.append('file', file)
+    return api.post('/defect-management/imports/preview', data, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 120000 })
+  },
+  commitImport: (jobId: string, data: any) => api.post(`/defect-management/imports/${jobId}/commit`, data, { timeout: 120000 }),
+  exportDefects: (data: any) => api.post('/defect-management/exports', data, { timeout: 120000 }),
+  downloadJob: (id: string) => api.get(`/defect-management/jobs/${id}/download`, { responseType: 'blob', timeout: 120000 }),
+  metrics: (projectId: string, days = 30) => api.get('/defect-management/metrics', { params: { project_id: projectId, days } }),
+  getSettings: (projectId: string) => api.get('/defect-management/settings', { params: { project_id: projectId } }),
+  updateSettings: (projectId: string, data: any) => api.put('/defect-management/settings', data, { params: { project_id: projectId } }),
+  workflows: (projectId: string) => api.get('/defect-management/workflows', { params: { project_id: projectId } }),
+  createWorkflow: (data: any) => api.post('/defect-management/workflows', data),
+  createWorkflowDraft: (id: string) => api.post(`/defect-management/workflows/${id}/draft`),
+  updateWorkflowDraft: (id: string, definition: any) => api.put(`/defect-management/workflow-revisions/${id}`, { definition }),
+  getWorkflowRevision: (id: string) => api.get(`/defect-management/workflow-revisions/${id}`),
+  publishWorkflow: (id: string) => api.post(`/defect-management/workflow-revisions/${id}/publish`),
+  migrateWorkflow: (projectId: string, data: any) => api.post('/defect-management/workflow-migrations', data, { params: { project_id: projectId } }),
 }
 
 // ============ 报告分析（能力9：AI 分析测试报告） ============

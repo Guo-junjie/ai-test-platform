@@ -34,8 +34,14 @@ REFERENCES = {
     "plan_revision_id": m.TestPlanRevision, "revision_id": m.TestPlanRevision,
     "conn_id": m.DatabaseConnection, "connection_id": m.DatabaseConnection,
     "defect_id": m.Defect, "task_id": m.ScheduledTask,
+    "module_id": m.ProjectModule, "iteration_id": m.ProjectIteration,
+    "release_id": m.ProjectRelease, "fix_release_id": m.ProjectRelease,
+    "verified_release_id": m.ProjectRelease, "requirement_doc_id": m.RequirementDoc,
     "conversation_id": m.KnowledgeConversation, "message_id": m.KnowledgeMessage,
     "review_id": m.DocReview,
+    "workflow_id": m.DefectWorkflow, "view_id": m.DefectView,
+    "job_id": m.DefectJob, "attachment_id": m.DefectAttachment,
+    "comment_id": m.DefectComment, "watcher_id": m.DefectWatcher,
 }
 
 
@@ -92,6 +98,8 @@ def reference_model(key, path):
         return m.CoverageReport if path.startswith("/api/coverage") else m.TestReport
     if key == "source_id":
         return m.Project
+    if key == "revision_id" and path.startswith("/api/defect-management"):
+        return m.DefectWorkflowRevision
     return REFERENCES.get(key)
 
 
@@ -150,7 +158,7 @@ async def authorize_request(request: Request, db=Depends(get_db_session)):
     for source in (request.query_params, request.path_params, payload):
         for key, value in source.items():
             await check(key, value)
-        for key, single in {"case_ids": "case_id", "endpoint_ids": "endpoint_id"}.items():
+        for key, single in {"case_ids": "case_id", "endpoint_ids": "endpoint_id", "affected_release_ids": "release_id", "defect_ids": "defect_id"}.items():
             for value in source.get(key, []) or []:
                 await check(single, value)
     for config_key in ("target_config", "env_config", "context"):

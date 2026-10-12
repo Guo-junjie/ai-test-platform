@@ -12,3 +12,9 @@ dist_bak_*/
 .ssh_*.py
 # vite 构建时产生的临时配置文件（自动再生，无需入库）
 *.timestamp-*.mjs
+frontend/test-results/
+/test-results/
+.tmp/
+.workbuddy/
+.pytest_cache/
+**/Typora_Hook_Log.txt

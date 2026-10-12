@@ -214,12 +214,13 @@ async def get_defect_trend(
                 func.nullif(Defect.severity != DefectSeverity.P3, True)  # type: ignore
             ).label("p3"),
         )
-        .join(TestRun, Defect.test_run_id == TestRun.id)
-        .where(TestRun.created_at >= since)
+        .select_from(Defect)
+        .outerjoin(TestRun, Defect.test_run_id == TestRun.id)
+        .where(Defect.created_at >= since, Defect.deleted_at.is_(None))
     )
 
     if pid is not None:
-        query = query.where(TestRun.project_id == pid)
+        query = query.where(func.coalesce(Defect.project_id, TestRun.project_id) == pid)
 
     query = query.group_by("date").order_by("date")
 
@@ -295,15 +296,22 @@ async def get_summary(
     # 缺陷总数
     defect_query = (
         select(func.count(Defect.id))
-        .join(TestRun, Defect.test_run_id == TestRun.id)
-        .where(TestRun.created_at >= since)
+        .select_from(Defect)
+        .outerjoin(TestRun, Defect.test_run_id == TestRun.id)
+        .where(Defect.created_at >= since, Defect.deleted_at.is_(None))
     )
 
     if pid is not None:
-        defect_query = defect_query.where(TestRun.project_id == pid)
+        defect_query = defect_query.where(func.coalesce(Defect.project_id, TestRun.project_id) == pid)
 
     defect_result = await db.execute(defect_query)
     total_defects = defect_result.scalar() or 0
+
+    backlog_query = select(func.count(Defect.id)).select_from(Defect).outerjoin(TestRun, Defect.test_run_id == TestRun.id).where(
+        Defect.deleted_at.is_(None), Defect.workflow_state.in_(["new", "unassigned", "in_progress", "pending_verification", "reopened"]))
+    if pid is not None:
+        backlog_query = backlog_query.where(func.coalesce(Defect.project_id, TestRun.project_id) == pid)
+    open_defects = (await db.execute(backlog_query)).scalar() or 0
 
     pass_rate = (
         round(gate_passed_count / completed_runs * 100, 1)
@@ -320,6 +328,7 @@ async def get_summary(
             "pass_rate": pass_rate,
             "avg_quality_score": avg_score,
             "total_defects": total_defects,
+            "open_defects": open_defects,
             "days": days,
         },
         "message": "success",

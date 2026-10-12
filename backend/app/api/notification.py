@@ -50,6 +50,8 @@ def _notification_to_dict(item: Notification) -> dict:
         "type": item.type or "system",
         "is_read": bool(item.is_read),
         "related_url": item.related_url,
+        "resource_type": item.resource_type,
+        "resource_id": str(item.resource_id) if item.resource_id else None,
         "created_at": item.created_at.isoformat() if item.created_at else None,
     }
 

@@ -62,8 +62,9 @@
             {{ formatTime(row.created_at) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="180">
+        <el-table-column label="操作" width="240">
           <template #default="{ row }">
+            <el-button v-if="row.related_url" size="small" type="primary" link @click="openNotification(row)">查看关联</el-button>
             <el-button
               size="small"
               type="primary"
@@ -107,8 +108,11 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { notificationApi } from '@/api'
+
+const router = useRouter()
 
 /** 通知类型 -> 中文标签 */
 const typeLabels: Record<string, string> = {
@@ -120,6 +124,7 @@ const typeLabels: Record<string, string> = {
   quality_gate: '质量门禁',
   report: '报告',
   system: '系统',
+  defect: '缺陷协作',
 }
 
 const notifications = ref<any[]>([])
@@ -141,6 +146,11 @@ function isRead(row: any): boolean {
   return row?.is_read ?? row?.read ?? false
 }
 
+async function openNotification(row: any): Promise<void> {
+  if (!isRead(row)) await handleMarkRead(row)
+  if (row.related_url) await router.push(row.related_url)
+}
+
 /** 通知类型对应的 tag 颜色 */
 function typeTagType(type: string): 'success' | 'warning' | 'danger' | 'primary' | 'info' {
   const map: Record<string, 'success' | 'warning' | 'danger' | 'primary' | 'info'> = {
@@ -152,6 +162,7 @@ function typeTagType(type: string): 'success' | 'warning' | 'danger' | 'primary'
     report: 'primary',
     info: 'info',
     system: 'info',
+    defect: 'warning',
   }
   return map[type] || 'info'
 }

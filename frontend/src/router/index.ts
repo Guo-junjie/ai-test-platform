@@ -70,6 +70,12 @@ const routes = [
     meta: { title: '缺陷中心' },
   },
   {
+    path: '/defects/:id',
+    name: 'DefectDetail',
+    component: () => import('@/views/Defects.vue'),
+    meta: { title: '缺陷详情' },
+  },
+  {
     path: '/report',
     name: 'ReportList',
     component: () => import('@/views/Report.vue'),
@@ -131,7 +137,7 @@ const routes = [
     path: '/case-library',
     name: 'CaseLibrary',
     component: () => import('@/views/CaseLibrary.vue'),
-    meta: { title: '用例库' },
+    meta: { title: '用例管理与评审' },
   },
   {
     path: '/case-assert/:id?',

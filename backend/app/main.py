@@ -266,8 +266,14 @@ from app.api.report_analysis import router as report_analysis_router
 app.include_router(report_analysis_router, prefix="/api", tags=["报告分析"])
 
 # 缺陷中心（独立缺陷管理：过滤/搜索/状态流转/手动创建）
-from app.api.defects import router as defects_router
+from app.api.defects import router as defects_router, catalog_router as defect_catalog_router
 app.include_router(defects_router, prefix="/api/defects", tags=["缺陷中心"])
+app.include_router(defect_catalog_router, prefix="/api/projects", tags=["缺陷项目目录"])
+from app.api.defect_collaboration import router as defect_collaboration_router, attachment_router as defect_attachment_router
+app.include_router(defect_collaboration_router, prefix="/api/defects", tags=["缺陷协作"])
+app.include_router(defect_attachment_router, prefix="/api/defect-attachments", tags=["缺陷附件"])
+from app.api.defect_management import router as defect_management_router
+app.include_router(defect_management_router, prefix="/api/defect-management", tags=["缺陷管理与配置"])
 
 # P0 测试计划（CRUD + 用例管理 + 执行触发）
 from app.api.plan import router as plan_router
