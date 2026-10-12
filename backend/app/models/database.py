@@ -1268,10 +1268,69 @@ class CaseReviewEvent(Base):
     case_asset_id = Column(UUID(as_uuid=True), ForeignKey("test_case_assets.id", ondelete="RESTRICT"), nullable=False, index=True)
     project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False, index=True)
     actor_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    task_id = Column(UUID(as_uuid=True), ForeignKey("case_review_tasks.id", ondelete="SET NULL"), nullable=True, index=True)
+    case_version_id = Column(UUID(as_uuid=True), ForeignKey("test_case_asset_versions.id", ondelete="SET NULL"), nullable=True)
+    case_version = Column(Integer, nullable=True)
     action = Column(String(24), nullable=False)  # submit/approve/changes_requested/edit/deprecate
     comment = Column(Text, nullable=True)
     content_hash = Column(String(64), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class CaseReviewTask(Base):
+    """绑定不可变用例版本的正式评审任务。"""
+
+    __tablename__ = "case_review_tasks"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    case_asset_id = Column(UUID(as_uuid=True), ForeignKey("test_case_assets.id", ondelete="RESTRICT"), nullable=False, index=True)
+    case_version_id = Column(UUID(as_uuid=True), ForeignKey("test_case_asset_versions.id", ondelete="RESTRICT"), nullable=False)
+    case_version = Column(Integer, nullable=False)
+    round = Column(Integer, nullable=False, default=1)
+    status = Column(String(24), nullable=False, default="pending")
+    approval_rule = Column(String(16), nullable=False, default="all")
+    submission_comment = Column(Text, nullable=True)
+    submitted_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    submitted_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    due_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("case_asset_id", "round", name="uq_case_review_task_round"),
+        CheckConstraint("status IN ('pending', 'approved', 'changes_requested', 'cancelled')", name="ck_case_review_task_status"),
+        CheckConstraint("approval_rule IN ('all')", name="ck_case_review_task_rule"),
+        Index(
+            "uq_case_review_tasks_active", "case_asset_id", unique=True,
+            postgresql_where=text("status = 'pending'"),
+            sqlite_where=text("status = 'pending'"),
+        ),
+        Index("idx_case_review_tasks_project_status", "project_id", "status", "created_at"),
+        Index("idx_case_review_tasks_asset_created", "case_asset_id", "created_at"),
+    )
+
+
+class CaseReviewAssignment(Base):
+    """评审任务的评审人及个人结论。"""
+
+    __tablename__ = "case_review_assignments"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    task_id = Column(UUID(as_uuid=True), ForeignKey("case_review_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    reviewer_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
+    status = Column(String(24), nullable=False, default="pending")
+    comment = Column(Text, nullable=True)
+    decided_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("task_id", "reviewer_id", name="uq_case_review_assignment_reviewer"),
+        CheckConstraint("status IN ('pending', 'approved', 'changes_requested', 'cancelled')", name="ck_case_review_assignment_status"),
+        Index("idx_case_review_assignments_reviewer_status", "reviewer_id", "status", "created_at"),
+    )
 
 
 class TestCaseAssetVersion(Base):

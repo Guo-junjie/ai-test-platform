@@ -44,6 +44,7 @@ from app.models.database import (
     ApiEndpoint,
     CaseAssetStatus,
     CaseReviewEvent,
+    CaseReviewTask,
     Defect,
     DefectReference,
     InterfaceDoc,
@@ -63,6 +64,13 @@ from app.models.database import (
 )
 from app.modules.auth.dependencies import get_current_user, require_role
 from app.modules.defects.workflow import STATE_LABELS
+from app.modules.case_reviews import (
+    cancel_pending_review_tasks,
+    create_review_task,
+    decide_review_task,
+    reviewer_options,
+    task_to_dict,
+)
 from app.modules.runs.case_readiness import api_case_errors
 from app.utils.database import get_db_session
 
@@ -100,6 +108,9 @@ def _case_snapshot(item: TestCaseAsset) -> dict[str, Any]:
         "priority": item.priority or "P2",
         "folder": item.folder or "",
         "tags": list(item.tags or []),
+        "pre_script": getattr(item, "pre_script", None) or "",
+        "post_script": getattr(item, "post_script", None) or "",
+        "sql_script": getattr(item, "sql_script", None) or "",
     }
 
 
@@ -495,6 +506,11 @@ async def update_case(
             snapshot=prior_snapshot, version=current_version,
         )
 
+    if item.review_state == "pending":
+        await cancel_pending_review_tasks(
+            db, item=item, actor_id=current_user.id, reason="用例内容被修改，原评审任务自动取消",
+        )
+
     if req.title is not None:
         item.title = req.title
     if req.description is not None:
@@ -539,7 +555,7 @@ async def batch_update_cases(
     current_user: User = Depends(case_editor),
     db: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
-    """批量归类和追加标签，不改变评审状态。"""
+    """批量归类和追加标签；已进入评审的用例修改后重新回到草稿。"""
     try:
         ids = list(dict.fromkeys(uuid.UUID(value) for value in req.ids))
     except (TypeError, ValueError) as exc:
@@ -560,11 +576,19 @@ async def batch_update_cases(
         current_version = int(item.version or 1)
         if (item.id, current_version) not in existing_versions:
             _add_case_version(db, item, item.created_by, "baseline", version=current_version)
+        if item.review_state == "pending":
+            await cancel_pending_review_tasks(
+                db, item=item, actor_id=current_user.id, reason="用例归类或标签被修改，原评审任务自动取消",
+            )
         if req.folder is not None:
             item.folder = req.folder.strip() or None
         item.tags = _normalize_tags([*(item.tags or []), *add_tags])
         item.version = current_version + 1
         item.updated_at = datetime.utcnow()
+        if item.review_state in {"pending", "approved", "changes_requested"}:
+            item.review_state = "draft"
+            item.status = CaseAssetStatus.DRAFT
+            _record_review(db, item, current_user, "edit", "归类或标签变更，重新进入草稿")
         _add_case_version(db, item, current_user.id, "classify")
     await db.flush()
     return {"code": 0, "data": {"count": len(items)}, "message": "批量更新完成"}
@@ -1149,6 +1173,11 @@ async def delete_case(
 
     if item.review_state != "draft" or item.status == CaseAssetStatus.ADOPTED:
         raise HTTPException(409, "已进入评审或计划流程的用例不能物理删除，请废弃")
+    review_count = (await db.execute(select(func.count()).select_from(CaseReviewTask).where(
+        CaseReviewTask.case_asset_id == item.id,
+    ))).scalar_one()
+    if review_count:
+        raise HTTPException(409, "已有评审记录的用例不能物理删除，请废弃以保留审计链路")
     await db.delete(item)
     await db.flush()
 
@@ -1161,19 +1190,23 @@ async def submit_case_review(
     current_user: User = Depends(case_editor),
     db: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
-    item = (await db.execute(select(TestCaseAsset).where(TestCaseAsset.id == case_id)
-                             .with_for_update())).scalar_one_or_none()
+    """兼容旧客户端：自动选择当前用户或项目首位可用评审人并创建正式任务。"""
+    try:
+        case_uuid = uuid.UUID(case_id)
+    except ValueError as exc:
+        raise HTTPException(400, "用例 ID 格式错误") from exc
+    item = (await db.execute(select(TestCaseAsset).where(TestCaseAsset.id == case_uuid))).scalar_one_or_none()
     if item is None:
         raise HTTPException(404, "用例不存在")
-    if item.status == CaseAssetStatus.DEPRECATED or item.review_state not in {"draft", "changes_requested"}:
-        raise HTTPException(409, "只有草稿或退回用例可以提交评审")
-    errors = _review_errors(item)
-    if errors:
-        raise HTTPException(422, "；".join(errors))
-    item.review_state = "pending"
-    _record_review(db, item, current_user, "submit")
-    await db.flush()
-    return {"code": 0, "data": {"review_state": "pending"}, "message": "已提交评审"}
+    candidates = await reviewer_options(db, item.project_id)
+    reviewer_id = next((uuid.UUID(row["id"]) for row in candidates if row["id"] == str(current_user.id)), None)
+    reviewer_id = reviewer_id or (uuid.UUID(candidates[0]["id"]) if candidates else None)
+    if reviewer_id is None:
+        raise HTTPException(422, "当前项目没有可用评审人，请先配置项目成员")
+    task = await create_review_task(
+        db, case_id=case_uuid, reviewer_ids=[reviewer_id], comment="", due_at=None, actor=current_user,
+    )
+    return {"code": 0, "data": await task_to_dict(db, task, current_user.id), "message": "已创建评审任务"}
 
 
 @router.post("/{case_id}/review")
@@ -1183,29 +1216,20 @@ async def review_case(
     current_user: User = Depends(case_reviewer),
     db: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
-    item = (await db.execute(select(TestCaseAsset).where(TestCaseAsset.id == case_id)
-                             .with_for_update())).scalar_one_or_none()
-    if item is None:
-        raise HTTPException(404, "用例不存在")
-    if item.review_state != "pending":
-        raise HTTPException(409, "用例尚未提交评审")
-    if req.decision not in {"approve", "changes_requested"}:
-        raise HTTPException(422, "评审结论必须是 approve 或 changes_requested")
-    if req.decision == "changes_requested" and not req.comment.strip():
-        raise HTTPException(422, "退回时必须填写修改意见")
-    if req.decision == "approve":
-        errors = _review_errors(item)
-        if errors:
-            raise HTTPException(422, "；".join(errors))
-        item.status = CaseAssetStatus.ADOPTED
-        item.review_state = "approved"
-    else:
-        item.status = CaseAssetStatus.DRAFT
-        item.review_state = "changes_requested"
-    item.updated_at = datetime.utcnow()
-    _record_review(db, item, current_user, req.decision, req.comment.strip())
-    await db.flush()
-    return {"code": 0, "data": {"review_state": item.review_state}, "message": "评审已记录"}
+    try:
+        case_uuid = uuid.UUID(case_id)
+    except ValueError as exc:
+        raise HTTPException(400, "用例 ID 格式错误") from exc
+    task = (await db.execute(select(CaseReviewTask).where(
+        CaseReviewTask.case_asset_id == case_uuid,
+        CaseReviewTask.status == "pending",
+    ).order_by(CaseReviewTask.round.desc()).limit(1))).scalar_one_or_none()
+    if task is None:
+        raise HTTPException(409, "用例没有进行中的评审任务")
+    task = await decide_review_task(
+        db, task_id=task.id, decision=req.decision, comment=req.comment, actor=current_user,
+    )
+    return {"code": 0, "data": await task_to_dict(db, task, current_user.id), "message": "评审已记录"}
 
 
 @router.get("/{case_id}/review-events")
@@ -1224,6 +1248,9 @@ async def get_case_review_events(
     return {"code": 0, "data": [{"id": str(row.id), "actor_id": str(row.actor_id),
                                    "actor_name": username, "action": row.action,
                                    "comment": row.comment, "content_hash": row.content_hash,
+                                   "task_id": str(row.task_id) if row.task_id else None,
+                                   "case_version_id": str(row.case_version_id) if row.case_version_id else None,
+                                   "case_version": row.case_version,
                                    "created_at": row.created_at.isoformat() if row.created_at else None}
                                   for row, username in rows], "message": "ok"}
 
@@ -1234,28 +1261,21 @@ async def adopt_case(
     current_user: User = Depends(require_role(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.TEST_MANAGER)),
     db: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
-    """单条接纳用例。"""
-    from app.models.database import TestCaseAsset
-
-    result = await db.execute(
-        select(TestCaseAsset).where(TestCaseAsset.id == case_id)
+    """兼容旧客户端：把“接纳”映射为当前评审任务的通过结论。"""
+    try:
+        case_uuid = uuid.UUID(case_id)
+    except ValueError as exc:
+        raise HTTPException(400, "用例 ID 格式错误") from exc
+    task = (await db.execute(select(CaseReviewTask).where(
+        CaseReviewTask.case_asset_id == case_uuid,
+        CaseReviewTask.status == "pending",
+    ).order_by(CaseReviewTask.round.desc()).limit(1))).scalar_one_or_none()
+    if task is None:
+        raise HTTPException(409, "请先创建评审任务")
+    task = await decide_review_task(
+        db, task_id=task.id, decision="approve", comment="", actor=current_user,
     )
-    item = result.scalar_one_or_none()
-    if item is None:
-        raise HTTPException(status_code=404, detail="Case not found")
-
-    if item.review_state != "pending":
-        raise HTTPException(409, "请先提交评审，再批准用例")
-    errors = _review_errors(item)
-    if errors:
-        raise HTTPException(422, "；".join(errors))
-    item.status = CaseAssetStatus.ADOPTED
-    item.review_state = "approved"
-    item.updated_at = datetime.utcnow()
-    _record_review(db, item, current_user, "approve")
-    await db.flush()
-
-    return {"code": 0, "data": None, "message": "ok"}
+    return {"code": 0, "data": await task_to_dict(db, task, current_user.id), "message": "评审已通过"}
 
 
 @router.post("/{case_id}/deprecate")
@@ -1274,6 +1294,10 @@ async def deprecate_case(
     if item is None:
         raise HTTPException(status_code=404, detail="Case not found")
 
+    if item.review_state == "pending":
+        await cancel_pending_review_tasks(
+            db, item=item, actor_id=current_user.id, reason="用例被废弃，评审任务自动取消",
+        )
     item.status = CaseAssetStatus.DEPRECATED
     item.review_state = "changes_requested"
     item.updated_at = datetime.utcnow()
@@ -1311,28 +1335,25 @@ async def adopt_batch(
     current_user: User = Depends(require_role(UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.TEST_MANAGER)),
     db: AsyncSession = Depends(get_db_session),
 ) -> dict[str, Any]:
-    """批量接纳用例。"""
-    from app.models.database import TestCaseAsset
-
-    result = await db.execute(
-        select(TestCaseAsset).where(TestCaseAsset.id.in_(req.ids))
-    )
-    items = result.scalars().all()
-
-    if len(items) != len(set(req.ids)):
-        raise HTTPException(404, "部分用例不存在")
-    invalid = [item.title for item in items if item.review_state != "pending" or _review_errors(item)]
-    if invalid:
-        raise HTTPException(409, f"以下用例未通过提交评审或内容校验：{', '.join(invalid[:5])}")
-    for item in items:
-        item.status = CaseAssetStatus.ADOPTED
-        item.review_state = "approved"
-        item.updated_at = datetime.utcnow()
-        _record_review(db, item, current_user, "approve")
-
-    await db.flush()
-
-    return {"code": 0, "data": {"count": len(items)}, "message": "ok"}
+    """兼容旧客户端：批量提交当前用户被指派任务的通过结论。"""
+    try:
+        ids = list(dict.fromkeys(uuid.UUID(value) for value in req.ids))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, "用例 ID 格式错误") from exc
+    if not ids:
+        raise HTTPException(422, "至少选择一条用例")
+    tasks = (await db.execute(select(CaseReviewTask).where(
+        CaseReviewTask.case_asset_id.in_(ids),
+        CaseReviewTask.status == "pending",
+    ))).scalars().all()
+    task_by_case = {task.case_asset_id: task for task in tasks}
+    if len(task_by_case) != len(ids):
+        raise HTTPException(409, "部分用例没有进行中的评审任务")
+    for case_id in ids:
+        await decide_review_task(
+            db, task_id=task_by_case[case_id].id, decision="approve", comment="", actor=current_user,
+        )
+    return {"code": 0, "data": {"count": len(ids)}, "message": "批量评审结论已记录"}
 
 
 # ============ 能力5/6/7 扩展：脚本绑定 ============
@@ -1352,11 +1373,26 @@ async def bind_scripts(
     from app.models.database import TestCaseAsset
 
     result = await db.execute(
-        select(TestCaseAsset).where(TestCaseAsset.id == case_id)
+        select(TestCaseAsset).where(TestCaseAsset.id == case_id).with_for_update()
     )
     item = result.scalar_one_or_none()
     if item is None:
         raise HTTPException(status_code=404, detail="Case not found")
+
+    current_version = int(item.version or 1)
+    prior_snapshot = _case_snapshot(item)
+    has_current_version = (await db.execute(
+        select(func.count()).select_from(TestCaseAssetVersion).where(
+            TestCaseAssetVersion.case_asset_id == item.id,
+            TestCaseAssetVersion.version == current_version,
+        )
+    )).scalar_one() > 0
+    if not has_current_version:
+        _add_case_version(db, item, item.created_by, "baseline", snapshot=prior_snapshot, version=current_version)
+    if item.review_state == "pending":
+        await cancel_pending_review_tasks(
+            db, item=item, actor_id=current_user.id, reason="用例脚本被修改，原评审任务自动取消",
+        )
 
     if req.pre_script is not None:
         item.pre_script = req.pre_script
@@ -1370,6 +1406,8 @@ async def bind_scripts(
         item.status = CaseAssetStatus.DRAFT
         _record_review(db, item, current_user, "edit", "脚本变更，重新进入草稿")
     item.updated_at = datetime.utcnow()
+    item.version = current_version + 1
+    _add_case_version(db, item, current_user.id, "script_edit")
     await db.flush()
 
     return {

@@ -56,10 +56,11 @@
 
       <div v-if="selectedRows.length" class="batch-toolbar">
         <strong>已选择 {{ selectedRows.length }} 条</strong>
-        <el-button size="small" :loading="batchAdopting" @click="batchAdopt">批量批准</el-button>
-        <el-button size="small" @click="openBatchFolder">批量归类</el-button>
-        <el-button size="small" @click="openBatchTags">批量添加标签</el-button>
+        <el-button v-if="libraryTab === 'review'" size="small" :loading="batchAdopting" @click="batchAdopt">批量提交通过结论</el-button>
+        <el-button v-if="libraryTab !== 'review'" size="small" @click="openBatchFolder">批量归类</el-button>
+        <el-button v-if="libraryTab !== 'review'" size="small" @click="openBatchTags">批量添加标签</el-button>
         <el-button
+          v-if="libraryTab !== 'review'"
           size="small"
           type="primary"
           plain
@@ -106,14 +107,16 @@
           <template #default="{ row }"><el-tag size="small" :type="priorityType(row.priority)">{{ row.priority }}</el-tag></template>
         </el-table-column>
         <el-table-column label="状态" width="100" align="center">
-          <template #default="{ row }"><el-tag size="small" :type="reviewTagType(row)">{{ reviewLabel(row) }}</el-tag></template>
+          <template #default="{ row }">
+            <el-tag size="small" :type="reviewTagType(row)">{{ reviewLabel(row) }}</el-tag>
+            <div v-if="row.review_task" class="version-label">{{ row.review_task.approved_count }}/{{ row.review_task.reviewer_count }} 已通过</div>
+          </template>
         </el-table-column>
         <el-table-column label="操作" width="250" fixed="right" align="center">
           <template #default="{ row }">
             <el-button size="small" text type="primary" @click="openDetail(row)">查看</el-button>
             <template v-if="libraryTab === 'review'">
-              <el-button size="small" text type="success" @click="adopt(row)">通过</el-button>
-              <el-button size="small" text type="warning" @click="requestChanges(row)">退回</el-button>
+              <el-button size="small" text type="primary" @click="openReviewTask(row)">评审</el-button>
             </template>
             <el-button v-else-if="libraryTab === 'archived'" size="small" text type="success" @click="restoreCase(row)">恢复</el-button>
             <el-button
@@ -131,10 +134,10 @@
                   <el-dropdown-item command="edit">编辑</el-dropdown-item>
                   <el-dropdown-item command="assert" :disabled="row.execution_kind === 'manual'">配置断言</el-dropdown-item>
                   <el-dropdown-item command="copy">复制</el-dropdown-item>
+                  <el-dropdown-item command="review-tasks">评审任务</el-dropdown-item>
                   <el-dropdown-item command="review-events">评审记录</el-dropdown-item>
                   <el-dropdown-item command="submit" :disabled="!['draft', 'changes_requested'].includes(row.review_state)">提交评审</el-dropdown-item>
-                  <el-dropdown-item command="approve" :disabled="row.review_state !== 'pending'">批准</el-dropdown-item>
-                  <el-dropdown-item command="changes" :disabled="row.review_state !== 'pending'">退回</el-dropdown-item>
+                  <el-dropdown-item command="approve" :disabled="row.review_state !== 'pending'">进入评审</el-dropdown-item>
                   <el-dropdown-item command="plan" :disabled="row.status !== 'adopted' || row.execution_kind === 'manual'">加入计划</el-dropdown-item>
                   <el-dropdown-item divided command="deprecate" :disabled="row.status === 'deprecated'">废弃</el-dropdown-item>
                   <el-dropdown-item command="delete" :disabled="row.review_state !== 'draft'">删除草稿</el-dropdown-item>
@@ -171,6 +174,8 @@
 
     <manual-case-drawer v-model="createVisible" :project-id="projectId" :project-name="projects.find(project => project.id === projectId)?.name || '当前项目'" @saved="onManualCaseSaved" />
     <case-import-dialog v-model="importVisible" :project-id="projectId" @imported="onCasesImported" />
+    <case-review-submit-dialog v-model="reviewSubmitVisible" :project-id="projectId" :case-item="reviewSubmitCase" @submitted="onReviewSubmitted" />
+    <case-review-task-drawer v-model="reviewTaskVisible" :task-id="activeReviewTaskId" @decided="onReviewDecided" />
 
     <el-drawer v-model="detailVisible" size="min(920px, 96vw)" destroy-on-close class="case-drawer">
       <template #header>
@@ -319,13 +324,25 @@
               <el-table-column label="目标版本"><template #default="{ row }"><pre class="diff-value added">{{ row.after }}</pre></template></el-table-column>
             </el-table>
           </el-tab-pane>
+
+          <el-tab-pane label="评审任务" name="reviews">
+            <el-table :data="caseReviewTasks" size="small" border empty-text="尚未发起评审任务">
+              <el-table-column label="轮次" width="76"><template #default="{ row }">第 {{ row.round }} 轮</template></el-table-column>
+              <el-table-column label="绑定版本" width="90"><template #default="{ row }">v{{ row.case_version }}</template></el-table-column>
+              <el-table-column label="提交人" prop="submitter_name" min-width="110" />
+              <el-table-column label="评审进度" width="100"><template #default="{ row }">{{ row.approved_count }}/{{ row.reviewer_count }}</template></el-table-column>
+              <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag size="small" :type="reviewTaskTagType(row.status)">{{ reviewTaskLabel(row.status) }}</el-tag></template></el-table-column>
+              <el-table-column label="提交时间" width="170"><template #default="{ row }">{{ formatTime(row.submitted_at) }}</template></el-table-column>
+              <el-table-column label="操作" width="80"><template #default="{ row }"><el-button link type="primary" @click="showReviewTask(row.id)">查看</el-button></template></el-table-column>
+            </el-table>
+          </el-tab-pane>
         </el-tabs>
       </div>
 
       <template #footer>
         <div class="drawer-footer">
           <template v-if="editing"><el-button @click="cancelEditing">取消</el-button><el-button type="primary" :loading="savingEdit" @click="saveEdit">保存新版本</el-button></template>
-          <template v-else><el-button @click="detailVisible = false">关闭</el-button><el-button v-if="detailCase?.status === 'adopted' && detailCase?.execution_kind !== 'manual'" type="success" @click="openRun(detailCase)">运行</el-button></template>
+          <template v-else><el-button @click="detailVisible = false">关闭</el-button><el-button v-if="['draft', 'changes_requested'].includes(detailCase?.review_state)" type="primary" plain @click="submitReview(detailCase)">提交评审</el-button><el-button v-if="detailCase?.review_state === 'pending'" type="primary" plain @click="openReviewTask(detailCase)">查看评审任务</el-button><el-button v-if="detailCase?.status === 'adopted' && detailCase?.execution_kind !== 'manual'" type="success" @click="openRun(detailCase)">运行</el-button></template>
         </div>
       </template>
     </el-drawer>
@@ -333,7 +350,7 @@
     <el-dialog v-model="batchFolderVisible" title="批量归类" width="440px"><el-form label-position="top"><el-form-item label="业务归类"><el-input v-model="batchFolder" placeholder="例如：订单 / 认证；留空可清除归类" /></el-form-item></el-form><template #footer><el-button @click="batchFolderVisible = false">取消</el-button><el-button type="primary" :loading="batchUpdating" @click="applyBatchFolder">保存</el-button></template></el-dialog>
     <el-dialog v-model="batchTagsVisible" title="批量添加标签" width="440px"><el-form label-position="top"><el-form-item label="标签"><el-select v-model="batchTags" multiple filterable allow-create default-first-option style="width: 100%" placeholder="输入标签后回车"><el-option v-for="tag in knownTags" :key="tag" :label="tag" :value="tag" /></el-select></el-form-item></el-form><template #footer><el-button @click="batchTagsVisible = false">取消</el-button><el-button type="primary" :loading="batchUpdating" @click="applyBatchTags">添加</el-button></template></el-dialog>
 
-    <el-dialog v-model="reviewEventsVisible" title="用例评审记录" width="620px"><el-timeline v-if="reviewEvents.length"><el-timeline-item v-for="event in reviewEvents" :key="event.id" :timestamp="formatTime(event.created_at)">{{ reviewActionLabel(event.action) }} · {{ event.actor_name || event.actor_id }}<div v-if="event.comment">{{ event.comment }}</div></el-timeline-item></el-timeline><el-empty v-else description="尚无评审记录" /></el-dialog>
+    <el-dialog v-model="reviewEventsVisible" title="用例评审记录" width="620px"><el-timeline v-if="reviewEvents.length"><el-timeline-item v-for="event in reviewEvents" :key="event.id" :timestamp="formatTime(event.created_at)">{{ reviewActionLabel(event.action) }}<span v-if="event.case_version"> · v{{ event.case_version }}</span> · {{ event.actor_name || event.actor_id }}<div v-if="event.comment">{{ event.comment }}</div></el-timeline-item></el-timeline><el-empty v-else description="尚无评审记录" /></el-dialog>
 
     <el-dialog v-model="addToPlanVisible" :title="addIntent === 'run' ? '运行用例' : '加入测试计划'" width="560px" destroy-on-close @open="loadPlansIfNeeded">
       <el-alert v-if="addIntent === 'run'" type="info" :closable="false" show-icon title="企业执行以已发布计划版本为准。加入后将前往测试计划页完成发布并选择环境运行。" />
@@ -356,6 +373,8 @@ import { Delete, MagicStick, MoreFilled, Plus, Upload } from '@element-plus/icon
 import { caseApi, planApi, projectApi, secretApi } from '@/api'
 import ManualCaseDrawer from '@/components/ManualCaseDrawer.vue'
 import CaseImportDialog from '@/components/CaseImportDialog.vue'
+import CaseReviewSubmitDialog from '@/components/cases/CaseReviewSubmitDialog.vue'
+import CaseReviewTaskDrawer from '@/components/cases/CaseReviewTaskDrawer.vue'
 import { MANUAL_CASE_TYPES } from '@/types/manualCase'
 import { useAuthStore } from '@/stores'
 
@@ -427,6 +446,11 @@ const traceLoading = ref(false)
 
 const reviewEventsVisible = ref(false)
 const reviewEvents = ref<any[]>([])
+const reviewSubmitVisible = ref(false)
+const reviewSubmitCase = ref<any>({})
+const reviewTaskVisible = ref(false)
+const activeReviewTaskId = ref('')
+const caseReviewTasks = ref<any[]>([])
 const batchFolderVisible = ref(false)
 const batchTagsVisible = ref(false)
 const batchFolder = ref('')
@@ -487,7 +511,9 @@ function authLabel(value?: string) { return ({ none: '无认证', bearer: 'Beare
 function assertionLabel(value: string) { return ({ status_code: '状态码', json_path: 'JSON 路径', contains: '包含文本', response_time: '响应时间', jsonschema: 'JSON Schema' } as any)[value] || value }
 function assertionValue(row: any) { return row.type === 'response_time' ? `${row.max_ms ?? row.value} ms` : prettyJson(row.expected ?? row.schema ?? row.value) }
 function changeTypeLabel(value: string) { return ({ created: '人工创建', imported: '导入', generated: '生成', baseline: '基线', edit: '编辑', classify: '归类', copied: '复制' } as any)[value] || value }
-function reviewActionLabel(value: string) { return ({ submit: '提交评审', approve: '批准', changes_requested: '退回', edit: '编辑', deprecate: '废弃' } as any)[value] || value }
+function reviewActionLabel(value: string) { return ({ submit: '提交评审', approve: '批准', changes_requested: '退回', cancel: '取消评审', edit: '编辑', deprecate: '废弃' } as any)[value] || value }
+function reviewTaskLabel(value: string) { return ({ pending: '进行中', approved: '已通过', changes_requested: '需修改', cancelled: '已取消' } as any)[value] || value }
+function reviewTaskTagType(value: string) { return ({ pending: 'warning', approved: 'success', changes_requested: 'danger', cancelled: 'info' } as any)[value] || 'info' }
 
 function objectToRows(value: any): KeyValueRow[] { return value && !Array.isArray(value) && typeof value === 'object' ? Object.entries(value).map(([key, item]) => ({ key, value: typeof item === 'string' ? item : JSON.stringify(item), enabled: true })) : [] }
 function rowsToObject(rows: KeyValueRow[]) { const output: Record<string, any> = {}; rows.filter((row) => row.enabled && row.key.trim()).forEach((row) => { output[row.key.trim()] = row.value }); return output }
@@ -500,7 +526,26 @@ async function loadCredentials() { if (!projectId.value) { credentials.value = [
 function applyCredential(name: string) { if (!name) return; const refValue = `{{credential:${name}}}`; if (editor.value.auth.type === 'bearer') editor.value.auth.token = refValue; else if (editor.value.auth.type === 'basic') editor.value.auth.password = refValue; else editor.value.auth.value = refValue }
 function onFilterChange() { page.value = 1; loadCases() }
 function onLibraryTabChange() { page.value = 1; selectedRows.value = []; loadCases() }
-async function loadCases() { if (!projectId.value) { cases.value = []; totalCases.value = 0; return } listLoading.value = true; try { const res: any = await caseApi.list({ project_id: projectId.value, page: page.value, page_size: pageSize, case_type: activeType.value === 'all' ? undefined : activeType.value, source: activeSource.value || undefined, keyword: searchKeyword.value || undefined, review_state: libraryTab.value === 'review' ? 'pending' : undefined, status: libraryTab.value === 'archived' ? 'deprecated' : undefined }); cases.value = res?.data?.items || []; totalCases.value = res?.data?.total || 0 } catch { cases.value = []; totalCases.value = 0 } finally { listLoading.value = false } }
+async function loadCases() {
+  if (!projectId.value) { cases.value = []; totalCases.value = 0; return }
+  listLoading.value = true
+  try {
+    if (libraryTab.value === 'review') {
+      const res: any = await caseApi.reviewTasks({ project_id: projectId.value, scope: 'mine', status: 'pending', page: page.value, page_size: pageSize, case_type: activeType.value === 'all' ? undefined : activeType.value, source: activeSource.value || undefined, keyword: searchKeyword.value || undefined })
+      const tasks = res?.data?.items || []
+      cases.value = tasks.map((task: any) => ({
+        ...(task.case || {}), ...(task.version?.snapshot || {}), id: task.case_asset_id,
+        project_id: task.project_id, version: task.case_version, review_state: 'pending',
+        status: 'draft', source: task.case?.source, review_task: task,
+      }))
+      totalCases.value = res?.data?.total || 0
+    } else {
+      const res: any = await caseApi.list({ project_id: projectId.value, page: page.value, page_size: pageSize, case_type: activeType.value === 'all' ? undefined : activeType.value, source: activeSource.value || undefined, keyword: searchKeyword.value || undefined, status: libraryTab.value === 'archived' ? 'deprecated' : undefined })
+      cases.value = res?.data?.items || []
+      totalCases.value = res?.data?.total || 0
+    }
+  } catch { cases.value = []; totalCases.value = 0 } finally { listLoading.value = false }
+}
 function onSelectionChange(rows: any[]) { selectedRows.value = rows }
 
 function hydrateEditor(item: any) {
@@ -520,9 +565,9 @@ function hydrateEditor(item: any) {
 async function openDetail(row: any, edit = false) {
   detailVisible.value = true; detailLoading.value = true; detailTab.value = edit ? 'overview' : 'overview'; editing.value = edit
   try {
-    const [detailRes, versionRes] = await Promise.all([caseApi.get(row.id), caseApi.versions(row.id)]) as any[]
+    const [detailRes, versionRes, reviewsRes] = await Promise.all([caseApi.get(row.id), caseApi.versions(row.id), caseApi.caseReviewTasks(row.id)]) as any[]
     if (detailRes?.data?.project_id && detailRes.data.project_id !== projectId.value) { detailVisible.value = false; ElMessage.warning('该用例不属于当前项目'); return }
-    detailCase.value = detailRes?.data || row; versions.value = versionRes?.data?.items || []; hydrateEditor(detailCase.value)
+    detailCase.value = detailRes?.data || row; versions.value = versionRes?.data?.items || []; caseReviewTasks.value = reviewsRes?.data || []; hydrateEditor(detailCase.value)
     compareRight.value = versions.value[0]?.version ?? null; compareLeft.value = versions.value[1]?.version ?? versions.value[0]?.version ?? null
     loadTraceability(row.id)
   } finally { detailLoading.value = false }
@@ -563,20 +608,29 @@ async function saveEdit() {
   } finally { savingEdit.value = false }
 }
 
-async function handleMore(command: string, row: any) { if (command === 'edit') return openDetail(row, true); if (command === 'assert') return router.push(`/case-assert/${row.id}`); if (command === 'copy') return copyCase(row); if (command === 'review-events') return showReviewEvents(row); if (command === 'submit') return submitReview(row); if (command === 'approve') return adopt(row); if (command === 'changes') return requestChanges(row); if (command === 'plan') return openAddToPlan([row.id]); if (command === 'deprecate') return deprecate(row); if (command === 'delete') return deleteCase(row) }
+async function handleMore(command: string, row: any) { if (command === 'edit') return openDetail(row, true); if (command === 'assert') return router.push(`/case-assert/${row.id}`); if (command === 'copy') return copyCase(row); if (command === 'review-tasks') return openReviewTask(row); if (command === 'review-events') return showReviewEvents(row); if (command === 'submit') return submitReview(row); if (command === 'approve') return openReviewTask(row); if (command === 'plan') return openAddToPlan([row.id]); if (command === 'deprecate') return deprecate(row); if (command === 'delete') return deleteCase(row) }
 
 function goCaseGeneration() { router.push({ path: '/case-generation', query: { project_id: projectId.value } }) }
 async function onCasesImported() { libraryTab.value = 'all'; page.value = 1; await loadCases() }
 async function copyCase(row: any) { const res: any = await caseApi.copy(row.id); ElMessage.success('已复制为草稿'); await loadCases(); if (res?.data) openDetail(res.data, true) }
-async function submitReview(row: any) { await caseApi.submitReview(row.id); ElMessage.success('已提交评审'); await loadCases(); if (detailVisible.value) detailVisible.value = false }
-async function adopt(row: any) { await caseApi.review(row.id, 'approve'); ElMessage.success('评审已批准'); await loadCases(); if (detailVisible.value) detailVisible.value = false }
-async function requestChanges(row: any) { try { const result = await ElMessageBox.prompt('填写需要修改的内容', '退回用例', { inputValidator: (value: string) => !!value.trim() || '请填写修改意见' }); await caseApi.review(row.id, 'changes_requested', result.value); ElMessage.success('已退回'); await loadCases() } catch { /* 取消 */ } }
+function submitReview(row: any) { reviewSubmitCase.value = row; reviewSubmitVisible.value = true }
+async function onReviewSubmitted(task: any) { await loadCases(); if (detailVisible.value) detailVisible.value = false; if (task?.id) showReviewTask(task.id) }
+function showReviewTask(taskId: string) { activeReviewTaskId.value = taskId; reviewTaskVisible.value = true }
+async function openReviewTask(row: any) {
+  if (row.review_task?.id) { showReviewTask(row.review_task.id); return }
+  const response: any = await caseApi.caseReviewTasks(row.id)
+  const tasks = response?.data || []
+  const task = tasks.find((item: any) => item.status === 'pending') || tasks[0]
+  if (!task) { ElMessage.info('该用例尚未发起评审任务'); return }
+  showReviewTask(task.id)
+}
+async function onReviewDecided() { await loadCases(); if (detailVisible.value && detailCase.value?.id) { const response: any = await caseApi.caseReviewTasks(detailCase.value.id); caseReviewTasks.value = response?.data || [] } }
 async function showReviewEvents(row: any) { const res: any = await caseApi.reviewEvents(row.id); reviewEvents.value = res?.data || []; reviewEventsVisible.value = true }
 async function deprecate(row: any) { try { await ElMessageBox.confirm(`确认废弃用例“${row.title}”？`, '废弃确认', { type: 'warning' }); await caseApi.deprecate(row.id); ElMessage.success('已废弃'); await loadCases() } catch { /* 取消 */ } }
 async function restoreCase(row: any) { await caseApi.restore(row.id); ElMessage.success('已恢复为草稿，需要重新提交评审'); await loadCases() }
 async function deleteCase(row: any) { try { await ElMessageBox.confirm(`确认删除草稿“${row.title}”？`, '删除确认', { type: 'warning' }); await caseApi.remove(row.id); ElMessage.success('已删除'); await loadCases() } catch { /* 取消 */ } }
 
-async function batchAdopt() { if (selectedRows.value.some((row) => row.review_state !== 'pending')) { ElMessage.warning('批量批准仅适用于待评审用例'); return } batchAdopting.value = true; try { await caseApi.adoptBatch(selectedRows.value.map((row) => row.id)); ElMessage.success('批量批准完成'); await loadCases() } finally { batchAdopting.value = false } }
+async function batchAdopt() { if (libraryTab.value !== 'review' || selectedRows.value.some((row) => !row.review_task?.can_review)) { ElMessage.warning('只能批量处理指派给你的待评审任务'); return } batchAdopting.value = true; try { await caseApi.adoptBatch(selectedRows.value.map((row) => row.id)); ElMessage.success('已批量提交通过结论'); await loadCases() } finally { batchAdopting.value = false } }
 function openBatchFolder() { batchFolder.value = ''; batchFolderVisible.value = true }
 function openBatchTags() { batchTags.value = []; batchTagsVisible.value = true }
 async function applyBatchFolder() { batchUpdating.value = true; try { await caseApi.batchUpdate({ ids: selectedRows.value.map((row) => row.id), folder: batchFolder.value }); ElMessage.success('批量归类完成'); batchFolderVisible.value = false; await loadCases() } finally { batchUpdating.value = false } }
@@ -595,6 +649,7 @@ onMounted(async () => {
     await onProjectChange()
     if (route.query.create === 'manual' && canCreateCase.value) createVisible.value = true
     else if (route.query.action === 'import' && canCreateCase.value) importVisible.value = true
+    else if (route.query.review_task_id) showReviewTask(String(route.query.review_task_id))
     else if (route.query.case_id) await openDetail({ id: String(route.query.case_id) })
   }
 })

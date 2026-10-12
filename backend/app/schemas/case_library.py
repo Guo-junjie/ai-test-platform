@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal, Optional
 from uuid import UUID
 
@@ -81,6 +82,39 @@ class UpdateCaseRequest(BaseModel):
     execution_kind: str | None = None  # manual → api 时必须填写真实请求与断言
     folder: str | None = Field(default=None, max_length=200)
     tags: list[str] | None = None
+
+
+class CreateCaseReviewTaskRequest(BaseModel):
+    """把当前不可变用例版本提交给指定评审人。"""
+
+    reviewer_ids: list[UUID] = Field(min_length=1, max_length=20)
+    comment: str = Field(default="", max_length=2000)
+    due_at: datetime | None = None
+
+    @field_validator("reviewer_ids")
+    @classmethod
+    def unique_reviewers(cls, values: list[UUID]) -> list[UUID]:
+        reviewers = list(dict.fromkeys(values))
+        if not reviewers:
+            raise ValueError("至少指定一名评审人")
+        return reviewers
+
+    @field_validator("comment", mode="before")
+    @classmethod
+    def strip_review_comment(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+
+class CaseReviewTaskDecisionRequest(BaseModel):
+    decision: Literal["approve", "changes_requested"]
+    comment: str = Field(default="", max_length=2000)
+
+    @model_validator(mode="after")
+    def require_rejection_comment(self):
+        self.comment = self.comment.strip()
+        if self.decision == "changes_requested" and not self.comment:
+            raise ValueError("退回时必须填写修改意见")
+        return self
 
 
 class AdoptBatchRequest(BaseModel):

@@ -125,6 +125,7 @@ const typeLabels: Record<string, string> = {
   report: '报告',
   system: '系统',
   defect: '缺陷协作',
+  case_review: '用例评审',
 }
 
 const notifications = ref<any[]>([])

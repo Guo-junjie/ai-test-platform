@@ -42,6 +42,7 @@ REFERENCES = {
     "workflow_id": m.DefectWorkflow, "view_id": m.DefectView,
     "job_id": m.DefectJob, "attachment_id": m.DefectAttachment,
     "comment_id": m.DefectComment, "watcher_id": m.DefectWatcher,
+    "review_task_id": m.CaseReviewTask, "case_review_task_id": m.CaseReviewTask,
 }
 
 
@@ -100,6 +101,8 @@ def reference_model(key, path):
         return m.Project
     if key == "revision_id" and path.startswith("/api/defect-management"):
         return m.DefectWorkflowRevision
+    if key == "task_id" and path.startswith("/api/cases/review-tasks"):
+        return m.CaseReviewTask
     return REFERENCES.get(key)
 
 

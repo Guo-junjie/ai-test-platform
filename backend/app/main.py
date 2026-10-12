@@ -222,6 +222,8 @@ from app.api.coverage import router as coverage_router
 app.include_router(coverage_router, prefix="/api/coverage", tags=["代码覆盖率"])
 
 # 用例资产（能力3：AI 生成单接口用例·接纳闭环）
+from app.api.case_review_tasks import router as case_review_tasks_router
+app.include_router(case_review_tasks_router, prefix="/api/cases", tags=["用例评审任务"])
 from app.api.case_library import router as case_library_router
 app.include_router(case_library_router, prefix="/api/cases", tags=["用例资产"])
 

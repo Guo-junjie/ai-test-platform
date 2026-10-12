@@ -411,6 +411,18 @@ export const caseApi = {
     api.post('/cases/batch-update', data),
   /** 单条接纳 */
   adopt: (id: string) => api.post(`/cases/${id}/adopt`),
+  /** 当前项目可指派的评审人。 */
+  reviewers: (projectId: string) => api.get('/cases/reviewers', { params: { project_id: projectId } }),
+  /** 为当前不可变用例版本创建正式评审任务。 */
+  createReviewTask: (id: string, data: { reviewer_ids: string[]; comment?: string; due_at?: string | null }) =>
+    api.post(`/cases/${id}/review-tasks`, data),
+  /** 个人待办、本人发起或项目全部评审任务。 */
+  reviewTasks: (params: any) => api.get('/cases/review-tasks', { params }),
+  reviewTask: (taskId: string) => api.get(`/cases/review-tasks/${taskId}`),
+  caseReviewTasks: (caseId: string) => api.get(`/cases/${caseId}/review-tasks`),
+  decideReviewTask: (taskId: string, decision: 'approve' | 'changes_requested', comment = '') =>
+    api.post(`/cases/review-tasks/${taskId}/decision`, { decision, comment }),
+  /** 旧客户端兼容入口；新页面使用 createReviewTask。 */
   submitReview: (id: string) => api.post(`/cases/${id}/submit-review`),
   review: (id: string, decision: 'approve' | 'changes_requested', comment = '') =>
     api.post(`/cases/${id}/review`, { decision, comment }),
