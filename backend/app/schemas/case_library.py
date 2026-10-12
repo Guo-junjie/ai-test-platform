@@ -12,9 +12,51 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Literal, Optional
+from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+class CreateManualCaseRequest(BaseModel):
+    """人工录入的手工执行用例；步骤数组的顺序即执行顺序。"""
+
+    project_id: UUID
+    title: str = Field(min_length=1, max_length=500)
+    description: str = Field(default="", max_length=10000)
+    folder: str = Field(default="", max_length=200)
+    preconditions: str = Field(default="", max_length=10000)
+    steps: list[str] = Field(min_length=1, max_length=100)
+    expected_result: str = Field(min_length=1, max_length=10000)
+    priority: Literal["P0", "P1", "P2", "P3"] = "P2"
+    case_type: Literal["functional", "positive", "negative", "boundary", "exception"] = "functional"
+    tags: list[str] = Field(default_factory=list, max_length=20)
+    requirement_doc_id: UUID | None = None
+    requirement_ref: str = Field(default="", max_length=500)
+    allow_duplicate: bool = False
+
+    @field_validator("title", "expected_result", mode="before")
+    @classmethod
+    def strip_required_text(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("steps")
+    @classmethod
+    def validate_steps(cls, values: list[str]) -> list[str]:
+        steps = [value.strip() for value in values]
+        if any(not value for value in steps):
+            raise ValueError("每个操作步骤都必须填写内容")
+        if any(len(value) > 5000 for value in steps):
+            raise ValueError("单个操作步骤不能超过 5000 个字符")
+        return steps
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, values: list[str]) -> list[str]:
+        tags = list(dict.fromkeys(value.strip() for value in values if value.strip()))
+        if any(len(value) > 40 for value in tags):
+            raise ValueError("单个标签不能超过 40 个字符")
+        return tags
 
 
 class GenerateRequest(BaseModel):
@@ -56,21 +98,54 @@ class BatchUpdateCaseRequest(BaseModel):
 
 
 class CaseImportRow(BaseModel):
-    """用例导入的标准行；预检与提交共用，避免前端重复转换。"""
+    """预检后的标准导入行；提交阶段仍会重新执行同一组校验。"""
 
     title: str = Field(min_length=1, max_length=500)
-    description: str = ""
-    execution_kind: str = "api"
-    case_type: str = "positive"
-    priority: str = "P2"
-    folder: str = ""
-    tags: list[str] = Field(default_factory=list)
+    description: str = Field(default="", max_length=10000)
+    execution_kind: Literal["api", "manual"] = "api"
+    case_type: Literal["functional", "positive", "negative", "boundary", "exception"] = "positive"
+    priority: Literal["P0", "P1", "P2", "P3"] = "P2"
+    folder: str = Field(default="", max_length=200)
+    tags: list[str] = Field(default_factory=list, max_length=20)
     request_data: dict[str, Any] = Field(default_factory=dict)
     expected_result: dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("title", mode="before")
+    @classmethod
+    def strip_title(cls, value):
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("tags")
+    @classmethod
+    def normalize_import_tags(cls, values: list[str]) -> list[str]:
+        tags = list(dict.fromkeys(str(value).strip() for value in values if str(value).strip()))
+        if any(len(value) > 40 for value in tags):
+            raise ValueError("单个标签不能超过 40 个字符")
+        return tags
+
+    @model_validator(mode="after")
+    def validate_manual_content(self):
+        if self.execution_kind != "manual":
+            return self
+        steps = self.request_data.get("steps")
+        if not isinstance(steps, list) or not steps:
+            raise ValueError("手工用例至少需要一个操作步骤")
+        normalized_steps = [str(value).strip() for value in steps]
+        if any(not value for value in normalized_steps):
+            raise ValueError("每个操作步骤都必须填写内容")
+        if any(len(value) > 5000 for value in normalized_steps):
+            raise ValueError("单个操作步骤不能超过 5000 个字符")
+        expected = self.expected_result.get("text")
+        if not isinstance(expected, str) or not expected.strip():
+            raise ValueError("手工用例必须填写预期结果")
+        self.request_data = {**self.request_data, "steps": normalized_steps}
+        self.expected_result = {**self.expected_result, "text": expected.strip()}
+        return self
+
 
 class CaseImportCommitRequest(BaseModel):
-    project_id: str
+    project_id: UUID
+    duplicate_strategy: Literal["skip", "create"] = "skip"
     rows: list[CaseImportRow] = Field(min_length=1, max_length=2000)
 
 

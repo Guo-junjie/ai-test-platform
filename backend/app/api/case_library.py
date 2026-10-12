@@ -3,6 +3,8 @@
 
 提供：
 - POST /generate:       AI 生成并落库
+- POST /:               人工录入手工用例
+- GET /manual/options:  人工录入的目录、标签、需求选项
 - GET  /:               列表
 - GET  /{id}:           详情
 - PUT  /{id}:           编辑
@@ -23,8 +25,8 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from pydantic import BaseModel, Field, ValidationError
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.schemas.case_library import (
@@ -34,6 +36,8 @@ from app.schemas.case_library import (
     BatchUpdateCaseRequest,
     CaseAssetResponse,
     CaseImportCommitRequest,
+    CaseImportRow,
+    CreateManualCaseRequest,
 )
 from app.schemas.script import BindScriptRequest
 from app.models.database import (
@@ -41,7 +45,9 @@ from app.models.database import (
     CaseAssetStatus,
     CaseReviewEvent,
     Defect,
+    DefectReference,
     InterfaceDoc,
+    Project,
     RequirementDoc,
     TestCase,
     TestCaseAsset,
@@ -56,6 +62,7 @@ from app.models.database import (
     UserRole,
 )
 from app.modules.auth.dependencies import get_current_user, require_role
+from app.modules.defects.workflow import STATE_LABELS
 from app.modules.runs.case_readiness import api_case_errors
 from app.utils.database import get_db_session
 
@@ -360,6 +367,80 @@ async def list_cases(
     }
 
 
+@router.get("/manual/options")
+async def manual_case_options(
+    project_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    """人工录入所需的项目目录、标签和需求文档，不受列表分页限制。"""
+    if not (await db.execute(select(Project.id).where(Project.id == project_id))).scalar_one_or_none():
+        raise HTTPException(404, "项目不存在")
+    rows = (await db.execute(select(TestCaseAsset.folder, TestCaseAsset.tags).where(
+        TestCaseAsset.project_id == project_id,
+    ))).all()
+    documents = (await db.execute(select(RequirementDoc).where(
+        RequirementDoc.project_id == project_id,
+    ).order_by(RequirementDoc.created_at.desc()))).scalars().all()
+    return {"code": 0, "data": {
+        "folders": sorted({folder for folder, _ in rows if folder}),
+        "tags": sorted({tag for _, tags in rows for tag in tags or []}),
+        "requirements": [{"id": str(doc.id), "filename": doc.filename} for doc in documents],
+    }, "message": "ok"}
+
+
+@router.post("")
+async def create_manual_case(
+    req: CreateManualCaseRequest,
+    current_user: User = Depends(case_editor),
+    db: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    """创建人工用例及首版快照；同项目同标题需明确确认后才允许重复保存。"""
+    project = (await db.execute(select(Project).where(
+        Project.id == req.project_id,
+    ).with_for_update())).scalar_one_or_none()
+    if project is None:
+        raise HTTPException(404, "项目不存在")
+    if req.requirement_doc_id:
+        document = (await db.execute(select(RequirementDoc).where(
+            RequirementDoc.id == req.requirement_doc_id,
+            RequirementDoc.project_id == req.project_id,
+        ))).scalar_one_or_none()
+        if document is None:
+            raise HTTPException(422, "关联需求文档不存在或不属于当前项目")
+    if not req.allow_duplicate:
+        duplicates = (await db.execute(select(TestCaseAsset).where(
+            TestCaseAsset.project_id == req.project_id,
+            func.lower(func.trim(TestCaseAsset.title)) == req.title.lower(),
+        ).order_by(TestCaseAsset.created_at.desc()).limit(10))).scalars().all()
+        if duplicates:
+            raise HTTPException(409, detail={
+                "code": "CASE_DUPLICATE",
+                "message": "当前项目已存在同名用例，请检查后确认是否继续添加",
+                "duplicates": [{"id": str(item.id), "title": item.title,
+                                "folder": item.folder or "未归类"} for item in duplicates],
+            })
+    request_data = {
+        "preconditions": req.preconditions.strip(), "steps": req.steps,
+        "requirement_ref": req.requirement_ref.strip(),
+    }
+    if req.requirement_doc_id:
+        request_data["requirement_doc_id"] = str(req.requirement_doc_id)
+    asset = TestCaseAsset(
+        project_id=req.project_id, title=req.title, description=req.description.strip(),
+        execution_kind="manual", case_type=req.case_type, design_type=req.case_type,
+        priority=req.priority, folder=req.folder.strip() or None, tags=req.tags,
+        request_data=request_data, expected_result={"text": req.expected_result},
+        status=CaseAssetStatus.DRAFT, review_state="draft", source="manual", version=1,
+        generation_context={"channel": "manual_entry"}, created_by=current_user.id,
+    )
+    db.add(asset)
+    await db.flush()
+    _add_case_version(db, asset, current_user.id, "created")
+    await db.flush()
+    return {"code": 0, "data": _case_to_dict(asset), "message": "用例已保存为草稿"}
+
+
 @router.get("/{case_id}")
 async def get_case(
     case_id: str,
@@ -601,8 +682,9 @@ async def get_case_traceability(
     )).all()
     defect_rows = (await db.execute(
         select(Defect, TestCase)
-        .join(TestCase, TestCase.id == Defect.test_case_id)
-        .where(TestCase.case_asset_id == item.id)
+        .outerjoin(TestCase, TestCase.id == Defect.test_case_id)
+        .where(Defect.deleted_at.is_(None), or_(TestCase.case_asset_id == item.id,
+            Defect.id.in_(select(DefectReference.defect_id).where(DefectReference.case_asset_id == item.id))))
         .order_by(Defect.created_at.desc())
         .limit(20)
     )).all()
@@ -613,149 +695,10 @@ async def get_case_traceability(
         "created_by": str(item.created_by) if item.created_by else None,
         "created_at": item.created_at.isoformat() if item.created_at else None,
     }
-
-
-def _json_cell(value: Any, default: Any) -> Any:
-    if value is None or value == "":
-        return default
-    if isinstance(value, (dict, list)):
-        return value
-    try:
-        return json.loads(str(value))
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return default
-
-
-def _normalize_import_row(raw: dict[str, Any], row_no: int) -> dict[str, Any]:
-    title = str(raw.get("title") or raw.get("用例名称") or raw.get("名称") or "").strip()
-    kind = str(raw.get("execution_kind") or raw.get("执行类型") or "api").strip().lower()
-    method = str(raw.get("method") or raw.get("请求方法") or "GET").upper()
-    url = str(raw.get("url") or raw.get("请求地址") or "").strip()
-    request_data = _json_cell(raw.get("request_data") or raw.get("请求数据"), {})
-    if not request_data:
-        request_data = {
-            "method": method, "url": url,
-            "params": _json_cell(raw.get("params") or raw.get("查询参数"), {}),
-            "headers": _json_cell(raw.get("headers") or raw.get("请求头"), {}),
-            "body": _json_cell(raw.get("body") or raw.get("请求体"), None),
-        }
-    expected = _json_cell(raw.get("expected_result") or raw.get("预期结果"), {})
-    if not expected and raw.get("status_code"):
-        expected = {"status_code": int(raw["status_code"]), "assertions": []}
-    tags_raw = raw.get("tags") or raw.get("标签") or []
-    tags = tags_raw if isinstance(tags_raw, list) else [v.strip() for v in str(tags_raw).split(",") if v.strip()]
-    errors: list[str] = []
-    if not title:
-        errors.append("用例名称不能为空")
-    if kind not in {"api", "manual"}:
-        errors.append("执行类型只支持 api 或 manual")
-    if kind == "api" and not url:
-        errors.append("API 用例必须填写请求地址")
-    return {
-        "row_no": row_no,
-        "valid": not errors,
-        "errors": errors,
-        "data": {
-            "title": title, "description": str(raw.get("description") or raw.get("描述") or ""),
-            "execution_kind": kind, "case_type": str(raw.get("case_type") or raw.get("设计类型") or "positive"),
-            "priority": str(raw.get("priority") or raw.get("优先级") or "P2").upper(),
-            "folder": str(raw.get("folder") or raw.get("目录") or ""), "tags": tags,
-            "request_data": request_data, "expected_result": expected,
-        },
-    }
-
-
-@router.post("/import/preview")
-async def preview_case_import(
-    project_id: str = Form(...),
-    file: UploadFile = File(...),
-    current_user: User = Depends(case_editor),
-) -> dict[str, Any]:
-    """解析 CSV/JSON/XLSX，并返回逐行错误；预检不写入数据库。"""
-    content = await file.read()
-    suffix = (file.filename or "").lower().rsplit(".", 1)[-1]
-    try:
-        if suffix == "csv":
-            text = content.decode("utf-8-sig")
-            raw_rows = list(csv.DictReader(io.StringIO(text)))
-        elif suffix == "json":
-            parsed = json.loads(content.decode("utf-8-sig"))
-            raw_rows = parsed if isinstance(parsed, list) else parsed.get("rows", [])
-        elif suffix in {"xlsx", "xlsm"}:
-            from openpyxl import load_workbook
-            sheet = load_workbook(io.BytesIO(content), read_only=True, data_only=True).active
-            values = list(sheet.iter_rows(values_only=True))
-            headers = [str(v or "").strip() for v in (values[0] if values else [])]
-            raw_rows = [dict(zip(headers, row)) for row in values[1:]]
-        else:
-            raise HTTPException(415, "仅支持 CSV、JSON、XLSX 文件")
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(422, f"文件解析失败：{exc}") from exc
-    if len(raw_rows) > 2000:
-        raise HTTPException(422, "单次最多导入 2000 条用例")
-    rows = [_normalize_import_row(row, index + 2) for index, row in enumerate(raw_rows)]
-    return {"code": 0, "data": {
-        "project_id": project_id, "filename": file.filename, "rows": rows,
-        "success_count": sum(1 for row in rows if row["valid"]),
-        "failed_count": sum(1 for row in rows if not row["valid"]),
-    }, "message": "预检完成"}
-
-
-@router.post("/import/commit")
-async def commit_case_import(
-    req: CaseImportCommitRequest,
-    current_user: User = Depends(case_editor),
-    db: AsyncSession = Depends(get_db_session),
-) -> dict[str, Any]:
-    """提交已通过预检的标准行，原子写入用例资产与首个版本。"""
-    try:
-        project_id = uuid.UUID(req.project_id)
-    except ValueError as exc:
-        raise HTTPException(400, "项目 ID 格式错误") from exc
-    from app.models.database import Project
-    if not (await db.execute(select(Project.id).where(Project.id == project_id))).scalar_one_or_none():
-        raise HTTPException(404, "项目不存在")
-    assets: list[TestCaseAsset] = []
-    for row in req.rows:
-        data = row.model_dump()
-        asset = TestCaseAsset(
-            project_id=project_id, title=data["title"], description=data["description"],
-            execution_kind=data["execution_kind"], case_type=data["case_type"], design_type=data["case_type"],
-            priority=data["priority"], folder=data["folder"] or None,
-            tags=_normalize_tags(data["tags"]), request_data=data["request_data"],
-            expected_result=data["expected_result"], status=CaseAssetStatus.DRAFT,
-            review_state="draft", source="manual", version=1,
-            generation_context={"channel": "file_import"}, created_by=current_user.id,
-        )
-        db.add(asset)
-        assets.append(asset)
-    await db.flush()
-    for asset in assets:
-        _add_case_version(db, asset, current_user.id, "imported")
-    await db.flush()
-    return {"code": 0, "data": {"imported": len(assets), "asset_ids": [str(a.id) for a in assets]}, "message": "导入完成"}
-
-
-@router.get("/import/template")
-async def download_case_import_template(
-    current_user: User = Depends(get_current_user),
-):
-    from openpyxl import Workbook
-    workbook = Workbook()
-    sheet = workbook.active
-    sheet.title = "用例导入"
-    sheet.append(["用例名称", "描述", "执行类型", "设计类型", "优先级", "目录", "标签", "请求方法", "请求地址", "查询参数", "请求头", "请求体", "预期结果"])
-    sheet.append(["查询商品列表", "正常查询", "api", "positive", "P1", "商品", "冒烟,回归", "GET", "/api/products", "{}", "{}", "", '{"status_code":200,"assertions":[]}'])
-    output = io.BytesIO()
-    workbook.save(output)
-    output.seek(0)
-    headers = {"Content-Disposition": 'attachment; filename="case-import-template.xlsx"'}
-    return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers=headers)
     if item.created_by:
-        creator = (await db.execute(select(User.username).where(User.id == item.created_by))).scalar_one_or_none()
-        source_trace["created_by_name"] = creator
+        source_trace["created_by_name"] = (await db.execute(
+            select(User.username).where(User.id == item.created_by)
+        )).scalar_one_or_none()
     if item.endpoint_id:
         endpoint_row = (await db.execute(
             select(ApiEndpoint, InterfaceDoc)
@@ -771,15 +714,14 @@ async def download_case_import_template(
             }
     requirement_doc_id = (item.request_data or {}).get("requirement_doc_id")
     if requirement_doc_id:
-        requirement = (await db.execute(
-            select(RequirementDoc).where(RequirementDoc.id == requirement_doc_id)
-        )).scalar_one_or_none()
+        requirement = (await db.execute(select(RequirementDoc).where(
+            RequirementDoc.id == uuid.UUID(str(requirement_doc_id)), RequirementDoc.project_id == item.project_id,
+        ))).scalar_one_or_none()
         if requirement:
             source_trace["requirement"] = {
                 "id": str(requirement.id), "filename": requirement.filename,
                 "parse_engine": requirement.parse_engine,
             }
-
     return {
         "code": 0,
         "data": {
@@ -804,12 +746,389 @@ async def download_case_import_template(
             "defects": [{
                 "id": str(defect.id), "title": defect.title,
                 "severity": _enum_value(defect.severity),
-                "status": defect.status or ("closed" if defect.is_resolved else "open"),
+                "status": STATE_LABELS.get(defect.workflow_state, defect.status),
+                "workflow_state": defect.workflow_state,
                 "created_at": defect.created_at.isoformat() if defect.created_at else None,
             } for defect, _case in defect_rows],
         },
         "message": "ok",
     }
+
+
+def _first_import_value(raw: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = raw.get(key)
+        if value is not None and value != "":
+            return value
+    return None
+
+
+def _json_import_cell(value: Any, default: Any, label: str, errors: list[str],
+                      expected_type: type | tuple[type, ...] | None = None) -> Any:
+    if value is None or value == "":
+        return default
+    parsed = value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value.strip())
+        except (TypeError, ValueError, json.JSONDecodeError):
+            errors.append(f"{label}必须是合法 JSON")
+            return default
+    if expected_type is not None and not isinstance(parsed, expected_type):
+        errors.append(f"{label}格式不正确")
+        return default
+    return parsed
+
+
+def _steps_import_cell(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value]
+    text = str(value or "").strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            return [str(item).strip() for item in parsed]
+    except (TypeError, ValueError, json.JSONDecodeError):
+        pass
+    separator = "||" if "||" in text else "\n"
+    return [part.strip() for part in text.split(separator) if part.strip()]
+
+
+def _body_import_cell(value: Any) -> Any:
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    try:
+        return json.loads(text)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return text
+
+
+def _validation_messages(exc: ValidationError) -> list[str]:
+    messages: list[str] = []
+    for error in exc.errors():
+        message = str(error.get("msg") or "字段校验失败").removeprefix("Value error, ")
+        if message not in messages:
+            messages.append(message)
+    return messages
+
+
+def _normalize_import_row(raw: dict[str, Any], row_no: int) -> dict[str, Any]:
+    errors: list[str] = []
+    title = str(_first_import_value(raw, "title", "用例名称", "名称") or "").strip()
+    kind_value = str(_first_import_value(raw, "execution_kind", "执行类型") or "api").strip().lower()
+    kind = {"接口": "api", "接口用例": "api", "api用例": "api",
+            "手工": "manual", "手工用例": "manual"}.get(kind_value, kind_value)
+    case_type_value = str(_first_import_value(raw, "case_type", "设计类型", "用例类型") or
+                          ("functional" if kind == "manual" else "positive")).strip().lower()
+    case_type = {"功能": "functional", "正向": "positive", "反向": "negative",
+                 "负向": "negative", "边界": "boundary", "异常": "exception"}.get(
+                     case_type_value, case_type_value)
+    priority = str(_first_import_value(raw, "priority", "优先级") or "P2").strip().upper()
+    description = str(_first_import_value(raw, "description", "描述", "用例说明") or "")
+    folder = str(_first_import_value(raw, "folder", "目录", "所属模块", "模块") or "").strip()
+    tags_raw = _first_import_value(raw, "tags", "标签") or []
+    tags = tags_raw if isinstance(tags_raw, list) else [value.strip() for value in
+        str(tags_raw).replace("，", ",").split(",") if value.strip()]
+
+    full_request = _first_import_value(raw, "request_data", "请求数据")
+    request_data = _json_import_cell(full_request, {}, "请求数据", errors, dict) if full_request else {}
+    raw_expected = _first_import_value(raw, "expected_result", "预期结果")
+
+    if kind == "manual":
+        steps_value = _first_import_value(raw, "steps", "操作步骤", "步骤")
+        steps = _steps_import_cell(steps_value if steps_value is not None else request_data.get("steps"))
+        request_data = {
+            **request_data,
+            "preconditions": str(_first_import_value(raw, "preconditions", "前置条件") or
+                                 request_data.get("preconditions") or "").strip(),
+            "steps": steps,
+            "requirement_ref": str(_first_import_value(raw, "requirement_ref", "需求编号/链接",
+                                                       "关联需求") or request_data.get("requirement_ref") or "").strip(),
+        }
+        requirement_doc_id = _first_import_value(raw, "requirement_doc_id", "关联需求文档ID") or request_data.get("requirement_doc_id")
+        if requirement_doc_id:
+            try:
+                request_data["requirement_doc_id"] = str(uuid.UUID(str(requirement_doc_id)))
+            except ValueError:
+                errors.append("关联需求文档 ID 格式错误")
+        if isinstance(raw_expected, dict):
+            expected_result = raw_expected
+        else:
+            expected_text = str(raw_expected or "").strip()
+            if expected_text.startswith("{"):
+                parsed_expected = _json_import_cell(expected_text, {}, "预期结果", errors, dict)
+                expected_result = parsed_expected
+            else:
+                expected_result = {"text": expected_text}
+        if not steps:
+            errors.append("手工用例至少需要一个操作步骤")
+        if not isinstance(expected_result.get("text"), str) or not expected_result["text"].strip():
+            errors.append("手工用例必须填写预期结果")
+    else:
+        method = str(_first_import_value(raw, "method", "请求方法") or request_data.get("method") or "GET").strip().upper()
+        url = str(_first_import_value(raw, "url", "请求地址") or request_data.get("url") or "").strip()
+        params_value = _first_import_value(raw, "params", "查询参数")
+        headers_value = _first_import_value(raw, "headers", "请求头")
+        request_data = {
+            **request_data,
+            "method": method,
+            "url": url,
+            "params": _json_import_cell(params_value, request_data.get("params", {}), "查询参数", errors, dict),
+            "headers": _json_import_cell(headers_value, request_data.get("headers", {}), "请求头", errors, dict),
+        }
+        body_value = _first_import_value(raw, "body", "请求体")
+        if body_value is not None:
+            request_data["body"] = _body_import_cell(body_value)
+        if isinstance(raw_expected, dict):
+            expected_result = dict(raw_expected)
+        elif raw_expected:
+            expected_text = str(raw_expected).strip()
+            if expected_text.startswith("{"):
+                expected_result = _json_import_cell(expected_text, {}, "预期结果", errors, dict)
+            else:
+                expected_result = {"assertions": [{"type": "contains", "expected": expected_text}]}
+        else:
+            expected_result = {}
+        status_value = _first_import_value(raw, "status_code", "期望状态码")
+        if status_value is not None:
+            try:
+                expected_result["status_code"] = int(status_value)
+            except (TypeError, ValueError):
+                errors.append("期望状态码必须是整数")
+        assertions_value = _first_import_value(raw, "assertions", "断言")
+        if assertions_value is not None:
+            expected_result["assertions"] = _json_import_cell(
+                assertions_value, [], "断言", errors, list)
+
+    data = {
+        "title": title, "description": description, "execution_kind": kind,
+        "case_type": case_type, "priority": priority, "folder": folder,
+        "tags": tags, "request_data": request_data, "expected_result": expected_result,
+    }
+    try:
+        validated = CaseImportRow.model_validate(data)
+        data = validated.model_dump()
+    except ValidationError as exc:
+        errors.extend(_validation_messages(exc))
+    if kind == "api":
+        errors.extend(api_case_errors(request_data, expected_result))
+    errors = list(dict.fromkeys(errors))
+    return {"row_no": row_no, "valid": not errors, "errors": errors, "duplicate": False, "data": data}
+
+
+@router.post("/import/preview")
+async def preview_case_import(
+    project_id: str = Form(...),
+    file: UploadFile = File(...),
+    current_user: User = Depends(case_editor),
+    db: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    """解析 CSV/JSON/XLSX，并返回逐行错误；预检不写入数据库。"""
+    try:
+        project_uuid = uuid.UUID(project_id)
+    except ValueError as exc:
+        raise HTTPException(400, "项目 ID 格式错误") from exc
+    if not (await db.execute(select(Project.id).where(Project.id == project_uuid))).scalar_one_or_none():
+        raise HTTPException(404, "项目不存在")
+    content = await file.read()
+    suffix = (file.filename or "").lower().rsplit(".", 1)[-1]
+    try:
+        if suffix == "csv":
+            text = content.decode("utf-8-sig")
+            raw_rows = list(csv.DictReader(io.StringIO(text)))
+        elif suffix == "json":
+            parsed = json.loads(content.decode("utf-8-sig"))
+            raw_rows = parsed if isinstance(parsed, list) else parsed.get("rows", []) if isinstance(parsed, dict) else []
+        elif suffix in {"xlsx", "xlsm"}:
+            from openpyxl import load_workbook
+            sheet = load_workbook(io.BytesIO(content), read_only=True, data_only=True).active
+            values = list(sheet.iter_rows(values_only=True))
+            headers = [str(v or "").strip() for v in (values[0] if values else [])]
+            raw_rows = [dict(zip(headers, row)) for row in values[1:]]
+        else:
+            raise HTTPException(415, "仅支持 CSV、JSON、XLSX 文件")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(422, f"文件解析失败：{exc}") from exc
+    raw_rows = [row for row in raw_rows if isinstance(row, dict) and any(value not in (None, "") for value in row.values())]
+    if not raw_rows:
+        raise HTTPException(422, "文件中没有可识别的数据行")
+    if len(raw_rows) > 2000:
+        raise HTTPException(422, "单次最多导入 2000 条用例")
+    rows = [_normalize_import_row(row, index + 2) for index, row in enumerate(raw_rows)]
+
+    requirement_ids = {
+        uuid.UUID(str(row["data"]["request_data"]["requirement_doc_id"]))
+        for row in rows
+        if row["data"].get("request_data", {}).get("requirement_doc_id")
+        and "关联需求文档 ID 格式错误" not in row["errors"]
+    }
+    valid_requirement_ids = set((await db.execute(select(RequirementDoc.id).where(
+        RequirementDoc.project_id == project_uuid,
+        RequirementDoc.id.in_(requirement_ids),
+    ))).scalars().all()) if requirement_ids else set()
+    for row in rows:
+        requirement_doc_id = row["data"].get("request_data", {}).get("requirement_doc_id")
+        if requirement_doc_id and uuid.UUID(str(requirement_doc_id)) not in valid_requirement_ids:
+            row["errors"].append("关联需求文档不存在或不属于当前项目")
+            row["valid"] = False
+
+    normalized_titles = {row["data"]["title"].strip().lower() for row in rows if row["data"].get("title")}
+    existing_rows = (await db.execute(select(TestCaseAsset.id, TestCaseAsset.title, TestCaseAsset.folder).where(
+        TestCaseAsset.project_id == project_uuid,
+        func.lower(func.trim(TestCaseAsset.title)).in_(normalized_titles),
+    ))).all() if normalized_titles else []
+    existing_by_title: dict[str, list[dict[str, str]]] = {}
+    for asset_id, title, folder in existing_rows:
+        existing_by_title.setdefault(title.strip().lower(), []).append({
+            "id": str(asset_id), "title": title, "folder": folder or "未归类",
+        })
+    seen_titles: set[str] = set()
+    duplicate_count = 0
+    for row in rows:
+        key = row["data"].get("title", "").strip().lower()
+        existing_duplicates = existing_by_title.get(key, [])
+        row["duplicate"] = bool(key and (existing_duplicates or key in seen_titles))
+        row["duplicates"] = existing_duplicates
+        if row["duplicate"]:
+            duplicate_count += 1
+        if key:
+            seen_titles.add(key)
+    return {"code": 0, "data": {
+        "project_id": project_id, "filename": file.filename, "rows": rows,
+        "success_count": sum(1 for row in rows if row["valid"]),
+        "failed_count": sum(1 for row in rows if not row["valid"]),
+        "duplicate_count": duplicate_count,
+    }, "message": "预检完成"}
+
+
+@router.post("/import/commit")
+async def commit_case_import(
+    req: CaseImportCommitRequest,
+    current_user: User = Depends(case_editor),
+    db: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    """提交已通过预检的标准行，原子写入用例资产与首个版本。"""
+    project_id = req.project_id
+    if not (await db.execute(select(Project.id).where(Project.id == project_id))).scalar_one_or_none():
+        raise HTTPException(404, "项目不存在")
+
+    row_errors: list[str] = []
+    for index, row in enumerate(req.rows, start=1):
+        if row.execution_kind == "api":
+            errors = api_case_errors(row.request_data, row.expected_result)
+            if errors:
+                row_errors.append(f"第 {index} 条：{'；'.join(errors)}")
+    if row_errors:
+        raise HTTPException(422, "导入数据未通过校验：" + "；".join(row_errors[:10]))
+
+    try:
+        requirement_ids = {
+            uuid.UUID(str(row.request_data["requirement_doc_id"]))
+            for row in req.rows if row.request_data.get("requirement_doc_id")
+        }
+    except ValueError as exc:
+        raise HTTPException(422, "关联需求文档 ID 格式错误") from exc
+    if requirement_ids:
+        valid_requirement_ids = set((await db.execute(select(RequirementDoc.id).where(
+            RequirementDoc.project_id == project_id,
+            RequirementDoc.id.in_(requirement_ids),
+        ))).scalars().all())
+        if valid_requirement_ids != requirement_ids:
+            raise HTTPException(422, "部分关联需求文档不存在或不属于当前项目")
+
+    title_keys = {row.title.strip().lower() for row in req.rows}
+    existing_titles = set((await db.execute(select(func.lower(func.trim(TestCaseAsset.title))).where(
+        TestCaseAsset.project_id == project_id,
+        func.lower(func.trim(TestCaseAsset.title)).in_(title_keys),
+    ))).scalars().all()) if title_keys else set()
+    assets: list[TestCaseAsset] = []
+    skipped = 0
+    accepted_titles: set[str] = set()
+    for row in req.rows:
+        data = row.model_dump()
+        title_key = data["title"].strip().lower()
+        if req.duplicate_strategy == "skip" and (title_key in existing_titles or title_key in accepted_titles):
+            skipped += 1
+            continue
+        asset = TestCaseAsset(
+            project_id=project_id, title=data["title"], description=data["description"],
+            execution_kind=data["execution_kind"], case_type=data["case_type"], design_type=data["case_type"],
+            priority=data["priority"], folder=data["folder"] or None,
+            tags=_normalize_tags(data["tags"]), request_data=data["request_data"],
+            expected_result=data["expected_result"], status=CaseAssetStatus.DRAFT,
+            review_state="draft", source="manual", version=1,
+            generation_context={"channel": "file_import"}, created_by=current_user.id,
+        )
+        db.add(asset)
+        assets.append(asset)
+        accepted_titles.add(title_key)
+    if not assets:
+        return {"code": 0, "data": {"imported": 0, "skipped": skipped, "asset_ids": []},
+                "message": "没有需要导入的新用例"}
+    await db.flush()
+    for asset in assets:
+        _add_case_version(db, asset, current_user.id, "imported")
+    await db.flush()
+    return {"code": 0, "data": {"imported": len(assets), "skipped": skipped,
+                                   "asset_ids": [str(a.id) for a in assets]}, "message": "导入完成"}
+
+
+@router.get("/import/template")
+async def download_case_import_template(
+    current_user: User = Depends(get_current_user),
+):
+    from openpyxl import Workbook
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "用例导入"
+    headers = [
+        "用例名称", "描述", "执行类型", "设计类型", "优先级", "目录", "标签",
+        "前置条件", "操作步骤", "关联需求文档ID", "需求编号/链接",
+        "请求方法", "请求地址", "查询参数", "请求头", "请求体",
+        "期望状态码", "断言", "预期结果",
+    ]
+    sheet.append(headers)
+    sheet.append([
+        "未登录用户无法提交订单", "验证订单权限控制", "manual", "negative", "P1", "订单/提交", "冒烟,权限",
+        "购物车中已有商品", '["点击提交订单","观察页面提示"]', "", "REQ-102",
+        "", "", "", "", "", "", "", "跳转登录页，且订单未创建",
+    ])
+    sheet.append([
+        "查询商品列表", "正常查询商品", "api", "positive", "P1", "商品/查询", "冒烟,回归",
+        "", "", "", "",
+        "GET", "/api/products", "{}", "{}", "", "200", '[]', "",
+    ])
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = f"A1:S{sheet.max_row}"
+    for index, width in enumerate([28, 24, 13, 13, 10, 18, 18, 24, 36, 38, 24, 12, 28, 20, 20, 24, 13, 36, 32], start=1):
+        sheet.column_dimensions[sheet.cell(row=1, column=index).column_letter].width = width
+    guide = workbook.create_sheet("填写说明")
+    guide.append(["字段", "说明"])
+    guide_rows = [
+        ("执行类型", "api 或 manual"),
+        ("设计类型", "functional、positive、negative、boundary、exception"),
+        ("操作步骤", "手工用例必填；推荐填写 JSON 数组，也支持用 || 或换行分隔"),
+        ("预期结果", "手工用例填写可验证的文本；API 用例可填写响应包含文本"),
+        ("期望状态码", "API 用例可填写 100–599；状态码或断言至少填写一项"),
+        ("断言", "API 用例填写 JSON 数组，例如 [{\"type\":\"json_path\",\"path\":\"$.data.id\",\"operator\":\"not_null\"}]"),
+        ("关联需求文档ID", "选填，必须是当前项目已有需求文档的 UUID"),
+    ]
+    for row in guide_rows:
+        guide.append(row)
+    guide.column_dimensions["A"].width = 22
+    guide.column_dimensions["B"].width = 100
+    output = io.BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    headers = {"Content-Disposition": 'attachment; filename="case-import-template.xlsx"'}
+    return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers=headers)
 
 
 @router.delete("/{case_id}")

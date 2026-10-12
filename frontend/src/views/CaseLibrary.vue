@@ -3,16 +3,17 @@
     <el-card shadow="hover" class="library-header">
       <div class="header-row">
         <div>
-          <h2>用例库</h2>
-          <p>统一管理需求、接口文档与人工设计产生的测试资产</p>
+          <h2>用例管理与评审</h2>
+          <p>统一管理需求、接口文档、文件导入与人工设计产生的测试资产</p>
         </div>
         <div class="project-picker">
           <span>项目</span>
           <el-select v-model="projectId" placeholder="选择项目" filterable @change="onProjectChange">
             <el-option v-for="project in projects" :key="project.id" :label="project.name" :value="project.id" />
           </el-select>
-          <el-upload :auto-upload="false" :show-file-list="false" accept=".csv,.json,.xlsx" :on-change="handleImportFile"><el-button :disabled="!projectId">导入用例</el-button></el-upload>
-          <el-button text type="primary" @click="downloadTemplate">下载模板</el-button>
+          <el-button v-if="canCreateCase" type="primary" :icon="Plus" :disabled="!projectId" @click="createVisible = true">新建用例</el-button>
+          <el-button v-if="canCreateCase" :icon="Upload" :disabled="!projectId" @click="importVisible = true">批量导入</el-button>
+          <el-button :icon="MagicStick" :disabled="!projectId" @click="goCaseGeneration">智能生成</el-button>
           <el-button :loading="listLoading" @click="loadCases">刷新</el-button>
         </div>
       </div>
@@ -69,11 +70,13 @@
         </el-button>
       </div>
 
-      <el-table :data="cases" row-key="id" stripe @selection-change="onSelectionChange">
+      <div ref="caseTableContainer">
+      <el-table ref="caseTable" :data="cases" row-key="id" stripe :row-class-name="caseRowClass" @selection-change="onSelectionChange">
         <el-table-column type="selection" width="46" />
         <el-table-column label="用例" min-width="280">
           <template #default="{ row }">
             <button class="case-title" type="button" @click="openDetail(row)">{{ row.title }}</button>
+            <el-tag v-if="row.id === highlightedCaseId" size="small" type="success" class="new-case-tag">新添加</el-tag>
             <div class="case-description">{{ row.description || '暂无描述' }}</div>
             <div class="case-meta">
               <el-tag v-if="row.folder" size="small" effect="plain">{{ row.folder }}</el-tag>
@@ -141,9 +144,18 @@
           </template>
         </el-table-column>
       </el-table>
+      </div>
 
       <el-empty v-if="projectId && !listLoading && cases.length === 0" :description="libraryTab === 'review' ? '没有待评审用例' : libraryTab === 'archived' ? '归档区暂无用例' : '当前筛选条件下没有用例'">
         <el-button v-if="libraryTab !== 'all'" type="primary" plain @click="libraryTab='all';onLibraryTabChange()">查看全部用例</el-button>
+        <template v-else-if="canCreateCase">
+          <p class="empty-hint">可以逐条录入、批量迁移已有资产，或从需求和接口文档智能生成。</p>
+          <div class="empty-actions">
+            <el-button type="primary" :icon="Plus" @click="createVisible = true">新建用例</el-button>
+            <el-button :icon="Upload" @click="importVisible = true">批量导入</el-button>
+            <el-button :icon="MagicStick" @click="goCaseGeneration">智能生成</el-button>
+          </div>
+        </template>
       </el-empty>
       <el-empty v-if="!projectId" description="请先选择项目" />
       <el-pagination
@@ -156,6 +168,9 @@
         @current-change="loadCases"
       />
     </el-card>
+
+    <manual-case-drawer v-model="createVisible" :project-id="projectId" :project-name="projects.find(project => project.id === projectId)?.name || '当前项目'" @saved="onManualCaseSaved" />
+    <case-import-dialog v-model="importVisible" :project-id="projectId" @imported="onCasesImported" />
 
     <el-drawer v-model="detailVisible" size="min(920px, 96vw)" destroy-on-close class="case-drawer">
       <template #header>
@@ -196,7 +211,8 @@
               <el-descriptions-item label="执行类型">{{ detailCase?.execution_kind === 'manual' ? '手工执行' : 'API 自动执行' }}</el-descriptions-item>
               <el-descriptions-item label="优先级">{{ detailCase?.priority }}</el-descriptions-item>
               <el-descriptions-item label="业务归类">{{ detailCase?.folder || '未归类' }}</el-descriptions-item>
-              <el-descriptions-item label="设计类型">{{ detailCase?.case_type || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="设计类型">{{ caseTypeLabel(detailCase?.case_type) }}</el-descriptions-item>
+              <el-descriptions-item v-if="detailCase?.request_data?.requirement_ref" label="关联需求" :span="2">{{ detailCase.request_data.requirement_ref }}</el-descriptions-item>
               <el-descriptions-item label="标签" :span="2">
                 <el-tag v-for="tag in detailCase?.tags || []" :key="tag" size="small" type="info" effect="plain" class="tag-gap">{{ tag }}</el-tag>
                 <span v-if="!(detailCase?.tags || []).length">—</span>
@@ -208,6 +224,9 @@
 
           <el-tab-pane label="请求与断言" name="request">
             <template v-if="editing ? editor.execution_kind === 'manual' : detailCase?.execution_kind === 'manual'">
+              <div class="section-title">前置条件</div>
+              <el-input v-if="editing" v-model="editor.preconditions" type="textarea" :rows="3" maxlength="10000" placeholder="执行用例前需要满足的条件" />
+              <p v-else class="manual-text">{{ detailCase?.request_data?.preconditions || '无' }}</p>
               <div class="section-title">执行步骤</div>
               <template v-if="editing">
                 <div v-for="(step, index) in editor.manualSteps" :key="index" class="step-row">
@@ -218,7 +237,7 @@
               </template>
               <template v-else>
                 <ol class="manual-steps"><li v-for="(step, index) in detailCase?.request_data?.steps || []" :key="index">{{ step }}</li></ol>
-                <div class="section-title">预期结果</div><p>{{ detailCase?.expected_result?.text || '—' }}</p>
+                <div class="section-title">预期结果</div><p class="manual-text">{{ detailCase?.expected_result?.text || '—' }}</p>
               </template>
             </template>
 
@@ -284,7 +303,7 @@
               <div class="trace-card"><div class="section-title">当前计划引用</div><el-table :data="traceability.plans || []" size="small" empty-text="尚未加入测试计划"><el-table-column prop="name" label="计划" /><el-table-column label="启用" width="80"><template #default="{ row }">{{ row.enabled ? '是' : '否' }}</template></el-table-column><el-table-column prop="status" label="状态" width="100" /></el-table></div>
               <div class="trace-card"><div class="section-title">计划版本引用</div><el-table :data="traceability.plan_revisions || []" size="small" empty-text="尚未被已发布计划版本引用"><el-table-column prop="plan_name" label="计划" /><el-table-column label="版本" width="80"><template #default="{ row }">r{{ row.revision }}</template></el-table-column><el-table-column prop="revision_status" label="状态" width="110" /><el-table-column label="发布时间" width="170"><template #default="{ row }">{{ formatTime(row.published_at) }}</template></el-table-column></el-table></div>
               <div class="trace-card"><div class="section-title">最近运行结果</div><el-table :data="traceability.recent_runs || []" size="small" empty-text="暂无可追溯运行；新执行会自动建立关联"><el-table-column label="结果" width="90"><template #default="{ row }"><el-tag size="small" :type="row.passed ? 'success' : 'danger'">{{ row.passed === null ? '未完成' : row.passed ? '通过' : '失败' }}</el-tag></template></el-table-column><el-table-column prop="status_code" label="HTTP" width="80" /><el-table-column prop="response_time_ms" label="耗时(ms)" width="100" /><el-table-column label="执行时间"><template #default="{ row }">{{ formatTime(row.executed_at) }}</template></el-table-column></el-table></div>
-              <div class="trace-card"><div class="section-title">关联缺陷</div><el-table :data="traceability.defects || []" size="small" empty-text="暂无关联缺陷"><el-table-column prop="title" label="缺陷" /><el-table-column prop="severity" label="严重度" width="100" /><el-table-column prop="status" label="状态" width="100" /></el-table></div>
+              <div class="trace-card"><div class="section-title">关联缺陷</div><el-table :data="traceability.defects || []" size="small" empty-text="暂无关联缺陷"><el-table-column label="缺陷" min-width="220"><template #default="{ row }"><el-button link type="primary" @click="$router.push(`/defects/${row.id}`)">{{ row.title }}</el-button></template></el-table-column><el-table-column prop="severity" label="严重度" width="100" /><el-table-column prop="status" label="状态" width="100" /></el-table></div>
             </template>
           </el-tab-pane>
 
@@ -316,8 +335,6 @@
 
     <el-dialog v-model="reviewEventsVisible" title="用例评审记录" width="620px"><el-timeline v-if="reviewEvents.length"><el-timeline-item v-for="event in reviewEvents" :key="event.id" :timestamp="formatTime(event.created_at)">{{ reviewActionLabel(event.action) }} · {{ event.actor_name || event.actor_id }}<div v-if="event.comment">{{ event.comment }}</div></el-timeline-item></el-timeline><el-empty v-else description="尚无评审记录" /></el-dialog>
 
-    <el-dialog v-model="importVisible" title="用例导入预检" width="820px"><el-alert :title="`可导入 ${importSuccess} 条，错误 ${importFailed} 条；只有通过预检的行会提交。`" :type="importFailed ? 'warning' : 'success'" :closable="false" show-icon/><el-table :data="importRows" max-height="430" style="margin-top:14px"><el-table-column prop="row_no" label="行" width="65"/><el-table-column label="用例名称" min-width="220"><template #default="{row}">{{ row.data?.title || '—' }}</template></el-table-column><el-table-column label="类型" width="90"><template #default="{row}">{{ row.data?.execution_kind }}</template></el-table-column><el-table-column label="校验" min-width="260"><template #default="{row}"><el-tag :type="row.valid?'success':'danger'">{{ row.valid?'通过':'错误' }}</el-tag><span class="import-error">{{ (row.errors||[]).join('；') }}</span></template></el-table-column></el-table><template #footer><el-button @click="importVisible=false">取消</el-button><el-button type="primary" :loading="importing" :disabled="!importSuccess" @click="commitImport">导入 {{ importSuccess }} 条</el-button></template></el-dialog>
-
     <el-dialog v-model="addToPlanVisible" :title="addIntent === 'run' ? '运行用例' : '加入测试计划'" width="560px" destroy-on-close @open="loadPlansIfNeeded">
       <el-alert v-if="addIntent === 'run'" type="info" :closable="false" show-icon title="企业执行以已发布计划版本为准。加入后将前往测试计划页完成发布并选择环境运行。" />
       <el-form label-width="90px" class="plan-form">
@@ -332,11 +349,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineComponent, h, onMounted, ref } from 'vue'
+import { computed, defineComponent, h, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElButton, ElCheckbox, ElInput, ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, MoreFilled, Plus } from '@element-plus/icons-vue'
+import { Delete, MagicStick, MoreFilled, Plus, Upload } from '@element-plus/icons-vue'
 import { caseApi, planApi, projectApi, secretApi } from '@/api'
+import ManualCaseDrawer from '@/components/ManualCaseDrawer.vue'
+import CaseImportDialog from '@/components/CaseImportDialog.vue'
+import { MANUAL_CASE_TYPES } from '@/types/manualCase'
+import { useAuthStore } from '@/stores'
 
 type KeyValueRow = { key: string; value: string; enabled: boolean }
 type AssertionRow = { type: string; path: string; operator: string; value: string; raw?: any }
@@ -361,6 +382,13 @@ const KeyValueEditor = defineComponent({
 
 const route = useRoute()
 const router = useRouter()
+const auth = useAuthStore()
+const canCreateCase = computed(() => ['super_admin', 'admin', 'test_manager', 'tester'].includes(auth.user?.role || ''))
+const createVisible = ref(false)
+const highlightedCaseId = ref('')
+const caseTable = ref<any>()
+const caseTableContainer = ref<HTMLElement>()
+let highlightTimer: ReturnType<typeof setTimeout> | undefined
 const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']
 const projects = ref<any[]>([])
 const projectId = ref('')
@@ -405,10 +433,6 @@ const batchFolder = ref('')
 const batchTags = ref<string[]>([])
 const batchUpdating = ref(false)
 const importVisible = ref(false)
-const importing = ref(false)
-const importRows = ref<any[]>([])
-const importSuccess = ref(0)
-const importFailed = ref(0)
 const credentials = ref<any[]>([])
 const selectedCredential = ref('')
 
@@ -438,6 +462,20 @@ const versionDiffRows = computed(() => {
 })
 
 function sourceLabel(value?: string) { return SOURCE_LABELS[value || ''] || value || '未知来源' }
+function caseTypeLabel(value?: string) { return MANUAL_CASE_TYPES.find(type => type.value === value)?.label || value || '—' }
+function caseRowClass({ row }: { row: any }) { return row.id === highlightedCaseId.value ? 'new-case-row' : '' }
+async function onManualCaseSaved(asset: any) {
+  libraryTab.value = 'all'; activeType.value = 'all'; activeSource.value = ''; searchKeyword.value = ''; page.value = 1
+  selectedRows.value = []; caseTable.value?.clearSelection()
+  highlightedCaseId.value = asset.id
+  await loadCases()
+  if (!cases.value.some(item => item.id === asset.id)) { cases.value.unshift(asset); totalCases.value += 1 }
+  await nextTick()
+  caseTableContainer.value?.querySelector('.new-case-row')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  if (highlightTimer) clearTimeout(highlightTimer)
+  highlightTimer = setTimeout(() => { highlightedCaseId.value = '' }, 15000)
+}
+onBeforeUnmount(() => { if (highlightTimer) clearTimeout(highlightTimer) })
 function sourceType(value?: string) { return SOURCE_TYPES[value || ''] || 'info' }
 function priorityType(value?: string) { return PRIORITY_TYPES[value || ''] || 'info' }
 function reviewLabel(row: any) { if (row?.status === 'deprecated') return '已废弃'; return ({ draft: '草稿', pending: '待评审', approved: '已批准', changes_requested: '已退回' } as any)[row?.review_state] || row?.status || '—' }
@@ -448,7 +486,7 @@ function formatDiffValue(value: any) { return typeof value === 'string' ? value 
 function authLabel(value?: string) { return ({ none: '无认证', bearer: 'Bearer Token', basic: 'Basic Auth', api_key: 'API Key' } as any)[value || 'none'] || value }
 function assertionLabel(value: string) { return ({ status_code: '状态码', json_path: 'JSON 路径', contains: '包含文本', response_time: '响应时间', jsonschema: 'JSON Schema' } as any)[value] || value }
 function assertionValue(row: any) { return row.type === 'response_time' ? `${row.max_ms ?? row.value} ms` : prettyJson(row.expected ?? row.schema ?? row.value) }
-function changeTypeLabel(value: string) { return ({ generated: '生成', baseline: '基线', edit: '编辑', classify: '归类', copied: '复制' } as any)[value] || value }
+function changeTypeLabel(value: string) { return ({ created: '人工创建', imported: '导入', generated: '生成', baseline: '基线', edit: '编辑', classify: '归类', copied: '复制' } as any)[value] || value }
 function reviewActionLabel(value: string) { return ({ submit: '提交评审', approve: '批准', changes_requested: '退回', edit: '编辑', deprecate: '废弃' } as any)[value] || value }
 
 function objectToRows(value: any): KeyValueRow[] { return value && !Array.isArray(value) && typeof value === 'object' ? Object.entries(value).map(([key, item]) => ({ key, value: typeof item === 'string' ? item : JSON.stringify(item), enabled: true })) : [] }
@@ -475,7 +513,7 @@ function hydrateEditor(item: any) {
     method: String(request.method || 'GET').toUpperCase(), url: request.url || '/', params: objectToRows(request.params), headers: objectToRows(request.headers),
     bodyMode: body === undefined || body === null || body === '' ? 'none' : typeof body === 'string' ? 'text' : 'json', bodyText: body === undefined || body === null ? '' : typeof body === 'string' ? body : JSON.stringify(body, null, 2),
     auth: { type: request.auth?.type || 'none', token: request.auth?.token || '', username: request.auth?.username || '', password: request.auth?.password || '', key: request.auth?.key || '', value: request.auth?.value || '', in: request.auth?.in || 'header' },
-    expectedStatus: expected.status_code ?? 200, assertions: (expected.assertions || []).map(assertionToRow), manualSteps: [...(request.steps || [])], manualExpected: expected.text || '',
+    expectedStatus: expected.status_code ?? 200, assertions: (expected.assertions || []).map(assertionToRow), manualSteps: [...(request.steps || [])], manualExpected: expected.text || '', preconditions: request.preconditions || '',
   }
 }
 
@@ -483,6 +521,7 @@ async function openDetail(row: any, edit = false) {
   detailVisible.value = true; detailLoading.value = true; detailTab.value = edit ? 'overview' : 'overview'; editing.value = edit
   try {
     const [detailRes, versionRes] = await Promise.all([caseApi.get(row.id), caseApi.versions(row.id)]) as any[]
+    if (detailRes?.data?.project_id && detailRes.data.project_id !== projectId.value) { detailVisible.value = false; ElMessage.warning('该用例不属于当前项目'); return }
     detailCase.value = detailRes?.data || row; versions.value = versionRes?.data?.items || []; hydrateEditor(detailCase.value)
     compareRight.value = versions.value[0]?.version ?? null; compareLeft.value = versions.value[1]?.version ?? versions.value[0]?.version ?? null
     loadTraceability(row.id)
@@ -507,7 +546,7 @@ async function saveEdit() {
   if (!editor.value.title.trim()) { ElMessage.warning('请输入用例标题'); return }
   let requestData: any; let expectedResult: any
   try {
-    if (editor.value.execution_kind === 'manual') { requestData = { ...requestExtras.value, steps: editor.value.manualSteps.map((step: string) => step.trim()).filter(Boolean) }; expectedResult = { ...expectedExtras.value, text: editor.value.manualExpected.trim() } }
+    if (editor.value.execution_kind === 'manual') { requestData = { ...requestExtras.value, preconditions: editor.value.preconditions, steps: editor.value.manualSteps.map((step: string) => step.trim()).filter(Boolean) }; expectedResult = { ...expectedExtras.value, text: editor.value.manualExpected.trim() } }
     else {
       if (!editor.value.url.startsWith('/') || editor.value.url.startsWith('//')) throw new Error('请求 URL 必须是以 / 开头的相对路径')
       let body: any = undefined; if (editor.value.bodyMode === 'json') { try { body = JSON.parse(editor.value.bodyText || '{}') } catch { throw new Error('Body 必须是合法 JSON') } } else if (editor.value.bodyMode === 'text') body = editor.value.bodyText
@@ -526,9 +565,8 @@ async function saveEdit() {
 
 async function handleMore(command: string, row: any) { if (command === 'edit') return openDetail(row, true); if (command === 'assert') return router.push(`/case-assert/${row.id}`); if (command === 'copy') return copyCase(row); if (command === 'review-events') return showReviewEvents(row); if (command === 'submit') return submitReview(row); if (command === 'approve') return adopt(row); if (command === 'changes') return requestChanges(row); if (command === 'plan') return openAddToPlan([row.id]); if (command === 'deprecate') return deprecate(row); if (command === 'delete') return deleteCase(row) }
 
-async function handleImportFile(uploadFile: any) { if (!projectId.value || !uploadFile?.raw) return; importing.value = true; try { const res: any = await caseApi.importPreview(projectId.value, uploadFile.raw); importRows.value = res?.data?.rows || []; importSuccess.value = res?.data?.success_count || 0; importFailed.value = res?.data?.failed_count || 0; importVisible.value = true } finally { importing.value = false } }
-async function commitImport() { importing.value = true; try { await caseApi.importCommit({ project_id: projectId.value, rows: importRows.value.filter(row => row.valid).map(row => row.data) }); ElMessage.success(`已导入 ${importSuccess.value} 条用例`); importVisible.value = false; await loadCases() } finally { importing.value = false } }
-async function downloadTemplate() { const res: any = await caseApi.importTemplate(); const blob = new Blob([res], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = '用例导入模板.xlsx'; link.click(); URL.revokeObjectURL(url) }
+function goCaseGeneration() { router.push({ path: '/case-generation', query: { project_id: projectId.value } }) }
+async function onCasesImported() { libraryTab.value = 'all'; page.value = 1; await loadCases() }
 async function copyCase(row: any) { const res: any = await caseApi.copy(row.id); ElMessage.success('已复制为草稿'); await loadCases(); if (res?.data) openDetail(res.data, true) }
 async function submitReview(row: any) { await caseApi.submitReview(row.id); ElMessage.success('已提交评审'); await loadCases(); if (detailVisible.value) detailVisible.value = false }
 async function adopt(row: any) { await caseApi.review(row.id, 'approve'); ElMessage.success('评审已批准'); await loadCases(); if (detailVisible.value) detailVisible.value = false }
@@ -549,14 +587,27 @@ function openAddToPlan(ids: string[], intent: 'add' | 'run' = 'add') { const cho
 async function loadPlansIfNeeded() { if (plans.value.length) return; plansLoading.value = true; try { const res: any = await planApi.list({ project_id: projectId.value, page: 1, page_size: 200 }); plans.value = res?.data?.list || []; if (!plans.value.length) planMode.value = 'new' } finally { plansLoading.value = false } }
 async function submitAddToPlan() { let planId = targetPlanId.value; if (planMode.value === 'new') { if (newPlanName.value.trim().length < 2) { ElMessage.warning('计划名称至少 2 个字符'); return } addToPlanLoading.value = true; try { const res: any = await planApi.create({ project_id: projectId.value, name: newPlanName.value.trim(), description: newPlanDesc.value.trim() || undefined }); planId = res?.data?.id || '' } finally { addToPlanLoading.value = false } } if (!planId) { ElMessage.warning('请选择目标计划'); return } addToPlanLoading.value = true; try { await planApi.addCases(planId, addToPlanCaseIds.value); ElMessage.success(`已加入计划：${addToPlanCaseIds.value.length} 条用例`); addToPlanVisible.value = false; if (addIntent.value === 'run') router.push(`/projects/${projectId.value}/plans`) } finally { addToPlanLoading.value = false; addIntent.value = 'add' } }
 
-onMounted(async () => { await loadProjects(); const pid = String(route.query.project_id || ''); if (pid && projects.value.some((project) => project.id === pid)) { projectId.value = pid; await onProjectChange() } })
+onMounted(async () => {
+  await loadProjects()
+  const pid = String(route.query.project_id || '')
+  if (pid && projects.value.some(project => project.id === pid)) {
+    projectId.value = pid
+    await onProjectChange()
+    if (route.query.create === 'manual' && canCreateCase.value) createVisible.value = true
+    else if (route.query.action === 'import' && canCreateCase.value) importVisible.value = true
+    else if (route.query.case_id) await openDetail({ id: String(route.query.case_id) })
+  }
+})
 </script>
 
 <style scoped>
 .case-library { display: flex; flex-direction: column; gap: 16px; }
+.new-case-tag { margin-left: 8px; }.empty-hint { color: var(--el-text-color-secondary); font-size: 13px; }.manual-text { white-space: pre-wrap; word-break: break-word; }
+:deep(.el-table .new-case-row td.el-table__cell) { background: var(--el-color-success-light-9); transition: background-color .3s; }
 .library-header h2 { margin: 0; font-size: 20px; }.library-header p { margin: 6px 0 0; color: var(--el-text-color-secondary); font-size: 13px; }
 .header-row, .filter-row, .batch-toolbar, .drawer-heading, .section-header, .request-line, .version-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.project-picker { display: flex; align-items: center; gap: 10px; }.project-picker .el-select { width: 240px; }
+.empty-actions { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; }
+.project-picker { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }.project-picker .el-select { width: 240px; }
 .filter-row { justify-content: flex-start; flex-wrap: wrap; margin-bottom: 14px; }.keyword-input { width: 280px; }.result-count { margin-left: auto; color: var(--el-text-color-secondary); font-size: 13px; }
 .batch-toolbar { justify-content: flex-start; min-height: 42px; margin-bottom: 12px; padding: 0 12px; background: var(--el-color-primary-light-9); border: 1px solid var(--el-color-primary-light-7); border-radius: 6px; }
 .case-title { padding: 0; color: var(--el-color-primary); font-weight: 600; text-align: left; background: none; border: 0; cursor: pointer; }.case-description { margin-top: 4px; color: var(--el-text-color-secondary); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }.case-meta { display: flex; align-items: center; gap: 4px; margin-top: 6px; font-size: 12px; color: var(--el-text-color-secondary); }
