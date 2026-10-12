@@ -3,6 +3,24 @@
     <el-row :gutter="16">
       <!-- 左：上传 + 解析 -->
       <el-col :xs="24" :lg="14">
+        <el-alert
+          v-if="restoringDoc"
+          type="info"
+          :closable="false"
+          show-icon
+          title="正在恢复上次解析的接口文档…"
+          style="margin-bottom: 12px"
+        />
+        <el-alert
+          v-if="parseFeedback"
+          :type="parseFeedback.type"
+          :closable="true"
+          show-icon
+          :title="parseFeedback.title"
+          :description="parseFeedback.description"
+          style="margin-bottom: 12px"
+          @close="parseFeedback = null"
+        />
         <el-card shadow="hover">
           <template #header>1. 选择项目并上传接口文档</template>
 
@@ -63,7 +81,7 @@
           </el-steps>
         </el-card>
 
-        <el-card shadow="hover" v-if="currentDoc" style="margin-top: 16px">
+        <el-card shadow="hover" v-if="currentDoc" v-loading="reparsingDocId === currentDoc.doc_id" style="margin-top: 16px">
           <template #header>
             2. 解析结果
             <el-tag size="small" style="margin-left: 8px">{{ currentDoc.parse_engine }}</el-tag>
@@ -171,7 +189,14 @@
                 <el-table-column prop="endpoint_count" label="接口数" width="70" align="center" />
                 <el-table-column label="操作" width="120" fixed="right">
                   <template #default="{ row }">
-                    <el-button size="small" text type="primary" @click="reparse(row)">重解析</el-button>
+                    <el-button
+                      size="small"
+                      text
+                      type="primary"
+                      :loading="reparsingDocId === row.doc_id"
+                      :disabled="!!reparsingDocId && reparsingDocId !== row.doc_id"
+                      @click="reparse(row)"
+                    >重解析</el-button>
                     <el-button size="small" text type="danger" @click="removeDoc(row)">删除</el-button>
                   </template>
                 </el-table-column>
@@ -217,6 +242,18 @@
         <el-descriptions-item v-if="activeTask.error_message" label="失败原因"><span class="error-text">{{ activeTask.error_message }}</span></el-descriptions-item>
       </el-descriptions>
       <el-result v-if="activeTask?.status === 'completed'" icon="success" title="生成完成" :sub-title="`已生成 ${activeTask.generated_case_count} 条草稿用例`"><template #extra><el-button type="primary" @click="router.push(`/case-library?project_id=${projectId}`)">进入用例管理与评审</el-button></template></el-result>
+      <div v-if="activeTask?.generated_cases?.length" class="generated-preview">
+        <div class="task-header">
+          <strong>生成内容预览</strong>
+          <span class="warning-text" v-if="activeTask.generated_cases_truncated">仅展示前 {{ activeTask.generated_cases.length }} 条</span>
+        </div>
+        <el-table :data="activeTask.generated_cases" size="small" border max-height="360">
+          <el-table-column prop="title" label="用例标题" show-overflow-tooltip />
+          <el-table-column prop="case_type" label="类型" width="100" />
+          <el-table-column prop="priority" label="优先级" width="80" />
+          <el-table-column prop="status" label="状态" width="90" />
+        </el-table>
+      </div>
     </el-drawer>
   </div>
 </template>
@@ -227,9 +264,16 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, type UploadFile } from 'element-plus'
 import { caseApi, docApi, projectApi } from '@/api'
 import ApiSpecTable from '@/components/ApiSpecTable.vue'
+import { useAuthStore } from '@/stores'
+import {
+  loadCaseGenerationSnapshot,
+  saveCaseGenerationSnapshot,
+} from '@/utils/caseGenerationState'
 
 const router = useRouter()
 const route = useRoute()
+const authStore = useAuthStore()
+const userId = computed(() => authStore.user?.id || 'anonymous')
 
 const projects = ref<any[]>([])
 const projectId = ref<string>('')
@@ -248,12 +292,19 @@ const assetTab = ref<'docs' | 'endpoints'>('docs')
 const docs = ref<any[]>([])
 const endpointRows = ref<any[]>([])
 const assetsLoading = ref(false)
+const restoringDoc = ref(false)
+const reparsingDocId = ref('')
+const parseFeedback = ref<{
+  type: 'success' | 'warning' | 'error'
+  title: string
+  description?: string
+} | null>(null)
 
 const activeStep = computed(() => {
-  if (!selectedFile.value) return 0
-  if (!currentDoc.value) return 1
-  if (selectedKeys.value.length === 0 && endpoints.value.length > 0) return 2
-  return 3
+  if (currentDoc.value) {
+    return selectedKeys.value.length > 0 ? 3 : 2
+  }
+  return selectedFile.value ? 1 : 0
 })
 
 function onFileChange(file: UploadFile) {
@@ -272,6 +323,8 @@ function clearFile() {
   currentDoc.value = null
   endpoints.value = []
   selectedKeys.value = []
+  updateStateQuery({ docId: '' })
+  persistState()
 }
 
 async function uploadAndParse() {
@@ -286,10 +339,7 @@ async function uploadAndParse() {
     const up: any = await docApi.upload(selectedFile.value, projectId.value, docType.value || undefined)
     const docId = up?.data?.doc_id
     const pr: any = await docApi.parse(docId, { use_ai: true, max_endpoints: 200 })
-    currentDoc.value = pr?.data || {}
-    endpoints.value = currentDoc.value.endpoints || []
-    degraded.value = !!currentDoc.value.degraded
-    unparsedNotes.value = currentDoc.value.unparsed_notes || []
+    applyParseResult(pr?.data || {}, selectedFile.value.name)
     await loadAssets()
     ElMessage.success('解析完成')
   } catch (e: any) {
@@ -336,6 +386,54 @@ const taskDetailVisible = ref(false)
 const activeTask = ref<any>()
 let taskPollTimer: ReturnType<typeof setTimeout> | undefined
 
+function persistState() {
+  saveCaseGenerationSnapshot(userId.value, 'interface', projectId.value, {
+    activeDocId: currentDoc.value?.doc_id,
+    activeTaskId: activeTask.value?.id,
+    selectedKeys: selectedKeys.value,
+    docType: docType.value,
+    overwrite: overwrite.value,
+    assetTab: assetTab.value,
+    taskDetailVisible: taskDetailVisible.value,
+    generationPreview: generationPreview.value,
+    previewVisible: previewVisible.value,
+  })
+}
+
+function updateStateQuery(values: { docId?: string; taskId?: string } = {}) {
+  router.replace({
+    path: route.path,
+    query: {
+      ...route.query,
+      project_id: projectId.value || undefined,
+      doc_id: values.docId === undefined ? currentDoc.value?.doc_id : values.docId || undefined,
+      task_id: values.taskId === undefined ? activeTask.value?.id : values.taskId || undefined,
+    },
+  })
+}
+
+function applyParseResult(data: any, filename?: string) {
+  const parsed = data || {}
+  currentDoc.value = {
+    ...parsed,
+    filename: parsed.filename || filename || currentDoc.value?.filename,
+    degraded: parsed.degraded ?? parsed.parse_engine === 'rule_degraded',
+    scanned: !!parsed.scanned,
+  }
+  endpoints.value = Array.isArray(parsed.endpoints)
+    ? parsed.endpoints
+    : Array.isArray(parsed.api_spec?.endpoints)
+      ? parsed.api_spec.endpoints
+      : []
+  degraded.value = !!currentDoc.value.degraded
+  unparsedNotes.value = parsed.unparsed_notes || (parsed.error ? [parsed.error] : [])
+  selectedKeys.value = selectedKeys.value.filter(key =>
+    endpoints.value.some((endpoint: any) => `${String(endpoint.method || '').toUpperCase()} ${endpoint.path || ''}` === key),
+  )
+  updateStateQuery({ docId: parsed.doc_id })
+  persistState()
+}
+
 async function generateCases() {
   if (!projectId.value) {
     ElMessage.warning('请先选择项目')
@@ -366,6 +464,7 @@ async function generateCases() {
     })
     generationPreview.value = res?.data || {}
     previewVisible.value = true
+    persistState()
   } catch {
     /* 拦截器已提示 */
   } finally {
@@ -384,6 +483,8 @@ async function submitGenerationTask() {
     previewVisible.value = false
     activeTask.value = response?.data
     taskDetailVisible.value = true
+    updateStateQuery({ taskId: activeTask.value?.id })
+    persistState()
     ElMessage.success('生成任务已提交，可离开页面，完成后会收到站内通知')
     await loadGenerationTasks()
   } finally { submittingTask.value = false }
@@ -392,11 +493,32 @@ async function submitGenerationTask() {
 function generationStatusLabel(value: string) { return ({ pending: '等待中', running: '生成中', completed: '已完成', failed: '失败' } as any)[value] || value }
 function generationStatusType(value: string): any { return value === 'completed' ? 'success' : value === 'failed' ? 'danger' : value === 'running' ? 'warning' : 'info' }
 function formatTime(value?: string) { return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—' }
-function showTask(task: any) { activeTask.value = task; taskDetailVisible.value = true }
+async function showTask(task: any) {
+  activeTask.value = task
+  taskDetailVisible.value = true
+  updateStateQuery({ taskId: task.id })
+  persistState()
+  await refreshActiveTask()
+}
 function scheduleTaskPoll() {
   if (taskPollTimer) clearTimeout(taskPollTimer)
-  if (generationTasks.value.some(task => ['pending', 'running'].includes(task.status))) {
+  if (generationTasks.value.some(task => ['pending', 'running'].includes(task.status))
+      || ['pending', 'running'].includes(activeTask.value?.status)) {
     taskPollTimer = setTimeout(loadGenerationTasks, 3000)
+  }
+}
+async function refreshActiveTask() {
+  if (!activeTask.value?.id) return
+  const previousStatus = activeTask.value.status
+  try {
+    const response: any = await caseApi.generationTask(activeTask.value.id)
+    activeTask.value = response?.data || activeTask.value
+    if (previousStatus && previousStatus !== 'completed' && activeTask.value.status === 'completed') {
+      ElMessage.success(`用例生成完成，共 ${activeTask.value.generated_case_count} 条`)
+    }
+    persistState()
+  } catch {
+    /* 全局拦截器已提示，列表轮询仍可继续 */
   }
 }
 async function loadGenerationTasks() {
@@ -405,7 +527,15 @@ async function loadGenerationTasks() {
   try {
     const response: any = await caseApi.generationTasks({ project_id: projectId.value, page: 1, page_size: 20 })
     generationTasks.value = response?.data?.items || []
-    if (activeTask.value?.id) activeTask.value = generationTasks.value.find(item => item.id === activeTask.value.id) || activeTask.value
+    if (!activeTask.value?.id) {
+      const running = generationTasks.value.find(item => ['pending', 'running'].includes(item.status))
+      if (running) {
+        activeTask.value = running
+        taskDetailVisible.value = true
+        updateStateQuery({ taskId: running.id })
+      }
+    }
+    if (activeTask.value?.id) await refreshActiveTask()
   } finally { tasksLoading.value = false; scheduleTaskPoll() }
 }
 
@@ -428,17 +558,45 @@ async function loadAssets() {
 
 async function onProjectChange() {
   currentDoc.value = null; endpoints.value = []; selectedKeys.value = []
-  router.replace({ path: route.path, query: { ...route.query, project_id: projectId.value || undefined } })
-  await Promise.all([loadAssets(), loadGenerationTasks()])
+  activeTask.value = undefined
+  generationPreview.value = undefined
+  router.replace({
+    path: route.path,
+    query: { ...route.query, project_id: projectId.value || undefined, doc_id: undefined, task_id: undefined },
+  })
 }
 
 async function reparse(row: any) {
+  reparsingDocId.value = row.doc_id
+  parseFeedback.value = null
   try {
     const pr: any = await docApi.parse(row.doc_id, { use_ai: true })
-    ElMessage.success('重新解析完成')
+    const result = pr?.data || {}
+    applyParseResult(result, row.filename)
     await loadAssets()
-  } catch {
-    /* ignore */
+    if (result.status === 'failed' || !endpoints.value.length) {
+      parseFeedback.value = {
+        type: 'warning',
+        title: '重新解析完成，但没有产出可用接口',
+        description: unparsedNotes.value.join('；') || '请检查文档内容或模型配置。',
+      }
+      ElMessage.warning('重新解析未产出可用接口')
+    } else {
+      parseFeedback.value = {
+        type: result.degraded ? 'warning' : 'success',
+        title: `重新解析完成，已展示 ${endpoints.value.length} 个接口`,
+        description: result.degraded ? 'AI 不可用，本次展示的是规则降级结果。' : undefined,
+      }
+      ElMessage.success(`重新解析完成，共 ${endpoints.value.length} 个接口`)
+    }
+  } catch (error: any) {
+    parseFeedback.value = {
+      type: 'error',
+      title: '重新解析失败',
+      description: error?.response?.data?.detail || error?.message || '请稍后重试。',
+    }
+  } finally {
+    reparsingDocId.value = ''
   }
 }
 
@@ -446,6 +604,11 @@ async function removeDoc(row: any) {
   try {
     await docApi.remove(row.doc_id)
     ElMessage.success('已删除')
+    if (currentDoc.value?.doc_id === row.doc_id) {
+      currentDoc.value = null; endpoints.value = []; selectedKeys.value = []
+      updateStateQuery({ docId: '' })
+      persistState()
+    }
     await loadAssets()
   } catch {
     /* ignore */
@@ -491,6 +654,47 @@ function queryProjectId(): string {
   return Array.isArray(value) ? String(value[0] || '') : String(value || '')
 }
 
+function queryValue(name: 'doc_id' | 'task_id'): string {
+  const value = route.query[name]
+  return Array.isArray(value) ? String(value[0] || '') : String(value || '')
+}
+
+async function restoreState() {
+  if (!projectId.value) return
+  const snapshot = loadCaseGenerationSnapshot(userId.value, 'interface', projectId.value)
+  docType.value = snapshot.docType ?? docType.value
+  overwrite.value = snapshot.overwrite ?? overwrite.value
+  assetTab.value = snapshot.assetTab || assetTab.value
+  selectedKeys.value = snapshot.selectedKeys || []
+  generationPreview.value = snapshot.generationPreview
+  previewVisible.value = !!snapshot.previewVisible && !!snapshot.generationPreview
+
+  const docId = queryValue('doc_id') || snapshot.activeDocId || ''
+  if (docId) {
+    restoringDoc.value = true
+    try {
+      const response: any = await docApi.get(docId)
+      const data = response?.data
+      if (data && data.project_id === projectId.value) applyParseResult(data)
+    } catch {
+      currentDoc.value = null
+      endpoints.value = []
+      selectedKeys.value = []
+    } finally {
+      restoringDoc.value = false
+    }
+  }
+
+  const taskId = queryValue('task_id') || snapshot.activeTaskId || ''
+  if (taskId) {
+    activeTask.value = { id: taskId, status: 'pending' }
+    taskDetailVisible.value = snapshot.taskDetailVisible ?? true
+    await refreshActiveTask()
+    if (!queryValue('task_id')) updateStateQuery({ taskId })
+  }
+  persistState()
+}
+
 watch(
   () => route.query.project_id,
   async () => {
@@ -501,7 +705,14 @@ watch(
     endpoints.value = []
     selectedKeys.value = []
     await Promise.all([loadAssets(), loadGenerationTasks()])
+    await restoreState()
   },
+)
+
+watch(
+  [docType, overwrite, assetTab, selectedKeys, previewVisible, taskDetailVisible],
+  persistState,
+  { deep: true },
 )
 
 onMounted(async () => {
@@ -510,12 +721,7 @@ onMounted(async () => {
   if (id) {
     projectId.value = id
     await Promise.all([loadAssets(), loadGenerationTasks()])
-    const taskId = String(route.query.task_id || '')
-    if (taskId) {
-      const response: any = await caseApi.generationTask(taskId)
-      activeTask.value = response?.data
-      taskDetailVisible.value = true
-    }
+    await restoreState()
   }
 })
 onBeforeUnmount(() => { if (taskPollTimer) clearTimeout(taskPollTimer) })
@@ -558,4 +764,5 @@ onBeforeUnmount(() => { if (taskPollTimer) clearTimeout(taskPollTimer) })
 .preview-warning { margin: 12px 0; }
 .warning-text { color: var(--el-color-warning-dark-2); white-space: pre-wrap; }
 .error-text { color: var(--el-color-danger); white-space: pre-wrap; }
+.generated-preview { margin-top: 18px; display: grid; gap: 10px; }
 </style>

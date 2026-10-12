@@ -451,7 +451,32 @@ async def get_case_generation_task(
         raise HTTPException(422, "生成任务 ID 格式错误") from exc
     if task is None:
         raise HTTPException(404, "生成任务不存在")
-    return {"code": 0, "data": task_to_dict(task), "message": "ok"}
+    data = task_to_dict(task)
+    raw_case_ids = list((task.result_summary or {}).get("case_ids") or [])
+    case_ids: list[uuid.UUID] = []
+    for value in raw_case_ids[:100]:
+        try:
+            case_ids.append(uuid.UUID(str(value)))
+        except (TypeError, ValueError):
+            continue
+    generated_cases: list[dict[str, Any]] = []
+    if case_ids:
+        rows = (await db.execute(select(TestCaseAsset).where(
+            TestCaseAsset.project_id == task.project_id,
+            TestCaseAsset.id.in_(case_ids),
+        ))).scalars().all()
+        by_id = {row.id: row for row in rows}
+        generated_cases = [
+            {
+                "id": str(row.id), "title": row.title,
+                "case_type": row.case_type, "execution_kind": row.execution_kind,
+                "priority": row.priority, "status": _enum_value(row.status),
+            }
+            for case_id in case_ids if (row := by_id.get(case_id)) is not None
+        ]
+    data["generated_cases"] = generated_cases
+    data["generated_cases_truncated"] = len(raw_case_ids) > len(case_ids)
+    return {"code": 0, "data": data, "message": "ok"}
 
 
 @router.post("/{case_id}/manual-executions", status_code=status.HTTP_201_CREATED)

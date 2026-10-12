@@ -238,6 +238,7 @@ async def get_requirement(
         "code": 0,
         "data": {
             "id": str(r.id),
+            "project_id": str(r.project_id),
             "filename": r.filename,
             "format": r.format.value,
             "status": r.status.value,
@@ -390,7 +391,12 @@ async def generate_cases(
             await db.commit()
         return {"code": 0, "data": {"total": len(existing), "assets_created": 0,
                 "assets_updated": updated, "instances_created": 0,
-                "existing_asset_ids": [str(a.id) for a in existing]},
+                "existing_asset_ids": [str(a.id) for a in existing],
+                "cases": [{
+                    "id": str(a.id), "title": a.title, "priority": a.priority,
+                    "status": a.status.value if hasattr(a.status, "value") else str(a.status),
+                    "related_requirement": (a.request_data or {}).get("related_requirement", ""),
+                } for a in existing[:100]]},
                 "message": "该文档的用例草稿已生成，已补齐缺失内容，请到用例库评审"}
 
     cases: list[dict] = []
@@ -505,6 +511,11 @@ async def generate_cases(
             "assets_updated": 0,
             "instances_created": 0,
             "case_ids": [str(a.id) for a in assets],
+            "cases": [{
+                "id": str(a.id), "title": a.title, "priority": a.priority,
+                "status": a.status.value if hasattr(a.status, "value") else str(a.status),
+                "related_requirement": (a.request_data or {}).get("related_requirement", ""),
+            } for a in assets[:100]],
             "generation_engine": generation_engine,
             "degraded": generation_engine == "rule_degraded",
             "degraded_reason": degraded_reason,

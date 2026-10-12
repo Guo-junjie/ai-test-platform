@@ -22,6 +22,7 @@
     </div>
 
     <el-table
+      ref="tableRef"
       v-loading="loading"
       :data="filtered"
       border
@@ -109,7 +110,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, nextTick, watch } from 'vue'
 
 const props = defineProps<{
   endpoints?: any[]
@@ -130,6 +131,8 @@ const keyword = ref('')
 const methodFilter = ref<string[]>([])
 const detailVisible = ref(false)
 const current = ref<any>(null)
+const tableRef = ref<any>()
+let syncingSelection = false
 
 function keyOf(e: any): string {
   return `${String(e.method || '').toUpperCase()} ${e.path || ''}`
@@ -170,11 +173,27 @@ function methodType(method: string): any {
 }
 
 function handleSelectionChange(selectedRows: any[]) {
+  if (syncingSelection) return
+  const visibleKeys = new Set(filtered.value.map(row => row._key))
+  const hiddenSelections = (props.modelValue || []).filter(key => !visibleKeys.has(key))
   emit(
     'update:modelValue',
-    selectedRows.map((r) => r._key),
+    [...hiddenSelections, ...selectedRows.map((r) => r._key)],
   )
 }
+
+async function syncSelection() {
+  await nextTick()
+  if (!tableRef.value) return
+  syncingSelection = true
+  tableRef.value.clearSelection()
+  const selected = new Set(props.modelValue || [])
+  filtered.value.forEach(row => tableRef.value.toggleRowSelection(row, selected.has(row._key)))
+  await nextTick()
+  syncingSelection = false
+}
+
+watch(() => [props.modelValue, props.endpoints], syncSelection, { deep: true, immediate: true })
 
 function openDetail(row: any) {
   current.value = row

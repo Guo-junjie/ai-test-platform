@@ -31,31 +31,42 @@
       />
     </el-card>
 
-    <keep-alive>
+    <keep-alive v-if="ready">
       <component :is="activeComponent" :key="`${activeSource}-${projectId}`" />
     </keep-alive>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Connection, Document, EditPen, UploadFilled } from '@element-plus/icons-vue'
 import RequirementParse from '@/views/RequirementParse.vue'
 import DocParser from '@/views/DocParser.vue'
 import PageHeader from '@/components/PageHeader.vue'
 import { projectApi } from '@/api'
+import { useAuthStore } from '@/stores'
+import { loadCaseGenerationContext, saveCaseGenerationContext } from '@/utils/caseGenerationState'
 
 type Source = 'requirement' | 'interface'
 
 const route = useRoute()
 const router = useRouter()
+const authStore = useAuthStore()
 const projects = ref<any[]>([])
 const projectId = ref(String(route.query.project_id || ''))
+const ready = ref(false)
+const userId = computed(() => authStore.user?.id || 'anonymous')
 
 const activeSource = computed<Source>({
   get: () => String(route.query.source) === 'interface' ? 'interface' : 'requirement',
-  set: (source) => router.replace({ path: '/case-generation', query: { ...route.query, source } }),
+  set: (source) => {
+    if (projectId.value) saveCaseGenerationContext(userId.value, { projectId: projectId.value, source })
+    router.replace({
+      path: '/case-generation',
+      query: { ...route.query, source, doc_id: undefined, task_id: undefined },
+    })
+  },
 })
 const activeComponent = computed(() => activeSource.value === 'interface' ? DocParser : RequirementParse)
 const sourceDescription = computed(() => activeSource.value === 'requirement'
@@ -69,15 +80,46 @@ function goCaseLibrary() { router.push({ path: '/case-library', query: libraryQu
 function openManualCreate() { router.push({ path: '/case-library', query: libraryQuery({ create: 'manual' }) }) }
 function openImport() { router.push({ path: '/case-library', query: libraryQuery({ action: 'import' }) }) }
 function syncProjectQuery() {
-  router.replace({ path: '/case-generation', query: { ...route.query, project_id: projectId.value || undefined } })
+  if (projectId.value) saveCaseGenerationContext(userId.value, { projectId: projectId.value, source: activeSource.value })
+  router.replace({
+    path: '/case-generation',
+    query: {
+      ...route.query,
+      project_id: projectId.value || undefined,
+      doc_id: undefined,
+      task_id: undefined,
+    },
+  })
 }
 async function loadProjects() {
   const response: any = await projectApi.getList()
   projects.value = Array.isArray(response?.data) ? response.data : (response?.data?.items || response?.data?.list || [])
-  if (!projects.value.some(project => project.id === projectId.value)) projectId.value = projects.value[0]?.id || ''
+  const saved = loadCaseGenerationContext(userId.value)
+  const requestedProject = String(route.query.project_id || '')
+  const candidate = requestedProject || saved?.projectId || ''
+  projectId.value = projects.value.some(project => project.id === candidate)
+    ? candidate
+    : projects.value[0]?.id || ''
+  const requestedSource = String(route.query.source || '')
+  const source: Source = requestedSource === 'interface' || requestedSource === 'requirement'
+    ? requestedSource
+    : saved?.source || 'requirement'
+  if (projectId.value) {
+    saveCaseGenerationContext(userId.value, { projectId: projectId.value, source })
+    await router.replace({
+      path: '/case-generation',
+      query: { ...route.query, project_id: projectId.value, source },
+    })
+  }
+  ready.value = true
 }
 
 onMounted(loadProjects)
+watch(() => [route.query.project_id, route.query.source], () => {
+  const id = String(route.query.project_id || '')
+  if (id && projects.value.some(project => project.id === id)) projectId.value = id
+  if (id) saveCaseGenerationContext(userId.value, { projectId: id, source: activeSource.value })
+})
 </script>
 
 <style scoped>

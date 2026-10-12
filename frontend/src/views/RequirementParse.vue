@@ -3,6 +3,14 @@
     <el-row :gutter="16">
       <!-- 左：上传 + 解析 -->
       <el-col :xs="24" :lg="14">
+        <el-alert
+          v-if="restoring"
+          type="info"
+          :closable="false"
+          show-icon
+          title="正在恢复上次查看的需求文档…"
+          style="margin-bottom: 12px"
+        />
         <el-card shadow="hover">
           <template #header>1. 选择项目并上传需求文档（PRD）</template>
 
@@ -72,7 +80,7 @@
             style="margin-bottom: 12px"
           />
 
-          <el-table :data="requirements" v-loading="uploading" size="small" border stripe max-height="520">
+          <el-table :data="requirements" v-loading="uploading || restoring" size="small" border stripe max-height="520">
             <el-table-column prop="rid" label="编号" width="90" />
             <el-table-column prop="title" label="需求标题" show-overflow-tooltip />
             <el-table-column prop="category" label="类别" width="100">
@@ -109,6 +117,47 @@
             </el-button>
             <span class="hint">生成有出处的手工草稿；补齐 API 请求和断言并评审后，才能加入自动计划</span>
           </div>
+        </el-card>
+
+        <el-card v-if="generationResult" shadow="hover" style="margin-top: 16px">
+          <template #header>
+            <div class="result-header">
+              <span>最近一次生成结果</span>
+              <el-button type="primary" link @click="goCaseLibrary">进入用例管理与评审</el-button>
+            </div>
+          </template>
+          <el-alert
+            :type="generationResult.degraded ? 'warning' : 'success'"
+            :closable="false"
+            show-icon
+            :title="`已生成或恢复 ${generationResult.total || generationResult.assets_created || 0} 条用例草稿`"
+            :description="generationResult.degraded_reason || '生成结果已持久化，可继续查看或进入评审。'"
+            style="margin-bottom: 12px"
+          />
+          <el-table :data="generationResult.cases || []" size="small" border empty-text="用例已生成，请进入用例管理与评审查看完整内容">
+            <el-table-column prop="title" label="用例标题" show-overflow-tooltip />
+            <el-table-column prop="related_requirement" label="关联需求" width="110" />
+            <el-table-column prop="priority" label="优先级" width="80" />
+            <el-table-column prop="status" label="状态" width="90" />
+          </el-table>
+        </el-card>
+        <el-card v-else-if="runtimeJob" shadow="hover" style="margin-top: 16px">
+          <el-alert
+            v-if="runtimeJob.status === 'running'"
+            type="info"
+            :closable="false"
+            show-icon
+            title="测试用例正在后台生成"
+            description="可以切换到其他页面；返回后会继续显示状态，完成结果不会丢失。"
+          />
+          <el-alert
+            v-else-if="runtimeJob.status === 'failed'"
+            type="error"
+            :closable="false"
+            show-icon
+            title="测试用例生成失败"
+            :description="runtimeJob.error"
+          />
         </el-card>
       </el-col>
 
@@ -158,13 +207,22 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { computed, ref, onMounted, watch } from 'vue'
 import { ElMessage, type UploadFile } from 'element-plus'
 import { useRoute, useRouter } from 'vue-router'
 import { requirementApi, projectApi } from '@/api'
+import { useAuthStore } from '@/stores'
+import { useCaseGenerationRuntimeStore } from '@/stores/caseGeneration'
+import {
+  loadCaseGenerationSnapshot,
+  saveCaseGenerationSnapshot,
+} from '@/utils/caseGenerationState'
 
 const router = useRouter()
 const route = useRoute()
+const authStore = useAuthStore()
+const runtimeStore = useCaseGenerationRuntimeStore()
+const userId = computed(() => authStore.user?.id || 'anonymous')
 const projects = ref<any[]>([])
 const projectId = ref<string>('')
 const useAi = ref(true)
@@ -180,6 +238,26 @@ const docsLoading = ref(false)
 const genVisible = ref(false)
 const genLoading = ref(false)
 const genUseAi = ref(true)
+const restoring = ref(false)
+const generationResult = ref<any>(null)
+const runtimeKey = computed(() => `${userId.value}:${projectId.value}:${currentDoc.value?.id || ''}`)
+const runtimeJob = computed(() => runtimeStore.requirementJobs[runtimeKey.value])
+
+function persistState() {
+  saveCaseGenerationSnapshot(userId.value, 'requirement', projectId.value, {
+    activeDocId: currentDoc.value?.id,
+    useAi: useAi.value,
+    genUseAi: genUseAi.value,
+    generationResult: generationResult.value,
+  })
+}
+
+function updateDocumentQuery(docId?: string) {
+  router.replace({
+    path: route.path,
+    query: { ...route.query, project_id: projectId.value || undefined, doc_id: docId || undefined },
+  })
+}
 
 function catLabel(c: string): string {
   return (
@@ -209,6 +287,9 @@ function clearFile() {
   selectedFile.value = null
   currentDoc.value = null
   requirements.value = []
+  generationResult.value = null
+  updateDocumentQuery()
+  persistState()
 }
 
 async function uploadAndParse() {
@@ -217,12 +298,15 @@ async function uploadAndParse() {
   uploading.value = true
   currentDoc.value = null
   requirements.value = []
+  generationResult.value = null
   try {
     const up: any = await requirementApi.upload(selectedFile.value, projectId.value, useAi.value)
     const docId = up?.data?.id
     const detail: any = await requirementApi.get(docId)
     currentDoc.value = detail?.data || {}
     requirements.value = currentDoc.value.requirements?.items || []
+    updateDocumentQuery(currentDoc.value.id)
+    persistState()
     await loadDocs()
     ElMessage.success(`解析完成，共 ${requirements.value.length} 条需求`)
   } catch (e: any) {
@@ -238,22 +322,27 @@ function openGen() {
 async function doGenerate() {
   if (!currentDoc.value?.id) return
   genLoading.value = true
+  genVisible.value = false
+  generationResult.value = null
+  persistState()
   try {
-    const res: any = await requirementApi.generateCases(currentDoc.value.id, {
-      use_ai: genUseAi.value,
+    const docId = currentDoc.value.id
+    const useAiValue = genUseAi.value
+    const d = await runtimeStore.runRequirementJob(runtimeKey.value, async () => {
+      const res: any = await requirementApi.generateCases(docId, { use_ai: useAiValue })
+      return res?.data || {}
     })
-    const d = res?.data || {}
+    if (currentDoc.value?.id !== docId) return
+    generationResult.value = d
+    persistState()
     const assets = d.assets_created ?? 0
     if (assets > 0) {
       ElMessage.success(`已生成 ${assets} 条待评审草稿`)
-      router.push({ path: '/case-library', query: { project_id: projectId.value } })
     } else if (d.existing_asset_ids?.length) {
       ElMessage.info('该文档已生成过草稿，请到用例库继续评审')
-      router.push({ path: '/case-library', query: { project_id: projectId.value } })
     } else {
       ElMessage.warning('没有生成可追溯的用例草稿')
     }
-    genVisible.value = false
   } catch (e: any) {
     /* 拦截器已提示 */
   } finally {
@@ -293,19 +382,21 @@ async function loadDocs() {
 }
 
 function onProjectChange(id: string) {
-  // 切项目 → 拉当前项目需求文档
-  loadDocs()
-  // 清掉旧文档视图，避免跨项目串
   currentDoc.value = null
   requirements.value = []
+  generationResult.value = null
+  router.replace({ path: route.path, query: { ...route.query, project_id: id, doc_id: undefined } })
 }
 
 async function viewDoc(row: any) {
   try {
+    if (currentDoc.value?.id !== row.id) generationResult.value = null
     const detail: any = await requirementApi.get(row.id)
     currentDoc.value = detail?.data || {}
     requirements.value = currentDoc.value.requirements?.items || []
     projectId.value = row.project_id || projectId.value
+    updateDocumentQuery(currentDoc.value.id)
+    persistState()
   } catch {
     /* ignore */
   }
@@ -315,6 +406,12 @@ async function removeDoc(row: any) {
   try {
     await requirementApi.remove(row.id)
     ElMessage.success('已删除')
+    if (currentDoc.value?.id === row.id) {
+      currentDoc.value = null
+      requirements.value = []
+      updateDocumentQuery()
+      persistState()
+    }
     await loadDocs()
   } catch {
     /* ignore */
@@ -336,6 +433,41 @@ function queryProjectId(): string {
   return Array.isArray(value) ? String(value[0] || '') : String(value || '')
 }
 
+function queryDocId(): string {
+  const value = route.query.doc_id
+  return Array.isArray(value) ? String(value[0] || '') : String(value || '')
+}
+
+async function restoreState() {
+  if (!projectId.value) return
+  const snapshot = loadCaseGenerationSnapshot(userId.value, 'requirement', projectId.value)
+  useAi.value = snapshot.useAi ?? useAi.value
+  genUseAi.value = snapshot.genUseAi ?? genUseAi.value
+  generationResult.value = snapshot.generationResult || null
+  const docId = queryDocId() || snapshot.activeDocId || ''
+  if (!docId) return
+  restoring.value = true
+  try {
+    const detail: any = await requirementApi.get(docId)
+    const data = detail?.data || null
+    if (data && (!data.project_id || data.project_id === projectId.value)) {
+      currentDoc.value = data
+      requirements.value = data.requirements?.items || []
+      if (!queryDocId()) updateDocumentQuery(docId)
+      persistState()
+    }
+  } catch {
+    currentDoc.value = null
+    requirements.value = []
+  } finally {
+    restoring.value = false
+  }
+}
+
+function goCaseLibrary() {
+  router.push({ path: '/case-library', query: { project_id: projectId.value } })
+}
+
 watch(
   () => route.query.project_id,
   async () => {
@@ -345,6 +477,18 @@ watch(
     currentDoc.value = null
     requirements.value = []
     await loadDocs()
+    await restoreState()
+  },
+)
+
+watch([useAi, genUseAi], persistState)
+watch(
+  () => runtimeJob.value?.status,
+  () => {
+    if (runtimeJob.value?.status === 'completed' && runtimeJob.value.result) {
+      generationResult.value = runtimeJob.value.result
+      persistState()
+    }
   },
 )
 
@@ -354,6 +498,7 @@ onMounted(async () => {
   if (id) {
     projectId.value = id
     await loadDocs()
+    await restoreState()
   }
 })
 </script>
@@ -386,5 +531,11 @@ onMounted(async () => {
 .detail ul {
   margin: 4px 0 4px 18px;
   padding: 0;
+}
+.result-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 </style>
