@@ -30,7 +30,10 @@ async def test_postgres_project_authorization_end_to_end(monkeypatch):
     from app.api import report as report_api
     async with async_engine.begin() as connection:
         await connection.run_sync(m.Base.metadata.create_all)
-    ids = {key: uuid4() for key in ("admin", "manager", "reader", "outsider", "a", "b", "run_a", "run_b")}
+    ids = {key: uuid4() for key in (
+        "admin", "manager", "reader", "outsider", "a", "b", "run_a", "run_b",
+        "env_a", "env_revision_a",
+    )}
     roles = {"admin": m.UserRole.SUPER_ADMIN, "manager": m.UserRole.TEST_MANAGER,
              "reader": m.UserRole.VIEWER, "outsider": m.UserRole.TESTER}
     async with AsyncSessionLocal() as db:
@@ -43,6 +46,16 @@ async def test_postgres_project_authorization_end_to_end(monkeypatch):
             m.Project(id=ids["b"], name="scope-b", owner_id=ids["admin"], source_type=m.SourceType.UPLOAD),
         ])
         await db.flush()
+        db.add(m.EnvironmentProfile(
+            id=ids["env_a"], project_id=ids["a"], name="CI 测试环境",
+            base_url="http://service.test", healthcheck_path="/health",
+            status="published", current_revision_id=ids["env_revision_a"], created_by=ids["manager"],
+        ))
+        db.add(m.EnvironmentProfileRevision(
+            id=ids["env_revision_a"], profile_id=ids["env_a"], revision=1,
+            config_json={"base_url": "http://service.test", "healthcheck_path": "/health"},
+            status="published", created_by=ids["manager"], published_by=ids["manager"],
+        ))
         db.add(m.ProjectMember(project_id=ids["a"], user_id=ids["reader"], access="read"))
         for name in ("a", "b"):
             db.add(m.TestRun(id=ids[f"run_{name}"], project_id=ids[name], user_id=ids["manager"],
@@ -86,6 +99,7 @@ async def test_postgres_project_authorization_end_to_end(monkeypatch):
         scheduled = await call("POST", "/api/scheduled-tasks", role="manager", json={
             "project_id": str(ids["a"]), "name": "allowed-paused", "status": "paused",
             "target_type": "case_collection", "cron_expression": "0 2 * * *",
+            "env_config": {"environment_id": str(ids["env_a"])},
         })
         await call("GET", f'/api/scheduled-tasks/{scheduled["data"]["id"]}', role="reader")
         await call("DELETE", f'/api/scheduled-tasks/{scheduled["data"]["id"]}', role="reader", expected=403)

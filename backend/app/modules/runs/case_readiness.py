@@ -38,7 +38,9 @@ def api_case_errors(request: dict | None, expected: dict | None) -> list[str]:
     if not isinstance(method, str) or method.upper() not in HTTP_METHODS:
         errors.append("缺少有效 HTTP 方法")
     url = request.get("url")
-    if not isinstance(url, str) or not url.startswith("/") or url.startswith("//"):
+    if not isinstance(url, str) or not url.strip():
+        errors.append("API 用例必须填写请求地址")
+    elif not url.startswith("/") or url.startswith("//"):
         errors.append("请求路径必须是以 / 开头的相对路径")
     elif urlsplit(url).scheme or urlsplit(url).netloc or any(ord(c) < 32 for c in url):
         errors.append("请求路径不能包含主机、协议或控制字符")
