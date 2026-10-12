@@ -126,6 +126,7 @@ const typeLabels: Record<string, string> = {
   system: '系统',
   defect: '缺陷协作',
   case_review: '用例评审',
+  case_generation: '用例生成',
 }
 
 const notifications = ref<any[]>([])
@@ -164,6 +165,8 @@ function typeTagType(type: string): 'success' | 'warning' | 'danger' | 'primary'
     info: 'info',
     system: 'info',
     defect: 'warning',
+    case_review: 'primary',
+    case_generation: 'success',
   }
   return map[type] || 'info'
 }

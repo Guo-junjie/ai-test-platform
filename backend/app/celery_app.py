@@ -21,6 +21,7 @@ celery_app = Celery(
         "app.modules.report.tasks",
         "app.modules.webhook_tasks",
         "app.modules.defects.tasks",
+        "app.modules.case_generation.tasks",
     ],
 )
 

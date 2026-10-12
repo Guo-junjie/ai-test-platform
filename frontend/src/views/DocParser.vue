@@ -8,7 +8,7 @@
 
           <el-form label-width="100px">
             <el-form-item label="项目" required>
-              <el-select v-model="projectId" placeholder="选择项目" filterable style="width: 100%">
+              <el-select v-model="projectId" placeholder="选择项目" filterable style="width: 100%" @change="onProjectChange">
                 <el-option v-for="p in projects" :key="p.id" :label="p.name" :value="p.id" />
               </el-select>
             </el-form-item>
@@ -127,7 +127,7 @@
                 :loading="generating"
                 @click="generateCases"
               >
-                生成测试用例
+                预览并生成
               </el-button>
               <div class="gen-tip">
                 导入接口后可一键 AI 生成用例（存入用例库）；
@@ -135,6 +135,18 @@
               </div>
             </div>
           </div>
+        </el-card>
+
+        <el-card v-if="projectId" shadow="hover" style="margin-top: 16px">
+          <template #header><div class="task-header"><span>用例生成任务</span><el-button size="small" :loading="tasksLoading" @click="loadGenerationTasks">刷新</el-button></div></template>
+          <el-table :data="generationTasks" v-loading="tasksLoading" size="small" empty-text="暂无生成任务">
+            <el-table-column label="状态" width="95"><template #default="{ row }"><el-tag :type="generationStatusType(row.status)">{{ generationStatusLabel(row.status) }}</el-tag></template></el-table-column>
+            <el-table-column label="进度" min-width="150"><template #default="{ row }"><el-progress :percentage="row.progress || 0" :status="row.status === 'failed' ? 'exception' : row.status === 'completed' ? 'success' : undefined" /></template></el-table-column>
+            <el-table-column label="范围" width="150"><template #default="{ row }">{{ row.endpoint_count }} 接口 / {{ row.generated_case_count || row.estimated_case_count }} 用例</template></el-table-column>
+            <el-table-column label="引擎" width="110"><template #default="{ row }">{{ row.generation_engine === 'rule_degraded' ? '规则降级' : row.generation_engine === 'ai' ? 'AI' : '等待中' }}</template></el-table-column>
+            <el-table-column label="时间" width="170"><template #default="{ row }">{{ formatTime(row.created_at) }}</template></el-table-column>
+            <el-table-column label="操作" width="90"><template #default="{ row }"><el-button link type="primary" @click="showTask(row)">详情</el-button></template></el-table-column>
+          </el-table>
         </el-card>
       </el-col>
 
@@ -180,13 +192,39 @@
         </el-card>
       </el-col>
     </el-row>
+
+    <el-dialog v-model="previewVisible" title="确认生成范围" width="760px">
+      <el-descriptions :column="3" border>
+        <el-descriptions-item label="接口数量">{{ generationPreview?.endpoint_count || 0 }}</el-descriptions-item>
+        <el-descriptions-item label="预计用例">约 {{ generationPreview?.estimated_case_count || 0 }} 条</el-descriptions-item>
+        <el-descriptions-item label="已有用例">{{ generationPreview?.existing_case_count || 0 }} 条</el-descriptions-item>
+      </el-descriptions>
+      <el-alert v-for="warning in generationPreview?.warnings || []" :key="warning" type="warning" :closable="false" show-icon :title="warning" class="preview-warning" />
+      <el-alert type="info" :closable="false" show-icon :title="generationPreview?.execution_mode || ''" class="preview-warning" />
+      <el-table :data="generationPreview?.endpoints || []" size="small" max-height="320" border>
+        <el-table-column prop="method" label="方法" width="85" /><el-table-column prop="path" label="路径" min-width="240" /><el-table-column prop="summary" label="说明" min-width="180" />
+      </el-table>
+      <template #footer><el-button @click="previewVisible = false">取消</el-button><el-button type="primary" :loading="submittingTask" @click="submitGenerationTask">提交异步任务</el-button></template>
+    </el-dialog>
+
+    <el-drawer v-model="taskDetailVisible" title="生成任务详情" size="min(620px, 94vw)">
+      <el-descriptions v-if="activeTask" :column="1" border>
+        <el-descriptions-item label="任务状态">{{ generationStatusLabel(activeTask.status) }}</el-descriptions-item>
+        <el-descriptions-item label="生成范围">{{ activeTask.endpoint_count }} 个接口，预计 {{ activeTask.estimated_case_count }} 条</el-descriptions-item>
+        <el-descriptions-item label="实际生成">{{ activeTask.generated_case_count }} 条</el-descriptions-item>
+        <el-descriptions-item label="生成引擎">{{ activeTask.generation_engine }}</el-descriptions-item>
+        <el-descriptions-item v-if="activeTask.degraded_reason" label="降级原因"><span class="warning-text">{{ activeTask.degraded_reason }}</span></el-descriptions-item>
+        <el-descriptions-item v-if="activeTask.error_message" label="失败原因"><span class="error-text">{{ activeTask.error_message }}</span></el-descriptions-item>
+      </el-descriptions>
+      <el-result v-if="activeTask?.status === 'completed'" icon="success" title="生成完成" :sub-title="`已生成 ${activeTask.generated_case_count} 条草稿用例`"><template #extra><el-button type="primary" @click="router.push(`/case-library?project_id=${projectId}`)">进入用例管理与评审</el-button></template></el-result>
+    </el-drawer>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus'
+import { ElMessage, type UploadFile } from 'element-plus'
 import { caseApi, docApi, projectApi } from '@/api'
 import ApiSpecTable from '@/components/ApiSpecTable.vue'
 
@@ -289,6 +327,14 @@ async function doImport(payload: any) {
 
 // R5：来源页生成用例 —— 解析导入的接口直接生成用例进用例库
 const generating = ref(false)
+const previewVisible = ref(false)
+const generationPreview = ref<any>()
+const submittingTask = ref(false)
+const generationTasks = ref<any[]>([])
+const tasksLoading = ref(false)
+const taskDetailVisible = ref(false)
+const activeTask = ref<any>()
+let taskPollTimer: ReturnType<typeof setTimeout> | undefined
 
 async function generateCases() {
   if (!projectId.value) {
@@ -297,15 +343,6 @@ async function generateCases() {
   }
   if (!currentDoc.value?.doc_id) {
     ElMessage.warning('请先解析接口文档')
-    return
-  }
-  try {
-    await ElMessageBox.confirm(
-      '将自动导入当前文档的全部接口（已导入的会更新，不重复），然后 AI 生成测试用例并存入「用例库」。是否继续？',
-      '生成测试用例',
-      { confirmButtonText: '导入并生成', cancelButtonText: '取消', type: 'info' },
-    )
-  } catch {
     return
   }
   generating.value = true
@@ -323,26 +360,53 @@ async function generateCases() {
       ElMessage.warning('当前文档没有可用于生成用例的接口资产')
       return
     }
-    const res: any = await caseApi.generate({
+    const res: any = await caseApi.previewGeneration({
       project_id: projectId.value,
       endpoint_ids: endpointIds,
     })
-    const cnt = res?.data?.inserted ?? 0
-    try {
-      await ElMessageBox.confirm(
-        `已生成 ${cnt} 条用例并存入用例库（草稿态，需评审采纳）。`,
-        '生成完成',
-        { confirmButtonText: '去用例库查看', cancelButtonText: '留在本页', type: 'success' },
-      )
-      router.push(`/case-library?project_id=${projectId.value}`)
-    } catch {
-      /* 留在本页 */
-    }
+    generationPreview.value = res?.data || {}
+    previewVisible.value = true
   } catch {
     /* 拦截器已提示 */
   } finally {
     generating.value = false
   }
+}
+
+async function submitGenerationTask() {
+  const endpointIds = (generationPreview.value?.endpoints || []).map((item: any) => item.id)
+  if (!endpointIds.length) return ElMessage.warning('没有可提交的接口')
+  submittingTask.value = true
+  try {
+    const response: any = await caseApi.createGenerationTask({
+      project_id: projectId.value, endpoint_ids: endpointIds, source_doc_id: currentDoc.value?.doc_id,
+    })
+    previewVisible.value = false
+    activeTask.value = response?.data
+    taskDetailVisible.value = true
+    ElMessage.success('生成任务已提交，可离开页面，完成后会收到站内通知')
+    await loadGenerationTasks()
+  } finally { submittingTask.value = false }
+}
+
+function generationStatusLabel(value: string) { return ({ pending: '等待中', running: '生成中', completed: '已完成', failed: '失败' } as any)[value] || value }
+function generationStatusType(value: string): any { return value === 'completed' ? 'success' : value === 'failed' ? 'danger' : value === 'running' ? 'warning' : 'info' }
+function formatTime(value?: string) { return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—' }
+function showTask(task: any) { activeTask.value = task; taskDetailVisible.value = true }
+function scheduleTaskPoll() {
+  if (taskPollTimer) clearTimeout(taskPollTimer)
+  if (generationTasks.value.some(task => ['pending', 'running'].includes(task.status))) {
+    taskPollTimer = setTimeout(loadGenerationTasks, 3000)
+  }
+}
+async function loadGenerationTasks() {
+  if (!projectId.value) { generationTasks.value = []; return }
+  tasksLoading.value = true
+  try {
+    const response: any = await caseApi.generationTasks({ project_id: projectId.value, page: 1, page_size: 20 })
+    generationTasks.value = response?.data?.items || []
+    if (activeTask.value?.id) activeTask.value = generationTasks.value.find(item => item.id === activeTask.value.id) || activeTask.value
+  } finally { tasksLoading.value = false; scheduleTaskPoll() }
 }
 
 async function loadAssets() {
@@ -360,6 +424,12 @@ async function loadAssets() {
   } finally {
     assetsLoading.value = false
   }
+}
+
+async function onProjectChange() {
+  currentDoc.value = null; endpoints.value = []; selectedKeys.value = []
+  router.replace({ path: route.path, query: { ...route.query, project_id: projectId.value || undefined } })
+  await Promise.all([loadAssets(), loadGenerationTasks()])
 }
 
 async function reparse(row: any) {
@@ -430,7 +500,7 @@ watch(
     currentDoc.value = null
     endpoints.value = []
     selectedKeys.value = []
-    await loadAssets()
+    await Promise.all([loadAssets(), loadGenerationTasks()])
   },
 )
 
@@ -439,9 +509,16 @@ onMounted(async () => {
   const id = queryProjectId()
   if (id) {
     projectId.value = id
-    await loadAssets()
+    await Promise.all([loadAssets(), loadGenerationTasks()])
+    const taskId = String(route.query.task_id || '')
+    if (taskId) {
+      const response: any = await caseApi.generationTask(taskId)
+      activeTask.value = response?.data
+      taskDetailVisible.value = true
+    }
   }
 })
+onBeforeUnmount(() => { if (taskPollTimer) clearTimeout(taskPollTimer) })
 </script>
 
 <style scoped>
@@ -477,4 +554,8 @@ onMounted(async () => {
   background: var(--el-fill-color-light);
   border-radius: 6px;
 }
+.task-header { display: flex; align-items: center; justify-content: space-between; }
+.preview-warning { margin: 12px 0; }
+.warning-text { color: var(--el-color-warning-dark-2); white-space: pre-wrap; }
+.error-text { color: var(--el-color-danger); white-space: pre-wrap; }
 </style>

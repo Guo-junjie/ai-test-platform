@@ -392,6 +392,14 @@ export const caseApi = {
   /** 生成并落库（DRAFT）。data: { project_id, endpoint_ids?, endpoint_id? } */
   generate: (data: any) =>
     api.post('/cases/generate', data, { timeout: 300000 }),
+  previewGeneration: (data: any) => api.post('/cases/generation/preview', data),
+  createGenerationTask: (data: any) => api.post('/cases/generation-tasks', data),
+  generationTasks: (params: any) => api.get('/cases/generation-tasks', { params }),
+  generationTask: (taskId: string) => api.get(`/cases/generation-tasks/${taskId}`),
+  startManualExecution: (caseId: string) => api.post(`/cases/${caseId}/manual-executions`),
+  manualExecutions: (caseId: string) => api.get(`/cases/${caseId}/manual-executions`),
+  completeManualExecution: (caseId: string, executionId: string, data: any) =>
+    api.put(`/cases/${caseId}/manual-executions/${executionId}`, data),
   /** 列表：params { project_id, endpoint_id?, case_type?, status?, keyword?, page, page_size } */
   list: (params: any) => api.get('/cases', { params }),
   /** 详情 */

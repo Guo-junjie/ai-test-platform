@@ -1352,6 +1352,67 @@ class TestCaseAssetVersion(Base):
     )
 
 
+class CaseGenerationTask(Base):
+    """接口文档用例生成任务；耗时模型调用从 HTTP 请求中解耦。"""
+
+    __tablename__ = "case_generation_tasks"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
+    source_doc_id = Column(UUID(as_uuid=True), ForeignKey("interface_docs.id", ondelete="SET NULL"), nullable=True)
+    endpoint_ids = Column(JSONB, nullable=False, default=list)
+    endpoint_count = Column(Integer, nullable=False, default=0)
+    estimated_case_count = Column(Integer, nullable=False, default=0)
+    generated_case_count = Column(Integer, nullable=False, default=0)
+    status = Column(String(24), nullable=False, default="pending")
+    progress = Column(Integer, nullable=False, default=0)
+    generation_engine = Column(String(24), nullable=False, default="pending")
+    degraded_reason = Column(Text, nullable=True)
+    error_message = Column(Text, nullable=True)
+    result_summary = Column(JSONB, nullable=False, default=dict)
+    celery_task_id = Column(String(100), nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("status IN ('pending', 'running', 'completed', 'failed')", name="ck_case_generation_task_status"),
+        CheckConstraint("progress >= 0 AND progress <= 100", name="ck_case_generation_task_progress"),
+        Index("idx_case_generation_tasks_project_created", "project_id", "created_at"),
+        Index("idx_case_generation_tasks_creator_status", "created_by", "status", "created_at"),
+    )
+
+
+class ManualCaseExecution(Base):
+    """手工用例执行记录，绑定执行时的不可变用例版本。"""
+
+    __tablename__ = "manual_case_executions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True)
+    case_asset_id = Column(UUID(as_uuid=True), ForeignKey("test_case_assets.id", ondelete="RESTRICT"), nullable=False, index=True)
+    case_version_id = Column(UUID(as_uuid=True), ForeignKey("test_case_asset_versions.id", ondelete="RESTRICT"), nullable=False)
+    case_version = Column(Integer, nullable=False)
+    executed_by = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
+    status = Column(String(24), nullable=False, default="in_progress")
+    step_results = Column(JSONB, nullable=False, default=list)
+    actual_result = Column(Text, nullable=True)
+    notes = Column(Text, nullable=True)
+    defect_id = Column(UUID(as_uuid=True), ForeignKey("defects.id", ondelete="SET NULL"), nullable=True)
+    started_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("status IN ('in_progress', 'passed', 'failed', 'blocked', 'cancelled')", name="ck_manual_case_execution_status"),
+        Index("idx_manual_case_executions_case_created", "case_asset_id", "created_at"),
+        Index("idx_manual_case_executions_project_status", "project_id", "status", "created_at"),
+    )
+
+
 # ==================== 能力4：测试场景表（steps JSONB 单表） ====================
 
 

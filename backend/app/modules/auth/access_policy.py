@@ -43,6 +43,9 @@ REFERENCES = {
     "job_id": m.DefectJob, "attachment_id": m.DefectAttachment,
     "comment_id": m.DefectComment, "watcher_id": m.DefectWatcher,
     "review_task_id": m.CaseReviewTask, "case_review_task_id": m.CaseReviewTask,
+    "generation_task_id": m.CaseGenerationTask,
+    "manual_execution_id": m.ManualCaseExecution,
+    "source_doc_id": m.InterfaceDoc,
 }
 
 

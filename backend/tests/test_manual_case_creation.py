@@ -1,6 +1,6 @@
 """人工录入的 HTTP 校验、真实 SQL 持久化和项目边界回归；仅使用内存 SQLite。"""
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -14,7 +14,7 @@ from app.api import case_library as api
 from app.models import database as m
 from app.modules.auth.access_policy import authorize_request
 from app.modules.auth.dependencies import get_current_user
-from app.schemas.case_library import CreateManualCaseRequest
+from app.schemas.case_library import CompleteManualExecutionRequest, CreateManualCaseRequest
 from app.utils.database import get_db_session
 
 
@@ -39,6 +39,9 @@ class AsyncSessionAdapter:
     async def flush(self):
         self.session.flush()
 
+    async def get(self, model, identity):
+        return self.session.get(model, identity)
+
     def add(self, item):
         self.session.add(item)
 
@@ -47,7 +50,7 @@ class AsyncSessionAdapter:
 def manual_env():
     engine = create_engine("sqlite://")
     tables = [m.User, m.Project, m.ProjectMember, m.RequirementDoc, m.TestCaseAsset,
-              m.TestCaseAssetVersion, m.TestPlan, m.TestPlanCase, m.TestPlanRevision,
+              m.TestCaseAssetVersion, m.ManualCaseExecution, m.TestPlan, m.TestPlanCase, m.TestPlanRevision,
               m.TestPlanRevisionCase, m.TestRun, m.TestCase, m.TestResult, m.Defect, m.DefectReference]
     # 仅转换测试库 DDL；序列编号、JSONB 默认值由真实 PostgreSQL 验收覆盖。
     metadata = MetaData()
@@ -183,3 +186,34 @@ async def test_options_and_traceability_return_current_project_content(manual_en
     assert trace["data"]["source"]["created_by_name"] == "manual-tester"
     assert trace["data"]["source"]["generation_context"] == {"channel": "manual_entry"}
     assert trace["data"]["recent_runs"] == []
+
+
+@pytest.mark.asyncio
+async def test_adopted_manual_case_can_complete_version_bound_execution(manual_env):
+    env = manual_env
+    created = (await api.create_manual_case(CreateManualCaseRequest(**payload(env)), env.user, env.db))["data"]
+    asset = env.db.session.get(m.TestCaseAsset, UUID(created["id"]))
+    asset.status = m.CaseAssetStatus.ADOPTED
+    asset.review_state = "approved"
+    env.db.session.commit()
+
+    started = await api.start_manual_execution(str(asset.id), env.user, env.db)
+    execution = started["data"]
+    assert execution["case_version"] == 1
+    assert [item["status"] for item in execution["step_results"]] == ["pending", "pending"]
+
+    completed = await api.complete_manual_execution(
+        str(asset.id), execution["id"],
+        CompleteManualExecutionRequest(
+            status="passed",
+            step_results=[
+                {"step": "客户端任意文本", "status": "passed", "actual": "购物车打开"},
+                {"step": "客户端任意文本", "status": "passed", "actual": "订单已提交"},
+            ],
+            actual_result="返回订单编号",
+        ),
+        env.user, env.db,
+    )
+    assert completed["data"]["status"] == "passed"
+    # 服务端始终用冻结版本覆盖客户端提交的步骤文字，保证证据与执行版本一致。
+    assert [item["step"] for item in completed["data"]["step_results"]] == ["打开购物车", "提交订单"]

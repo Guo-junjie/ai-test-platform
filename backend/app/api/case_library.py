@@ -23,7 +23,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import func, or_, select
@@ -31,6 +31,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.schemas.case_library import (
     GenerateRequest,
+    CreateCaseGenerationTaskRequest,
+    CompleteManualExecutionRequest,
     UpdateCaseRequest,
     AdoptBatchRequest,
     BatchUpdateCaseRequest,
@@ -45,9 +47,11 @@ from app.models.database import (
     CaseAssetStatus,
     CaseReviewEvent,
     CaseReviewTask,
+    CaseGenerationTask,
     Defect,
     DefectReference,
     InterfaceDoc,
+    ManualCaseExecution,
     Project,
     RequirementDoc,
     TestCase,
@@ -155,6 +159,30 @@ def _case_to_dict(item: TestCaseAsset) -> dict[str, Any]:
         "created_at": item.created_at.isoformat() if item.created_at else None,
         "updated_at": item.updated_at.isoformat() if item.updated_at else None,
     }
+
+
+def _manual_execution_to_dict(item: ManualCaseExecution) -> dict[str, Any]:
+    return {
+        "id": str(item.id), "project_id": str(item.project_id),
+        "case_asset_id": str(item.case_asset_id), "case_version_id": str(item.case_version_id),
+        "case_version": item.case_version, "executed_by": str(item.executed_by),
+        "status": item.status, "step_results": list(item.step_results or []),
+        "actual_result": item.actual_result or "", "notes": item.notes or "",
+        "defect_id": str(item.defect_id) if item.defect_id else None,
+        "started_at": item.started_at.isoformat() if item.started_at else None,
+        "completed_at": item.completed_at.isoformat() if item.completed_at else None,
+    }
+
+
+async def _get_case(case_id: str, db: AsyncSession) -> TestCaseAsset:
+    try:
+        cid = uuid.UUID(str(case_id))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(422, "用例 ID 格式错误") from exc
+    item = (await db.execute(select(TestCaseAsset).where(TestCaseAsset.id == cid))).scalar_one_or_none()
+    if item is None:
+        raise HTTPException(404, "用例不存在")
+    return item
 
 
 def _record_review(db: AsyncSession, item: TestCaseAsset, actor: User,
@@ -320,6 +348,207 @@ def _ep_to_dict(ep) -> dict[str, Any]:
         "auth_required": bool(ep.auth_required),
         "summary": ep.summary or "",
     }
+
+
+@router.post("/generation/preview")
+async def preview_case_generation(
+    req: GenerateRequest,
+    current_user: User = Depends(case_editor),
+    db: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    """预检接口范围、预计产量和已有用例，不调用模型、不落库。"""
+    from app.modules.case_generation.service import preview_generation
+    try:
+        pid = uuid.UUID(req.project_id)
+        data = await preview_generation(db, pid, req.endpoint_ids, req.endpoint_id)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {"code": 0, "data": data, "message": "预检完成"}
+
+
+@router.post("/generation-tasks", status_code=status.HTTP_202_ACCEPTED)
+async def create_case_generation_task(
+    req: CreateCaseGenerationTaskRequest,
+    current_user: User = Depends(case_editor),
+    db: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    """创建持久化异步生成任务；HTTP 请求不再等待多轮模型调用。"""
+    from app.modules.case_generation.service import preview_generation, task_to_dict
+    from app.modules.case_generation.tasks import generate_api_cases as generate_task
+    try:
+        pid = uuid.UUID(req.project_id)
+        preview = await preview_generation(db, pid, req.endpoint_ids, req.endpoint_id)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    endpoint_ids = [item["id"] for item in preview["endpoints"]]
+    if req.source_doc_id:
+        source_doc = await db.get(InterfaceDoc, req.source_doc_id)
+        if source_doc is None or source_doc.project_id != pid:
+            raise HTTPException(422, "来源接口文档不存在或不属于当前项目")
+    active_tasks = (await db.execute(select(CaseGenerationTask).where(
+        CaseGenerationTask.project_id == pid,
+        CaseGenerationTask.created_by == current_user.id,
+        CaseGenerationTask.status.in_(["pending", "running"]),
+    ).order_by(CaseGenerationTask.created_at.desc()))).scalars().all()
+    duplicate = next((row for row in active_tasks if list(row.endpoint_ids or []) == endpoint_ids), None)
+    if duplicate:
+        return {"code": 0, "data": task_to_dict(duplicate), "message": "相同范围的生成任务正在执行"}
+    task = CaseGenerationTask(
+        id=uuid.uuid4(), project_id=pid, created_by=current_user.id,
+        source_doc_id=req.source_doc_id, endpoint_ids=endpoint_ids,
+        endpoint_count=preview["endpoint_count"],
+        estimated_case_count=preview["estimated_case_count"], status="pending", progress=0,
+    )
+    db.add(task)
+    await db.commit()
+    try:
+        async_result = generate_task.delay(str(task.id))
+        task.celery_task_id = async_result.id
+        await db.commit()
+    except Exception as exc:
+        task.status, task.progress = "failed", 100
+        task.error_message, task.completed_at = f"任务派发失败：{exc}"[:4000], datetime.utcnow()
+        await db.commit()
+        raise HTTPException(503, "生成任务派发失败，请确认 Celery Worker 和消息队列正常") from exc
+    return {"code": 0, "data": task_to_dict(task), "message": "生成任务已提交"}
+
+
+@router.get("/generation-tasks")
+async def list_case_generation_tasks(
+    project_id: str,
+    task_status: str | None = Query(None, alias="status"),
+    page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    from app.modules.case_generation.service import task_to_dict
+    try:
+        pid = uuid.UUID(project_id)
+    except ValueError as exc:
+        raise HTTPException(422, "项目 ID 格式错误") from exc
+    query = select(CaseGenerationTask).where(CaseGenerationTask.project_id == pid)
+    if task_status:
+        if task_status not in {"pending", "running", "completed", "failed"}:
+            raise HTTPException(422, "生成任务状态无效")
+        query = query.where(CaseGenerationTask.status == task_status)
+    total = int((await db.execute(select(func.count()).select_from(query.subquery()))).scalar_one())
+    rows = (await db.execute(query.order_by(CaseGenerationTask.created_at.desc())
+                             .offset((page - 1) * page_size).limit(page_size))).scalars().all()
+    return {"code": 0, "data": {"items": [task_to_dict(row) for row in rows],
+                                    "total": total, "page": page, "page_size": page_size}, "message": "ok"}
+
+
+@router.get("/generation-tasks/{generation_task_id}")
+async def get_case_generation_task(
+    generation_task_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    from app.modules.case_generation.service import task_to_dict
+    try:
+        task = await db.get(CaseGenerationTask, uuid.UUID(generation_task_id))
+    except ValueError as exc:
+        raise HTTPException(422, "生成任务 ID 格式错误") from exc
+    if task is None:
+        raise HTTPException(404, "生成任务不存在")
+    return {"code": 0, "data": task_to_dict(task), "message": "ok"}
+
+
+@router.post("/{case_id}/manual-executions", status_code=status.HTTP_201_CREATED)
+async def start_manual_execution(
+    case_id: str,
+    current_user: User = Depends(case_editor),
+    db: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    """开始执行已评审通过的手工用例，并冻结当前用例版本。"""
+    item = await _get_case(case_id, db)
+    if item.execution_kind != "manual":
+        raise HTTPException(409, "该用例不是手工执行类型")
+    if _enum_value(item.status) != "adopted":
+        raise HTTPException(409, "手工用例评审通过后才能执行")
+    active = (await db.execute(select(ManualCaseExecution).where(
+        ManualCaseExecution.case_asset_id == item.id,
+        ManualCaseExecution.executed_by == current_user.id,
+        ManualCaseExecution.status == "in_progress",
+    ))).scalar_one_or_none()
+    if active:
+        return {"code": 0, "data": _manual_execution_to_dict(active), "message": "已恢复未完成执行"}
+    version = (await db.execute(select(TestCaseAssetVersion).where(
+        TestCaseAssetVersion.case_asset_id == item.id,
+        TestCaseAssetVersion.version == item.version,
+    ))).scalar_one_or_none()
+    if version is None:
+        raise HTTPException(409, "当前用例版本快照缺失，请先保存用例新版本")
+    steps = list((version.snapshot or {}).get("request_data", {}).get("steps") or [])
+    if not steps:
+        raise HTTPException(422, "手工用例没有可执行步骤")
+    execution = ManualCaseExecution(
+        project_id=item.project_id, case_asset_id=item.id, case_version_id=version.id,
+        case_version=version.version, executed_by=current_user.id,
+        status="in_progress",
+        step_results=[{"index": index, "step": str(step), "status": "pending", "actual": ""}
+                      for index, step in enumerate(steps, start=1)],
+    )
+    db.add(execution)
+    await db.flush()
+    return {"code": 0, "data": _manual_execution_to_dict(execution), "message": "手工执行已开始"}
+
+
+@router.get("/{case_id}/manual-executions")
+async def list_manual_executions(
+    case_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    item = await _get_case(case_id, db)
+    rows = (await db.execute(select(ManualCaseExecution).where(
+        ManualCaseExecution.case_asset_id == item.id,
+    ).order_by(ManualCaseExecution.created_at.desc()).limit(100))).scalars().all()
+    users = {row.id: row.username for row in (await db.execute(select(User).where(
+        User.id.in_({execution.executed_by for execution in rows})
+    ))).scalars().all()} if rows else {}
+    data = []
+    for row in rows:
+        serialized = _manual_execution_to_dict(row)
+        serialized["executor_name"] = users.get(row.executed_by, "未知用户")
+        data.append(serialized)
+    return {"code": 0, "data": data, "message": "ok"}
+
+
+@router.put("/{case_id}/manual-executions/{manual_execution_id}")
+async def complete_manual_execution(
+    case_id: str,
+    manual_execution_id: str,
+    req: CompleteManualExecutionRequest,
+    current_user: User = Depends(case_editor),
+    db: AsyncSession = Depends(get_db_session),
+) -> dict[str, Any]:
+    item = await _get_case(case_id, db)
+    try:
+        execution = await db.get(ManualCaseExecution, uuid.UUID(manual_execution_id))
+    except ValueError as exc:
+        raise HTTPException(422, "执行记录 ID 格式错误") from exc
+    if execution is None or execution.case_asset_id != item.id:
+        raise HTTPException(404, "手工执行记录不存在")
+    if execution.executed_by != current_user.id and current_user.role not in {UserRole.ADMIN, UserRole.SUPER_ADMIN}:
+        raise HTTPException(403, "只能提交自己的手工执行记录")
+    if execution.status != "in_progress":
+        raise HTTPException(409, "该执行记录已经结束")
+    version = await db.get(TestCaseAssetVersion, execution.case_version_id)
+    frozen_steps = list((version.snapshot or {}).get("request_data", {}).get("steps") or []) if version else []
+    if len(req.step_results) != len(frozen_steps):
+        raise HTTPException(422, "步骤结果数量与执行版本不一致")
+    results = [{**result, "index": index, "step": str(frozen_steps[index - 1])}
+               for index, result in enumerate(req.step_results, start=1)]
+    if req.status == "passed" and any(result["status"] != "passed" for result in results):
+        raise HTTPException(422, "所有步骤通过后才能提交为通过")
+    if req.status in {"failed", "blocked"} and not req.actual_result.strip():
+        raise HTTPException(422, "失败或阻塞时必须填写实际结果")
+    execution.status, execution.step_results = req.status, results
+    execution.actual_result, execution.notes = req.actual_result.strip(), req.notes.strip()
+    execution.defect_id, execution.completed_at = req.defect_id, datetime.utcnow()
+    await db.flush()
+    return {"code": 0, "data": _manual_execution_to_dict(execution), "message": "手工执行结果已提交"}
 
 
 @router.get("")

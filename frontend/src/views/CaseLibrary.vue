@@ -124,9 +124,9 @@
               size="small"
               text
               type="success"
-              :disabled="row.status !== 'adopted' || row.execution_kind === 'manual'"
-              @click="openRun(row)"
-            >运行</el-button>
+              :disabled="row.status !== 'adopted'"
+              @click="row.execution_kind === 'manual' ? openManualExecution(row) : openRun(row)"
+            >{{ row.execution_kind === 'manual' ? '执行' : '运行' }}</el-button>
             <el-dropdown trigger="click" @command="handleMore($event, row)">
               <el-button size="small" text>更多<el-icon class="el-icon--right"><MoreFilled /></el-icon></el-button>
               <template #dropdown>
@@ -176,6 +176,7 @@
     <case-import-dialog v-model="importVisible" :project-id="projectId" @imported="onCasesImported" />
     <case-review-submit-dialog v-model="reviewSubmitVisible" :project-id="projectId" :case-item="reviewSubmitCase" @submitted="onReviewSubmitted" />
     <case-review-task-drawer v-model="reviewTaskVisible" :task-id="activeReviewTaskId" @decided="onReviewDecided" />
+    <manual-case-execution-dialog v-model="manualExecutionVisible" :case-item="manualExecutionCase" @completed="loadTraceability(manualExecutionCase.id)" />
 
     <el-drawer v-model="detailVisible" size="min(920px, 96vw)" destroy-on-close class="case-drawer">
       <template #header>
@@ -342,7 +343,7 @@
       <template #footer>
         <div class="drawer-footer">
           <template v-if="editing"><el-button @click="cancelEditing">取消</el-button><el-button type="primary" :loading="savingEdit" @click="saveEdit">保存新版本</el-button></template>
-          <template v-else><el-button @click="detailVisible = false">关闭</el-button><el-button v-if="['draft', 'changes_requested'].includes(detailCase?.review_state)" type="primary" plain @click="submitReview(detailCase)">提交评审</el-button><el-button v-if="detailCase?.review_state === 'pending'" type="primary" plain @click="openReviewTask(detailCase)">查看评审任务</el-button><el-button v-if="detailCase?.status === 'adopted' && detailCase?.execution_kind !== 'manual'" type="success" @click="openRun(detailCase)">运行</el-button></template>
+          <template v-else><el-button @click="detailVisible = false">关闭</el-button><el-button v-if="['draft', 'changes_requested'].includes(detailCase?.review_state)" type="primary" plain @click="submitReview(detailCase)">提交评审</el-button><el-button v-if="detailCase?.review_state === 'pending'" type="primary" plain @click="openReviewTask(detailCase)">查看评审任务</el-button><el-button v-if="detailCase?.status === 'adopted' && detailCase?.execution_kind === 'manual'" type="success" @click="openManualExecution(detailCase)">手工执行</el-button><el-button v-if="detailCase?.status === 'adopted' && detailCase?.execution_kind !== 'manual'" type="success" @click="openRun(detailCase)">运行</el-button></template>
         </div>
       </template>
     </el-drawer>
@@ -375,6 +376,7 @@ import ManualCaseDrawer from '@/components/ManualCaseDrawer.vue'
 import CaseImportDialog from '@/components/CaseImportDialog.vue'
 import CaseReviewSubmitDialog from '@/components/cases/CaseReviewSubmitDialog.vue'
 import CaseReviewTaskDrawer from '@/components/cases/CaseReviewTaskDrawer.vue'
+import ManualCaseExecutionDialog from '@/components/cases/ManualCaseExecutionDialog.vue'
 import { MANUAL_CASE_TYPES } from '@/types/manualCase'
 import { useAuthStore } from '@/stores'
 
@@ -451,6 +453,8 @@ const reviewSubmitCase = ref<any>({})
 const reviewTaskVisible = ref(false)
 const activeReviewTaskId = ref('')
 const caseReviewTasks = ref<any[]>([])
+const manualExecutionVisible = ref(false)
+const manualExecutionCase = ref<any>({})
 const batchFolderVisible = ref(false)
 const batchTagsVisible = ref(false)
 const batchFolder = ref('')
@@ -637,6 +641,7 @@ async function applyBatchFolder() { batchUpdating.value = true; try { await case
 async function applyBatchTags() { if (!batchTags.value.length) { ElMessage.warning('请至少填写一个标签'); return } batchUpdating.value = true; try { await caseApi.batchUpdate({ ids: selectedRows.value.map((row) => row.id), add_tags: batchTags.value }); ElMessage.success('标签已添加'); batchTagsVisible.value = false; await loadCases() } finally { batchUpdating.value = false } }
 
 function openRun(row: any) { openAddToPlan([row.id], 'run') }
+function openManualExecution(row: any) { manualExecutionCase.value = row; manualExecutionVisible.value = true }
 function openAddToPlan(ids: string[], intent: 'add' | 'run' = 'add') { const chosen = cases.value.filter((item) => ids.includes(item.id)); if (chosen.some((item) => item.status !== 'adopted' || item.execution_kind === 'manual')) { ElMessage.warning('只有已批准的 API 用例可以加入自动计划'); return } addIntent.value = intent; addToPlanCaseIds.value = ids; targetPlanId.value = ''; planMode.value = 'existing'; newPlanName.value = ''; newPlanDesc.value = ''; addToPlanVisible.value = true }
 async function loadPlansIfNeeded() { if (plans.value.length) return; plansLoading.value = true; try { const res: any = await planApi.list({ project_id: projectId.value, page: 1, page_size: 200 }); plans.value = res?.data?.list || []; if (!plans.value.length) planMode.value = 'new' } finally { plansLoading.value = false } }
 async function submitAddToPlan() { let planId = targetPlanId.value; if (planMode.value === 'new') { if (newPlanName.value.trim().length < 2) { ElMessage.warning('计划名称至少 2 个字符'); return } addToPlanLoading.value = true; try { const res: any = await planApi.create({ project_id: projectId.value, name: newPlanName.value.trim(), description: newPlanDesc.value.trim() || undefined }); planId = res?.data?.id || '' } finally { addToPlanLoading.value = false } } if (!planId) { ElMessage.warning('请选择目标计划'); return } addToPlanLoading.value = true; try { await planApi.addCases(planId, addToPlanCaseIds.value); ElMessage.success(`已加入计划：${addToPlanCaseIds.value.length} 条用例`); addToPlanVisible.value = false; if (addIntent.value === 'run') router.push(`/projects/${projectId.value}/plans`) } finally { addToPlanLoading.value = false; addIntent.value = 'add' } }

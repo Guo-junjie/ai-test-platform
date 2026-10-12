@@ -70,6 +70,38 @@ class GenerateRequest(BaseModel):
     endpoint_id: str | None = None
 
 
+class CreateCaseGenerationTaskRequest(GenerateRequest):
+    """创建异步生成任务；source_doc_id 仅用于来源追踪。"""
+
+    source_doc_id: UUID | None = None
+
+
+class CompleteManualExecutionRequest(BaseModel):
+    """提交手工执行结论；每个步骤必须有明确结果。"""
+
+    status: Literal["passed", "failed", "blocked", "cancelled"]
+    step_results: list[dict[str, Any]] = Field(min_length=1, max_length=100)
+    actual_result: str = Field(default="", max_length=20000)
+    notes: str = Field(default="", max_length=10000)
+    defect_id: UUID | None = None
+
+    @field_validator("step_results")
+    @classmethod
+    def validate_step_results(cls, values: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        normalized = []
+        for index, item in enumerate(values, start=1):
+            result = str(item.get("status") or "").strip()
+            if result not in {"passed", "failed", "blocked", "skipped"}:
+                raise ValueError(f"第 {index} 步缺少有效执行结果")
+            normalized.append({
+                "index": index,
+                "step": str(item.get("step") or "").strip()[:5000],
+                "status": result,
+                "actual": str(item.get("actual") or "").strip()[:10000],
+            })
+        return normalized
+
+
 class UpdateCaseRequest(BaseModel):
     """编辑用例资产请求 — 所有字段可选，仅更新传入项（status 不在此变更）。"""
 

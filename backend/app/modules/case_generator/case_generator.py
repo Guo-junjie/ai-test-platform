@@ -16,7 +16,7 @@ import re
 import uuid
 from typing import Any
 
-from app.modules.ai.model_router import ModelNotConfiguredError, get_model_router
+from app.modules.ai.model_router import get_model_router
 from app.modules.knowledge.retriever import retrieve_and_inject
 from app.utils.logger import get_logger
 
@@ -35,6 +35,15 @@ class TestCaseGenerator:
 
     def __init__(self) -> None:
         self.router = get_model_router()
+        self.ai_circuit_open = False
+        self.degraded_reasons: list[str] = []
+
+    def _degrade(self, exc: Exception) -> None:
+        """一次模型路由失败后熔断本批次，避免对余额不足等错误反复重试。"""
+        reason = str(exc).strip() or exc.__class__.__name__
+        if reason not in self.degraded_reasons:
+            self.degraded_reasons.append(reason[:1000])
+        self.ai_circuit_open = True
 
     async def generate_api_cases(
         self,
@@ -67,15 +76,17 @@ class TestCaseGenerator:
             kb = ""
         prompt = (kb + "\n\n" if kb else "") + self._build_prompt(api_info, business_analysis)
 
+        if self.ai_circuit_open:
+            return self._generate_fallback_cases(api_info)
+
         try:
             response = await self.router.call(
                 use_case="case_generation",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
             )
-        except ModelNotConfiguredError:
-            raise
         except Exception as e:
+            self._degrade(e)
             logger.error(
                 f"AI case generation failed for {api_info.get('path', 'unknown')}: {e}"
             )
@@ -83,6 +94,7 @@ class TestCaseGenerator:
 
         parsed = self._parse_json_response(response)
         if not parsed or "cases" not in parsed:
+            self._degrade(ValueError("模型返回内容无法解析，已切换规则模板"))
             logger.warning(
                 f"AI response parsing failed for {api_info.get('path')}, "
                 f"using fallback cases"
@@ -144,9 +156,8 @@ class TestCaseGenerator:
                     return await self.generate_api_cases(
                         api, business_analysis, project_id=project_id
                     )
-                except ModelNotConfiguredError:
-                    raise
                 except Exception as e:
+                    self._degrade(e)
                     logger.warning(
                         f"Case generation failed for {key}: {e}, using fallback"
                     )
@@ -422,7 +433,7 @@ class TestCaseGenerator:
         for ct, templates_list in templates.items():
             for template in templates_list:
                 all_cases.append(self._normalize_case(template, api_info))
-        return all_cases
+        return self._ensure_minimum_cases(all_cases, api_info)
 
     def _generate_performance_cases(
         self, all_api_cases: list[dict[str, Any]]
