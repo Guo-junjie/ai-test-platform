@@ -137,21 +137,6 @@
             :placeholder="apiKeyPlaceholder"
             @input="apiKeyTouched = true"
           />
-          <div v-if="isEdit && apiKeyMasked && !apiKeyTouched" class="field-hint">
-            已配置：<code>{{ apiKeyMasked }}</code>，不输入新值将保留原 Key。
-          </div>
-          <div v-else-if="isEdit && apiKeyTouched && !form.api_key" class="field-hint field-hint--warning">
-            保存后将清空当前 API Key。
-          </div>
-          <el-button
-            v-if="isEdit && apiKeyMasked && !apiKeyTouched"
-            class="clear-key-button"
-            link
-            type="danger"
-            @click="markApiKeyForClear"
-          >
-            清空已配置 Key
-          </el-button>
         </el-form-item>
         <el-form-item label="API 版本">
           <el-input v-model="form.api_version" placeholder="Azure OpenAI 需填写，例如 2024-02-01" />
@@ -313,8 +298,7 @@ const form = reactive(defaultForm())
 
 const apiKeyPlaceholder = computed(() => {
   if (!isEdit.value) return 'sk-...'
-  if (apiKeyTouched.value) return '输入新 Key，或保持为空以清空'
-  return apiKeyMasked.value ? `已配置：${apiKeyMasked.value}` : '当前未配置，输入新 Key'
+  return apiKeyMasked.value || '当前未配置，请输入 API Key'
 })
 
 const formRules: FormRules = {
@@ -436,11 +420,6 @@ async function openEditDialog(row: any): Promise<void> {
   })
 }
 
-function markApiKeyForClear(): void {
-  form.api_key = ''
-  apiKeyTouched.value = true
-}
-
 function resetDialogState(): void {
   // 对话框关闭后立即移除用户本次输入的明文 Key，避免残留在组件状态中。
   form.api_key = ''
@@ -532,11 +511,4 @@ onMounted(async () => {
   align-items: center;
 }
 
-.field-hint--warning {
-  color: var(--el-color-danger);
-}
-
-.clear-key-button {
-  margin-top: 4px;
-}
 </style>
