@@ -100,8 +100,15 @@
       :title="isEdit ? '编辑模型配置' : '添加模型配置'"
       width="640px"
       destroy-on-close
+      @closed="resetDialogState"
     >
-      <el-form ref="formRef" :model="form" :rules="formRules" label-width="130px">
+      <el-form
+        ref="formRef"
+        v-loading="dialogLoading"
+        :model="form"
+        :rules="formRules"
+        label-width="130px"
+      >
         <el-form-item label="配置名称" prop="name">
           <el-input v-model="form.name" placeholder="例如：生产环境 GPT-4o" />
         </el-form-item>
@@ -126,8 +133,25 @@
             v-model="form.api_key"
             type="password"
             show-password
-            :placeholder="isEdit ? '留空表示不修改' : 'sk-...'"
+            autocomplete="new-password"
+            :placeholder="apiKeyPlaceholder"
+            @input="apiKeyTouched = true"
           />
+          <div v-if="isEdit && apiKeyMasked && !apiKeyTouched" class="field-hint">
+            已配置：<code>{{ apiKeyMasked }}</code>，不输入新值将保留原 Key。
+          </div>
+          <div v-else-if="isEdit && apiKeyTouched && !form.api_key" class="field-hint field-hint--warning">
+            保存后将清空当前 API Key。
+          </div>
+          <el-button
+            v-if="isEdit && apiKeyMasked && !apiKeyTouched"
+            class="clear-key-button"
+            link
+            type="danger"
+            @click="markApiKeyForClear"
+          >
+            清空已配置 Key
+          </el-button>
         </el-form-item>
         <el-form-item label="API 版本">
           <el-input v-model="form.api_version" placeholder="Azure OpenAI 需填写，例如 2024-02-01" />
@@ -178,14 +202,14 @@
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="submitForm">确定</el-button>
+        <el-button type="primary" :loading="submitting" :disabled="dialogLoading" @click="submitForm">确定</el-button>
       </template>
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { computed, ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 import { modelApi } from '@/api'
 
@@ -238,12 +262,15 @@ const listLoading = ref(false)
 const routingLoading = ref(false)
 const savingRouting = ref(false)
 const submitting = ref(false)
+const dialogLoading = ref(false)
 const testingId = ref<string>('')
 
 const dialogVisible = ref(false)
 const isEdit = ref(false)
 const currentId = ref<string>('')
 const formRef = ref<FormInstance>()
+const apiKeyMasked = ref('')
+const apiKeyTouched = ref(false)
 
 /** 路由配置表单，key 为 7 个路由字段 */
 const routingForm = reactive<Record<string, string>>({
@@ -284,11 +311,24 @@ function defaultForm() {
 
 const form = reactive(defaultForm())
 
+const apiKeyPlaceholder = computed(() => {
+  if (!isEdit.value) return 'sk-...'
+  if (apiKeyTouched.value) return '输入新 Key，或保持为空以清空'
+  return apiKeyMasked.value ? `已配置：${apiKeyMasked.value}` : '当前未配置，输入新 Key'
+})
+
 const formRules: FormRules = {
   name: [{ required: true, message: '请输入配置名称', trigger: 'blur' }],
   provider: [{ required: true, message: '请选择提供商', trigger: 'change' }],
   model_name: [{ required: true, message: '请输入模型名称', trigger: 'blur' }],
   api_base_url: [{ required: true, message: '请输入 API 地址', trigger: 'blur' }],
+  api_key: [{
+    validator: (_rule: unknown, value: string, callback: (error?: Error) => void) => {
+      if (!isEdit.value && !value) callback(new Error('请输入 API Key'))
+      else callback()
+    },
+    trigger: 'blur',
+  }],
   capabilities: [{ type: 'array', required: true, min: 1, message: '至少声明一项模型能力', trigger: 'change' }],
 }
 
@@ -350,32 +390,63 @@ async function saveRouting(): Promise<void> {
 function openCreateDialog(): void {
   isEdit.value = false
   currentId.value = ''
+  apiKeyMasked.value = ''
+  apiKeyTouched.value = false
   Object.assign(form, defaultForm())
   dialogVisible.value = true
 }
 
 /** 打开「编辑」对话框并回填数据 */
-function openEditDialog(row: any): void {
+async function openEditDialog(row: any): Promise<void> {
   isEdit.value = true
   currentId.value = row.id
-  Object.assign(form, defaultForm(), {
-    name: row.name || '',
-    provider: row.provider || 'openai',
-    model_name: row.model_name || '',
-    api_base_url: row.api_base_url || '',
-    api_key: '', // 出于安全考虑不回填密钥，留空表示不修改
-    api_version: row.api_version || '',
-    max_tokens: row.max_tokens ?? 4096,
-    temperature: row.temperature ?? 0.7,
-    timeout: row.timeout ?? 60,
-    max_retries: row.max_retries ?? 3,
-    use_cases: Array.isArray(row.use_cases) ? [...row.use_cases] : [],
-    capabilities: Array.isArray(row.capabilities) ? [...row.capabilities] : ['chat'],
-    is_default: !!row.is_default,
-    is_fallback: !!row.is_fallback,
-    is_active: row.is_active !== false,
-  })
+  apiKeyMasked.value = row.api_key_masked || ''
+  apiKeyTouched.value = false
+  Object.assign(form, defaultForm())
   dialogVisible.value = true
+  dialogLoading.value = true
+  let detail = row
+  try {
+    const res: any = await modelApi.getConfig(row.id)
+    detail = res?.data ?? res ?? row
+  } catch (e: any) {
+    ElMessage.warning(e?.message || '获取最新配置失败，已显示列表中的配置')
+  } finally {
+    dialogLoading.value = false
+  }
+  // 对话框打开后可能已切换到其它配置，避免迟到响应覆盖当前表单。
+  if (!dialogVisible.value || currentId.value !== row.id) return
+  apiKeyMasked.value = detail.api_key_masked || ''
+  Object.assign(form, defaultForm(), {
+    name: detail.name || '',
+    provider: detail.provider || 'openai',
+    model_name: detail.model_name || '',
+    api_base_url: detail.api_base_url || '',
+    api_key: '', // 明文永不回填；掩码仅作为占位展示。
+    api_version: detail.api_version || '',
+    max_tokens: detail.max_tokens ?? 4096,
+    temperature: detail.temperature ?? 0.7,
+    timeout: detail.timeout ?? 60,
+    max_retries: detail.max_retries ?? 3,
+    use_cases: Array.isArray(detail.use_cases) ? [...detail.use_cases] : [],
+    capabilities: Array.isArray(detail.capabilities) ? [...detail.capabilities] : ['chat'],
+    is_default: !!detail.is_default,
+    is_fallback: !!detail.is_fallback,
+    is_active: detail.is_active !== false,
+  })
+}
+
+function markApiKeyForClear(): void {
+  form.api_key = ''
+  apiKeyTouched.value = true
+}
+
+function resetDialogState(): void {
+  // 对话框关闭后立即移除用户本次输入的明文 Key，避免残留在组件状态中。
+  form.api_key = ''
+  apiKeyMasked.value = ''
+  apiKeyTouched.value = false
+  dialogLoading.value = false
 }
 
 /** 提交新建 / 编辑表单 */
@@ -387,8 +458,8 @@ async function submitForm(): Promise<void> {
   submitting.value = true
   try {
     const payload: Record<string, any> = { ...form }
-    // 编辑时 api_key 留空表示保持原值，不提交
-    if (isEdit.value && !payload.api_key) {
+    // 编辑时只有用户操作过 Key 输入框才提交；显式空字符串表示清空。
+    if (isEdit.value && !apiKeyTouched.value) {
       delete payload.api_key
     }
     if (isEdit.value) {
@@ -459,5 +530,13 @@ onMounted(async () => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.field-hint--warning {
+  color: var(--el-color-danger);
+}
+
+.clear-key-button {
+  margin-top: 4px;
 }
 </style>

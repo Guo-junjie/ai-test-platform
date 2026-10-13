@@ -136,6 +136,7 @@ export const reportApi = {
 // ============ AI 模型配置 ============
 export const modelApi = {
   listConfigs: () => api.get('/models/configs'),
+  getConfig: (id: string) => api.get(`/models/configs/${id}`),
   createConfig: (data: any) => api.post('/models/configs', data),
   updateConfig: (id: string, data: any) => api.put(`/models/configs/${id}`, data),
   deleteConfig: (id: string) => api.delete(`/models/configs/${id}`),

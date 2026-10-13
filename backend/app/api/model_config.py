@@ -89,13 +89,16 @@ class CreateModelConfigRequest(BaseModel):
 
 
 class UpdateModelConfigRequest(BaseModel):
-    """更新模型配置请求 — 所有字段可选，仅更新传入项"""
+    """更新模型配置请求 — 所有字段可选，仅更新传入项。
+
+    ``api_key`` 未传或为 null 表示保留原密钥，非空值表示替换，显式传入空字符串表示清空。
+    """
 
     name: str | None = None
     provider: str | None = None
     model_name: str | None = None
     api_base_url: str | None = None
-    api_key: str | None = None  # 传入则重新加密
+    api_key: str | None = None
     api_version: str | None = None
     max_tokens: int | None = None
     temperature: float | None = None
@@ -173,6 +176,7 @@ def _config_to_dict(config: AIModelConfig) -> dict[str, Any]:
         "provider": config.provider.value if config.provider else None,
         "api_base_url": config.api_base_url,
         "api_key_masked": _masked_api_key(config),
+        "api_key_configured": bool(config.api_key_encrypted),
         "model_name": config.model_name,
         "api_version": config.api_version,
         "max_tokens": config.max_tokens,
@@ -187,6 +191,17 @@ def _config_to_dict(config: AIModelConfig) -> dict[str, Any]:
         "created_at": config.created_at.isoformat() if config.created_at else None,
         "updated_at": config.updated_at.isoformat() if config.updated_at else None,
     }
+
+
+def _apply_api_key_update(
+    config: AIModelConfig,
+    req: UpdateModelConfigRequest,
+) -> bool:
+    """应用密钥更新并返回是否发生过显式密钥操作。"""
+    if "api_key" not in req.model_fields_set or req.api_key is None:
+        return False
+    config.api_key_encrypted = encrypt(req.api_key) if req.api_key else ""
+    return True
 
 
 def _routing_to_dict(routing: ModelRouting | None) -> dict[str, Any]:
@@ -327,13 +342,13 @@ async def update_model_config(
     current_user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db_session),
 ):
-    """更新模型配置（传入 api_key 时重新加密，仅管理员）。"""
+    """更新模型配置（api_key 未传/null 时保留，空字符串清空，仅管理员）。"""
     config = await _get_config_or_404(config_id, db)
 
     if req.provider is not None:
         config.provider = _parse_provider(req.provider)
-    if req.api_key:
-        config.api_key_encrypted = encrypt(req.api_key)
+    # 字段是否出现用于区分“保持原值”和“显式清空”，避免编辑其它字段时覆盖密钥。
+    _apply_api_key_update(config, req)
 
     # 简单字段逐项覆盖（None 表示不修改）
     simple_fields = (
